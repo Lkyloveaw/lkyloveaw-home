@@ -20,5 +20,13 @@
     "url": "http://10.255.255.1/",
     "group": "演示目标",
     "timeoutMs": 2000
+  },
+  {
+    "id": "demo-redirect",
+    "name": "会跳转的系统（演示 expectStatus 怎么用）",
+    "url": "http://10.0.0.20/",
+    "group": "演示目标",
+    "_comment": "探测**不跟随跳转**。默认 200-399 都算可用，所以 302 会判为「可用」；若希望跳转也算失败，就把 expectStatus 写成 [200]——下面这行就是显式示例。",
+    "expectStatus": [200]
   }
 ]

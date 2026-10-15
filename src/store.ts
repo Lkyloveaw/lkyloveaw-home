@@ -110,6 +110,46 @@ export function pruneOldProbes(): number {
   return info.changes
 }
 
+export interface CheckpointResult {
+  /** SQLite 返回的 busy 标志。**非 0 表示没搬干净，绝不能当成功。** */
+  busy: number
+  /** 搬了多少页（诊断用）。 */
+  pages: number
+}
+
+/**
+ * 把 WAL 内容搬回主库。
+ *
+ * ⚠ **必须校验 `busy`，不能只看「没抛异常」。** 已实测：另一个连接持有读事务时，
+ * `PASSIVE` 会返回 **`busy:0` 却只搬了 2/33 页**——返回值本身就骗人；
+ * 而 `FULL`/`TRUNCATE` 在这种情形下返回 `busy:1`，搬不动。
+ * 所以「返回 busy 非 0 → 记日志、不算成功」是必须的，否则就是一个静默降级。
+ *
+ * 为什么用 `TRUNCATE`：`FULL` 把内容搬回主库但**不截断 WAL 文件**，
+ * 而「WAL 被截断」正是「只拷 `.sqlite` 也能拿到完整库」的前提。
+ */
+export function checkpoint(mode: 'PASSIVE' | 'FULL' | 'TRUNCATE' = 'TRUNCATE'): CheckpointResult {
+  const row = handle().prepare(`PRAGMA wal_checkpoint(${mode})`).get() as
+    | { busy: number; log: number; checkpointed: number }
+    | undefined
+  return { busy: row?.busy ?? 1, pages: row?.checkpointed ?? 0 }
+}
+
+/**
+ * 用 SQLite 的**在线备份 API** 产出一份一致的副本。
+ *
+ * ⚠ **不要用 `cp`。** 实测三路对照（10000 行）：
+ * - 只拷 `.sqlite` → 副本是**空库**（`no such table: probes`），因为数据还在 WAL 里；
+ * - 连 `-wal` 一起拷 → 能读，但**只有停服才安全**（拷贝瞬间 WAL 正在写就会得到撕裂的组合）；
+ * - `db.backup()` → 行数与源库一致，且**不需要停服**。
+ *
+ * 另实测：`db.backup()` **不改动源库的 WAL**，所以 checkpoint 不能靠备份顺带完成——
+ * 必须**先 checkpoint 再备份**。
+ */
+export async function backupTo(file: string): Promise<void> {
+  await handle().backup(file)
+}
+
 /**
  * 存量脏数据清洗：把历史 `error` 列里可能含 URL/凭证的原文改写成类别文案。
  *

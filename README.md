@@ -110,6 +110,96 @@ npm start
 
 也可以在环境变量里用 `TARGETS_JSON` 直接给一份 JSON 数组，它优先于文件（适合 Docker 部署）。
 
+### ⚠ 探测**不跟随跳转**（这条会改变你的判定结果）
+
+探测请求用 `redirect: 'manual'`，也就是说**被探测系统返回 302 时，探测不会去访问跳转目标**。
+
+为什么：跟随跳转会让探测去请求**跳转指向的地址**（实测 `follow` 让目标被请求 1 次、`manual` 后为 0 次），
+于是「被探测系统自己 302 到一个元数据地址」就成了一条越权探测路径。`manual` 从根上关掉它。
+
+**代价是语义变了**：`manual` 之后 302 会**原样返回**，而默认判定区间是 `200–399`，
+所以 **302 会被判为「可用」**。这是**故意保留**的默认——改它等于静默改变所有既有部署的语义。
+
+**想让跳转算失败**，给你的目标显式写白名单：
+
+```json
+{ "id": "portal", "name": "门户", "url": "http://10.0.0.10/", "expectStatus": [200] }
+```
+
+这样只有 200 算可用，302 会被判成「异常」。`targets.json` 里有一条 `demo-redirect` 就是这个用法的示例。
+
+### `targets.json` 是**授权清单**，不是不可信输入
+
+入口会校验每条 URL（详见下），但**不做 SSRF 地址黑名单**：面板的用途**就是**探内网地址，
+`127.0.0.1` 与 `10.x` 都是正当目标，黑名单既挡不住 `0x7f.1` 这类变体，也会误伤真实用途。
+
+所以请把它当成**一份授权清单**：能写进这个文件的人，本来就有权让本服务去访问那些地址。
+不要把它做成「让不受信任的人提交 URL」的接口。
+
+### 入口校验：三类 URL 会被跳过
+
+每条 URL 必须满足（不满足则 `console.warn` 后**跳过该目标**，服务照常启动）：
+
+| 规则 | 例子 |
+| --- | --- |
+| `new URL()` 必须可解析 | `not a url` → 拒 |
+| 协议必须是 `http:` / `https:` | `file:///etc/passwd`、`javascript:alert(1)`、`gopher://…` → 拒 |
+| **不能带凭证**（只有用户名也算） | `http://ops:hunter2@10.0.0.1/` → 拒 |
+
+第三条顺带拦住「没写 scheme」：`ledger.internal.example:8080` 会被解析成
+`protocol='ledger.internal.example:'`，于是查协议白名单时就一并拒了。
+
+**为什么必须拒凭证**：异常原文可能把整个 URL 记进历史库，而 URL 里带着口令
+（这一点实测过一次：`http://ops:hunter2@…` 的原文含内网主机名与口令）。
+出口侧另有脱敏（见「接口」一节），但**入口与出口两道都要做**。
+
+## 备份与恢复
+
+**自动备份**：服务在探测轮次里降频执行「checkpoint + 备份」（默认每 60 轮 ≈ 1 小时），
+产物在 `BACKUP_DIR`（默认 `./data/backups`），按日期命名，滚动保留 `BACKUP_KEEP` 份（默认 7）。
+备份失败**只记日志、不中断探测**。
+
+### ⚠ 不要用 `cp` 备份数据库
+
+实测三种做法的对照（10000 行）：
+
+| 做法 | 结果 |
+| --- | --- |
+| **只拷 `.sqlite`** | 副本**打不开 `probes` 表**——数据还在 `-wal` 里，拷到的是空库 |
+| 连 `-wal` 一起拷 | 能读，但**只有停服才安全**（拷贝瞬间 WAL 正在写就会得到撕裂的组合） |
+| **`db.backup()`（本服务的做法）** | 行数与源库一致，且**不需要停服** |
+
+### 手动操作
+
+```bash
+node dist/cli/backup.js                  # 立刻备份一次
+node dist/cli/backup.js --list           # 列出备份，并逐个校验能不能用
+node dist/cli/backup.js --verify <file>  # 校验一份备份（恢复前必做）
+```
+
+### 恢复步骤
+
+1. **停服务**（避免恢复过程中有写入）。
+2. **先校验备份**：`node dist/cli/backup.js --verify <备份文件>`。
+   ⚠ **不要跳过这一步**——把一份空库盖到好库上是最常见的恢复事故，而空库「看起来」是正常的文件。
+3. 移走当前主库**以及残留的 `-wal` / `-shm`**：
+
+   ```bash
+   mv data/availability.sqlite /tmp/availability.broken.sqlite
+   rm -f data/availability.sqlite-wal data/availability.sqlite-shm
+   ```
+
+   ⚠ **必须一起移走**。旧的 `-wal` 配上新的主库，SQLite 会把旧 WAL 当成自己的，
+   实测结果是**读到了另一个库的数据**（不是报错，是静默给错数据）。
+4. 把备份拷回 `DATABASE_PATH` 的位置。
+5. 起服务，确认面板/`/api/status` 能看到历史数据。
+
+### 关于 `-wal` 与 checkpoint
+
+数据先写 WAL，再靠 checkpoint 搬回主库。所以「拷 `.sqlite` 就能拿到完整库」
+**只在 WAL 已被截断时成立**。服务会定期 `wal_checkpoint(TRUNCATE)` 把 WAL 截断，
+而 `busy` 非 0 时会**显眼地记日志**（那时它其实没搬干净——实测这个返回值会说谎）。
+
 ## 写一篇文章
 
 在 `content/` 下放一个 `.md`：
@@ -142,9 +232,11 @@ docker compose up -d --build
 ## 自检
 
 ```bash
-npm run verify        # = typecheck + check:docker + check:unit + check:leak
+npm run verify        # = typecheck + check:docker + check:unit + check:leak + check:chart + check:backup
 npm run check:unit    # 凭据与会话的纯函数断言（86 项，不需要起服务）
 npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（31 项）
+npm run check:chart   # 曲线几何的交叉断言 + 面板行为（61 项）
+npm run check:backup  # 入口校验、checkpoint、备份与恢复（46 项）
 npm run check:e2e     # 真实起服务、真实探测、逐项断言（需要先 npm run build）
 ```
 
@@ -154,6 +246,14 @@ npm run check:e2e     # 真实起服务、真实探测、逐项断言（需要�
 `check:leak` 专门盯**数据外泄**：造一个带 `http://user:pass@内网主机/` 的目标与一个含凭证原文的
 历史库，然后断言响应体里搜不到主机名、口令、`url`、`expectStatus` 等任何一项——
 同时断言**超时文案仍然是原文**（脱敏不能把排障信息一起抹掉）。
+
+`check:chart` 里最要紧的是**交叉断言**：同一份输入，服务端渲染出的折线 `d` 必须与
+`node:vm` 里 `public/chart-path.js` 算出的 `d` **逐字符相等**——否则「两份实现漂移」只会在
+「刷新一次曲线就跳一下」时暴露，极难归因。
+
+`check:backup` 里有一半是**防静默降级**的断言：checkpoint 在并发时返回 `busy !== 0`
+（实测它可能报 `busy:0` 却只搬了 2/33 页）、只拷 `.sqlite` 的副本**打不开 `probes` 表**、
+残留 `-wal` 会让恢复**读到另一个库的数据**。
 
 `check:e2e` 会临时起一个服务（端口 3997）并写入独立的数据目录，跑完自动清理。
 它断言的是真实行为，而不是 mock：未登录是否被拦、登录能否通过、畸形 cookie 会不会打成 500、
@@ -186,6 +286,10 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | `SESSION_TTL_SECONDS` | `604800` | 会话存活时间（7 天）。绝对过期，不滑动续期 |
 | `SESSION_COOKIE_SECURE` | `0` | cookie 的 `Secure` 属性。**HTTP 部署时必须保持 0** |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | — | 首个账号，**仅当库里没有任何账号时生效** |
+| `BACKUP_DIR` | `./data/backups` | 备份目录。默认与数据库同目录，两种部署方式都不用加挂载 |
+| `BACKUP_KEEP` | `7` | 滚动保留几份 |
+| `CHECKPOINT_EVERY_ROUNDS` | `60` | 每几轮探测做一次 checkpoint（0 = 关闭） |
+| `BACKUP_EVERY_ROUNDS` | `60` | 每几轮探测尝试一次备份（0 = 关闭） |
 
 > ⚠ **`SESSION_COOKIE_SECURE` 与 HTTPS**：站点还是 HTTP 时把它设成 `1`，浏览器**不会保存**带
 > `Secure` 的 cookie，表现为「**输对密码又跳回登录页**」，现象极具误导性。

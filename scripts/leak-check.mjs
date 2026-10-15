@@ -32,10 +32,13 @@ const SECRET_PASS = 'hunter2'
 const CREDENTIAL_URL = `http://${SECRET_USER}:${SECRET_PASS}@${SECRET_HOST}/`
 
 const targets = [
-  // 这个会失败（主机不存在），从而走运行时异常分支
+  // 这个会被**入口拦截**（URL 带凭证），根本不会进探测流程
   { id: 'leaky', name: '带凭证的目标', url: CREDENTIAL_URL, group: 'G1', timeoutMs: 1200 },
   // 超时分支：必须保住「等了多久」
   { id: 'slow', name: '会超时', url: 'http://10.255.255.1/', group: 'G1', timeoutMs: 1000 },
+  // DNS 失败分支：**运行时异常**，原文含主机名 → 必须被换成类别文案。
+  // 这条替换掉「带凭证 URL」原先承担的写侧脱敏覆盖（那个现在被入口拦掉了）。
+  { id: 'dnsfail', name: 'DNS 失败', url: `http://${SECRET_HOST}/`, group: 'G2', timeoutMs: 4000 },
 ]
 
 // ── 先造一个「脏」的旧库：模拟 `?? e.message` 时代写进去的原文 ──
@@ -150,7 +153,7 @@ try {
   const slow = api.targets.find((t) => t.id === 'slow')
   const leaky = api.targets.find((t) => t.id === 'leaky')
   check(
-    '超时文案原样保留（信息量最大，不能被抹成「探测失败」）',
+    '超时文案原样保留（信息量最大，不能抹成「探测失败」）',
     slow && /^超时（>\d+ms）$/.test(slow.lastError || ''),
     `lastError=${JSON.stringify(slow?.lastError)}`,
   )
@@ -159,13 +162,23 @@ try {
     api.incidents.some((i) => /^状态码 \d+ 不在预期范围内$/.test(i.error || '')),
     JSON.stringify(api.incidents.map((i) => i.error)),
   )
+  // ⚠ 入口拦截（实现④）先一步生效：带凭证的 URL 在**启动时就被跳过**，
+  // 根本不会去探测，所以它不会出现在响应里。这是**入口 + 出口两道**都成立的证据，
+  // 比「探测失败后脱敏」更干净——凭证 URL 压根没进过探测流程。
   check(
-    '含凭证的原文被换成类别文案',
-    leaky && leaky.lastError !== null && !leaky.lastError.includes(SECRET_HOST),
-    `lastError=${JSON.stringify(leaky?.lastError)}`,
+    '带凭证的目标被入口拦截（不出现在响应里）',
+    leaky === undefined,
+    leaky ? `仍然出现了：${JSON.stringify(leaky.lastError)}` : '已在启动时跳过',
+  )
+  // 写侧脱敏仍要覆盖：DNS 失败的**运行时异常原文会含主机名**，必须只留类别码。
+  const dns = api.targets.find((t) => t.id === 'dnsfail')
+  check(
+    '运行时异常被换成类别文案（写侧脱敏仍生效）',
+    dns !== undefined && dns.lastError !== null && !String(dns.lastError).includes(SECRET_HOST),
+    `lastError=${JSON.stringify(dns?.lastError)}`,
   )
   check(
-    'incidents[].error 同样被脱敏（不能只修 lastError 这一处）',
+    'incidents[].error 也被脱敏（不能只修 lastError 这一处）',
     api.incidents.every((i) => !(i.error || '').includes(SECRET_HOST) && !(i.error || '').includes(SECRET_PASS)),
     JSON.stringify(api.incidents.map((i) => i.error)),
   )

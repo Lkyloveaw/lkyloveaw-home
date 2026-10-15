@@ -16,9 +16,10 @@
     "check:unit": "npm run build && node scripts/unit-check.mjs",
     "check:leak": "npm run build && node scripts/leak-check.mjs",
     "check:chart": "npm run build && node scripts/chart-check.mjs && node scripts/panel-check.mjs",
+    "check:backup": "npm run build && node scripts/backup-check.mjs && node scripts/probe-integration-check.mjs",
     "check:e2e": "node scripts/e2e-check.mjs",
     "check:docker": "node scripts/check-docker-context.mjs",
-    "verify": "npm run typecheck && npm run check:docker && npm run check:unit && npm run check:leak && npm run check:chart"
+    "verify": "npm run typecheck && npm run check:docker && npm run check:unit && npm run check:leak && npm run check:chart && npm run check:backup"
   },
   "dependencies": {
     "@fastify/static": "^10.1.6",

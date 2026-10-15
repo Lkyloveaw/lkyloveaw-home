@@ -88,6 +88,39 @@ function loadTargets(): ProbeTarget[] {
   return []
 }
 
+/** 允许被探测的协议。**白名单**，不是黑名单——黑名单挡不住 `0x7f.1` 这类变体。 */
+const ALLOWED_PROTOCOLS = new Set(['http:', 'https:'])
+
+/**
+ * 校验一条目标 URL。返回 `null` 表示合规，否则返回拒绝原因（会进日志）。
+ *
+ * 三条校验（`docs/probe-request-constraints-decision.md` §2.2）：
+ * 1. `new URL()` 必须可解析；
+ * 2. `protocol` 必须在白名单里；
+ * 3. **`username`/`password` 必须为空**——只有用户名也算凭证。
+ *
+ * 第 2 条顺带拦住「没有 scheme」这种写法：实测 `new URL('ledger.internal.example:8080')`
+ * 解析成 `protocol='ledger.internal.example:'`，所以查协议白名单就够了，不需要额外规则。
+ *
+ * 为什么不合规是「warn + 跳过」而不是「拒绝启动」：与「零账号允许启动」同一原则——
+ * 一条脏配置不该让整个站点起不来，显眼告警即可。
+ */
+function validateTargetUrl(url: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return 'URL 无法解析'
+  }
+  if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
+    return `协议不被允许（${parsed.protocol}），只接受 http/https`
+  }
+  if (parsed.username || parsed.password) {
+    return 'URL 里含凭证（用户名/口令），请改用其他方式授权'
+  }
+  return null
+}
+
 /** 过滤掉缺 id/name/url 的坏条目：宁可少探一个，也不要让整轮探测因为一条脏数据挂掉。 */
 function normalizeTargets(raw: unknown[]): ProbeTarget[] {
   const out: ProbeTarget[] = []
@@ -100,6 +133,13 @@ function normalizeTargets(raw: unknown[]): ProbeTarget[] {
     const url = typeof t.url === 'string' ? t.url.trim() : ''
     if (!id || !name || !url) {
       console.warn('[config] 跳过不完整的目标条目（需要 id/name/url）：', JSON.stringify(t))
+      continue
+    }
+    // ⚠ 入口拦截：URL 里的凭证会让探测请求带上 Authorization，
+    // 而异常原文可能把整个 URL 记进日志与历史库（出口脱敏是另一道，两边都要做）。
+    const reason = validateTargetUrl(url)
+    if (reason) {
+      console.warn(`[config] 跳过目标「${id}」：${reason} —— ${url}`)
       continue
     }
     if (seen.has(id)) {
@@ -148,6 +188,18 @@ export const config = {
   /** 零账号时用它建首个号；表非空则**完全忽略**（防后门）。 */
   adminUsername: process.env.ADMIN_USERNAME?.trim() || '',
   adminPassword: process.env.ADMIN_PASSWORD?.trim() || '',
+
+  /**
+   * 备份目录。**默认与数据库同目录**（同一个 volume），这样 Docker 与裸机部署都不需要加挂载点。
+   * 刻意不写死 `/app/data`：备份逻辑要**部署方式无关**。
+   */
+  backupDir: resolveFromRoot(process.env.BACKUP_DIR?.trim() || './data/backups'),
+  /** 滚动保留几份。实测产物 ≈ 主库大小，7 份约 1.4 MB，故不压缩。 */
+  backupKeep: num('BACKUP_KEEP', 7),
+  /** 每几轮探测做一次 checkpoint（约每小时；探测轮次是本进程唯一心跳，不另开定时器）。 */
+  checkpointEveryRounds: num('CHECKPOINT_EVERY_ROUNDS', 60),
+  /** 每几轮探测尝试一次备份（默认与 checkpoint 同频，靠「今天是否已备份」去重）。 */
+  backupEveryRounds: num('BACKUP_EVERY_ROUNDS', 60),
 } as const
 
 export type Config = typeof config
