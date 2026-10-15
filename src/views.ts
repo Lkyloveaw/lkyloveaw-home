@@ -312,14 +312,16 @@ summary: 可选的一句话摘要
 }
 
 function timelineBar(points: TimelinePoint[]): string {
-  if (!points.length) return '<div class="tl tl-empty"><span class="sr">暂无数据</span></div>'
+  // ⚠ 必须带 `data-timeline` 钩子：卡片只有 `data-target`，`.tl` 容器原本**无标识**，
+  // 前端没法定位它做重绘。空态与非空态结构不同，所以要整块重建。
+  if (!points.length) return '<div class="tl tl-empty" data-timeline><span class="sr">暂无数据</span></div>'
   const cells = points
     .map(
       (p) =>
         `<i class="tl-cell ${p.status}" title="${escapeHtml(`${formatTime(p.at)} · ${p.status === 'up' ? '可用' : p.status === 'degraded' ? '异常' : '故障'}${p.latencyMs != null ? ` · ${p.latencyMs}ms` : ''}`)}"></i>`,
     )
     .join('')
-  return `<div class="tl">${cells}</div>`
+  return `<div class="tl" data-timeline>${cells}</div>`
 }
 
 export function statusPage(
@@ -420,6 +422,7 @@ ${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
   <h2 class="group-title">近期异常</h2>
   ${incidents}
 </section>
+<script src="/chart-path.js" defer></script>
 <script src="/status.js" defer></script>`
   return layout({ title: '系统可用性', description: site.description, active: 'status', body }, site)
 }

@@ -81,16 +81,25 @@ export function latencyChart(
   )
 
   if (!d) {
-    return `<div class="chart chart-empty"><span>延迟数据不足（至少 2 次有效探测后显示曲线）</span></div>`
+    // ⚠ 空态与非空态的 DOM 结构**不同**，所以客户端的空态切换必须是「整块重建」，
+    // 不能只改属性——这里给容器一个稳定的钩子，让前端能定位到它。
+    return `<div class="chart chart-empty" data-chart data-chart-kind="latency">` +
+      `<span>延迟数据不足（至少 2 次有效探测后显示曲线）</span></div>`
   }
 
   const nums = values.filter((v): v is number => v != null)
   const max = Math.max(...nums)
+  const min = Math.min(...nums)
   const avg = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length)
   const gid = `lg${Math.abs(hash(d))}`
   const failed = values.filter((v) => v == null).length
 
-  return `<figure class="chart">
+  // 值域写进 DOM：客户端「只扩不缩」策略需要知道服务端首屏用的是哪个域，
+  // 否则它一上来就重算，会让老点立刻跳一下（实测位移可达图高的 87%）。
+  const domain = initialDomain(values)
+  return `<figure class="chart" data-chart data-chart-kind="latency"
+    data-y-min="${domain.min.toFixed(2)}" data-y-max="${domain.max.toFixed(2)}"
+    data-fill-id="${gid}" data-stroke="var(--accent)">
   <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
        aria-label="延迟曲线，平均 ${avg} 毫秒，峰值 ${max} 毫秒">
     <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
@@ -101,7 +110,7 @@ export function latencyChart(
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5"
           stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
   </svg>
-  <figcaption><span>延迟（平均 ${esc(avg)} ms）</span><span class="chart-max">峰值 ${esc(max)} ms${failed ? ` · ${esc(failed)} 次失败已断开` : ''}</span></figcaption>
+  <figcaption><span class="chart-avg">延迟（平均 ${esc(avg)} ms）</span><span class="chart-max">峰值 ${esc(max)} ms${failed ? ` · ${esc(failed)} 次失败已断开` : ''}</span></figcaption>
 </figure>
 ${axisLabel(xRange)}`
 }
@@ -120,14 +129,16 @@ export function uptimeChart(points: OverviewPoint[], w = 760, h = 130, xRange?: 
   )
 
   if (!d) {
-    return `<div class="chart chart-empty"><span>可用率曲线需要至少两轮探测数据</span></div>`
+    return `<div class="chart chart-wide chart-empty" data-chart data-chart-kind="uptime">` +
+      `<span>可用率曲线需要至少两轮探测数据</span></div>`
   }
 
   const nums = values.filter((v): v is number => v != null)
   const avg = nums.reduce((a, b) => a + b, 0) / nums.length
   const gid = `ug${Math.abs(hash(d))}`
-
-  return `<figure class="chart chart-wide">
+  // 可用率天然落在 0-100，值域固定，客户端不需要扩域。
+  return `<figure class="chart chart-wide" data-chart data-chart-kind="uptime"
+    data-y-min="0" data-y-max="100" data-fill-id="${gid}" data-stroke="var(--ok)">
   <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
        aria-label="可用率曲线，窗口内平均 ${avg.toFixed(1)}%">
     <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
@@ -138,9 +149,31 @@ export function uptimeChart(points: OverviewPoint[], w = 760, h = 130, xRange?: 
     <path d="${d}" fill="none" stroke="var(--ok)" stroke-width="1.5"
           stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
   </svg>
-  <figcaption><span>窗口内平均可用率 ${avg.toFixed(1)}%</span><span class="chart-max">范围 ${Math.min(...nums)}% – ${Math.max(...nums)}%</span></figcaption>
+  <figcaption><span class="chart-avg">窗口内平均可用率 ${avg.toFixed(1)}%</span><span class="chart-max">范围 ${Math.min(...nums)}% – ${Math.max(...nums)}%</span></figcaption>
 </figure>
 ${axisLabel(xRange)}`
+}
+
+/**
+ * 首屏值域：必须与 `public/chart-path.js` 的 `expandDomain` **完全一致**，
+ * 否则客户端首次重绘就会让老点跳一下。交叉断言会钉住这一点。
+ *
+ * ⚠ 只统计**有效点**（排除 null / 非有限 / 负数）——负数在 `linePath` 里被当作断点，
+ * 若把它算进值域，服务端的域会比前端的小，交叉断言立刻变红（实测抓到过一次）。
+ * ⚠ 最小跨度用 10（与 chart-path.js 的默认一致）。两侧都必须同步改。
+ */
+function initialDomain(values: Array<number | null>): { min: number; max: number } {
+  const MIN_SPAN = 10
+  const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v >= 0)
+  let lo = Math.min(...nums)
+  let hi = Math.max(...nums)
+  if (hi - lo < MIN_SPAN) {
+    const mid = (lo + hi) / 2
+    lo = mid - MIN_SPAN / 2
+    hi = mid + MIN_SPAN / 2
+  }
+  if (lo < 0) lo = 0
+  return { min: lo, max: hi }
 }
 
 /** 给渐变 id 用的小哈希，避免同页多个图共用 id 导致填充串色。 */

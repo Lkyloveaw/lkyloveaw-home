@@ -249,6 +249,20 @@ try {
   check('不可达目标显示无曲线(而非0)', st.body.includes('chart-empty'))
   check('失败原因展示', st.body.includes('超时') && st.body.includes('不在预期范围内'))
 
+  // ── 面板重绘所需的钩子（本票新增，缺一个前端就静默失效）──
+  check('曲线容器带 data-chart 钩子', (st.body.match(/data-chart[\s>]/g) || []).length >= 2)
+  check('曲线容器带 data-chart-kind', st.body.includes('data-chart-kind="latency"') && st.body.includes('data-chart-kind="uptime"'))
+  check('延迟曲线把首屏值域写进 DOM', /data-chart-kind="latency"[\s\S]{0,160}data-y-min="[-\d.]+" data-y-max="[-\d.]+"/.test(st.body))
+  check('可用率值域固定 0-100', /data-chart-kind="uptime"[\s\S]{0,120}data-y-min="0" data-y-max="100"/.test(st.body))
+  check('时序条带 data-timeline 钩子', st.body.includes('data-timeline'))
+  check('引入了 /chart-path.js', st.body.includes('src="/chart-path.js"'))
+  check('/chart-path.js 在 status.js **之前**（否则 CP 未定义）', st.body.indexOf('/chart-path.js') < st.body.indexOf('src="/status.js"'))
+  {
+    // 空态也要带 data-chart，否则「空 → 有数据」时前端找不到容器
+    const empty = (st.body.match(/chart-empty[^>]*data-chart|data-chart[^>]*chart-empty/g) || []).length
+    check('空态容器也带 data-chart（否则双向切换失败）', empty >= 1 || !st.body.includes('chart-empty'), `命中 ${empty}`)
+  }
+
   console.log('\n[API 数据（本票断言依赖闸门 + 拍平后的形状）]')
   const apiRes = await authed('/api/status')
   const apiBody = apiRes.body
@@ -307,12 +321,18 @@ try {
     /^状态码 \d+ 不在预期范围内$/.test(byId.bad.lastError || ''),
     `lastError=${JSON.stringify(byId.bad.lastError)}`,
   )
+  // 允许的形态：自有文案（超时/状态码）、类别映射（`连接被重置（ECONNRESET）`）、兜底「探测失败」。
+  // 不允许的：任何含 URL/主机名/异常的原文。
   check(
     'incidents[].error 与 lastError 走同一套脱敏（不能只修一处）',
-    api.incidents.every((i) => i.error === null || /^超时（>\d+ms）$|^状态码 \d+ 不在预期范围内$|^探测失败/.test(i.error)),
-    JSON.stringify(api.incidents.map((i) => i.error).slice(0, 4)),
+    api.incidents.every(
+      (i) =>
+        i.error === null ||
+        /^超时（>\d+ms）$|^状态码 \d+ 不在预期范围内$|^探测失败/.test(i.error) ||
+        /^[^（）]{2,20}（[A-Z][A-Z0-9_]{2,63}）$/.test(i.error),
+    ),
+    JSON.stringify(api.incidents.map((i) => i.error).slice(0, 5)),
   )
-
   console.log('\n[安全性]')
   // 真实转义测试：把攻击载荷放进「文章内容/标题」这条真实数据通路，再断言它没有被当成 HTML 执行。
   // 旧版本是 `!/<script>alert/.test(body)`——页面里本来就没有那个字面量，恒真，等于没测。
