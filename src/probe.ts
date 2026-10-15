@@ -5,6 +5,7 @@
  */
 import { config, type ProbeTarget } from './config.js'
 import { recordResults, pruneOldProbes, type ProbeResult } from './store.js'
+import { classifyRuntimeError } from './sanitize.js'
 
 const DEFAULT_OK_STATUS = (code: number): boolean => code >= 200 && code < 400
 
@@ -52,7 +53,14 @@ async function probeOne(target: ProbeTarget, roundAt: number): Promise<ProbeResu
       status: 'down',
       latencyMs: null,
       statusCode: null,
-      error: aborted ? `超时（>${timeout}ms）` : (e.cause?.code ?? e.message ?? '未知错误'),
+      // 两类错误在这里分流（`docs/api-status-fields-decision.md` §4.3）：
+      // - 超时是**我们自己**判定的，文案只含超时值，天然安全且信息量最大 → 原样保留；
+      // - 其余是运行时异常，原文可能含完整 URL 与凭证 → **只留类别码，兜底不回原文**。
+      //
+      // ⚠ 原来这里是 `e.cause?.code ?? e.message ?? '未知错误'`。那个 `?? e.message`
+      // 就是泄漏命门：喂 `http://ops:hunter2@ledger.internal.example/` 进去，
+      // 落库的会是含内网主机名与口令的完整长句。**删掉它，不要以任何形式加回来。**
+      error: aborted ? `超时（>${timeout}ms）` : classifyRuntimeError(e.cause?.code),
     }
   } finally {
     clearTimeout(timer)

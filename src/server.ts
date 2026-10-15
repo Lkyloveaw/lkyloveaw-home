@@ -7,7 +7,8 @@ import Fastify from 'fastify'
 import fastifyStatic from '@fastify/static'
 import { assertSessionSecret, config } from './config.js'
 import { getPost, listPosts, listTags } from './content.js'
-import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore } from './store.js'
+import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
+import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import {
   countUsers,
@@ -85,6 +86,16 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   initStore()
   initUsers()
+
+  // 存量脏数据清洗：历史 `error` 列里可能残留含 URL/凭证的异常原文。
+  // 写入侧已修，但那只影响新行——已落库的得在这里洗掉。幂等，启动时自动跑。
+  try {
+    const cleaned = sanitizeStoredErrors()
+    if (cleaned > 0) console.log(`[store] 已清洗 ${cleaned} 条历史错误文案（脱敏/截断）`)
+  } catch (err) {
+    // 清洗失败不该阻止服务启动：闸门与会话都不依赖它。
+    console.error('[store] 历史错误文案清洗失败（不影响启动）：', (err as Error).message)
+  }
 
   // 零账号时用环境变量建首个号；表非空则**完全忽略**（防后门）。
   // 零账号**允许启动**——拒绝启动会进 restart: unless-stopped 的重启循环。
@@ -236,9 +247,11 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     return statusPage(buildSummary(), site)
   })
 
-  /** 给前端自动刷新用的 JSON：只回渲染必需的字段，不回整页 HTML。 */
+  /** 给前端自动刷新用的 JSON。
+   *  ⚠ 必须过 `toPublicSummary()`：内部结构里有 `url`/`expectStatus` 等不该出网的字段。
+   *  真实攻击者最多是「已登录的用户」，所以「要求登录」不能替代字段收敛。 */
   app.get('/api/status', async (_req, reply) => {
-    return reply.send(buildSummary())
+    return reply.send(toPublicSummary(buildSummary()))
   })
 
   app.get('/about', async (_req, reply) => {

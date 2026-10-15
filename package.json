@@ -14,9 +14,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "passwd": "node dist/cli/passwd.js",
     "check:unit": "npm run build && node scripts/unit-check.mjs",
+    "check:leak": "npm run build && node scripts/leak-check.mjs",
     "check:e2e": "node scripts/e2e-check.mjs",
     "check:docker": "node scripts/check-docker-context.mjs",
-    "verify": "npm run typecheck && npm run check:docker && npm run check:unit"
+    "verify": "npm run typecheck && npm run check:docker && npm run check:unit && npm run check:leak"
   },
   "dependencies": {
     "@fastify/static": "^10.1.6",

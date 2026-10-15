@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { config } from './config.js'
+import { needsSanitizing, sanitizeStoredError } from './sanitize.js'
 
 export interface ProbeResult {
   targetId: string
@@ -107,6 +108,55 @@ export function pruneOldProbes(): number {
   const cutoff = Date.now() - config.retentionDays * 24 * 60 * 60 * 1000
   const info = handle().prepare('DELETE FROM probes WHERE at < ?').run(cutoff)
   return info.changes
+}
+
+/**
+ * 存量脏数据清洗：把历史 `error` 列里可能含 URL/凭证的原文改写成类别文案。
+ *
+ * 为什么必须做：`probe.ts` 的写入侧修好，**只影响新写入的行**。
+ * 已经被 `?? e.message` 写进去的原文（实测本机库里就有一条带口令的）会一直漏下去——
+ * 写侧修好了、读侧还在漏。
+ *
+ * 三个实现约束：
+ * 1. **可重复执行**：二次运行无行可改（幂等）；
+ * 2. **按主键分页**：历史原文可能极长，一次性 `SELECT` 全部会撑爆内存；
+ * 3. **在启动路径上自动跑**（已定：不让运维多记一个步骤，也不给「忘了跑」留口子）。
+ */
+export function sanitizeStoredErrors(batchSize = 500): number {
+  const db = handle()
+  let changed = 0
+  let lastId = 0
+
+  const page = db.prepare(
+    `SELECT id, error FROM probes
+      WHERE id > ? AND error IS NOT NULL
+      ORDER BY id ASC LIMIT ?`,
+  )
+  const update = db.prepare(`UPDATE probes SET error = ? WHERE id = ?`)
+
+  for (;;) {
+    const rows = page.all(lastId, batchSize) as Array<{ id: number; error: string | null }>
+    if (!rows.length) break
+    const tx = db.transaction((batch: Array<{ id: number; error: string | null }>) => {
+      for (const row of batch) {
+        if (!needsSanitizing(row.error)) continue
+        update.run(sanitizeStoredError(row.error), row.id)
+        changed++
+      }
+    })
+    tx(rows)
+    lastId = rows[rows.length - 1]!.id
+    if (rows.length < batchSize) break
+  }
+
+  // 顺带截断异常长的历史文本：即使内容已安全，超长字符串也没有展示价值，
+  // 只会拖慢前端渲染。
+  const trimmed = db
+    .prepare(`UPDATE probes SET error = substr(error, 1, 200) WHERE error IS NOT NULL AND length(error) > 200`)
+    .run().changes
+  changed += trimmed
+
+  return changed
 }
 
 interface StatsRow {

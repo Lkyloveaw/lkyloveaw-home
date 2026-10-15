@@ -142,13 +142,18 @@ docker compose up -d --build
 ## 自检
 
 ```bash
-npm run verify        # = typecheck + check:docker + check:unit
+npm run verify        # = typecheck + check:docker + check:unit + check:leak
 npm run check:unit    # 凭据与会话的纯函数断言（86 项，不需要起服务）
+npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（31 项）
 npm run check:e2e     # 真实起服务、真实探测、逐项断言（需要先 npm run build）
 ```
 
 `check:unit` 用临时数据目录跑，断言的是口令校验、`token_version` 迁移、会话签名与
 `next` 逃逸面等纯逻辑——包括「签名长度不对不能抛异常」这类在 HTTP 层很难稳定复现的情形。
+
+`check:leak` 专门盯**数据外泄**：造一个带 `http://user:pass@内网主机/` 的目标与一个含凭证原文的
+历史库，然后断言响应体里搜不到主机名、口令、`url`、`expectStatus` 等任何一项——
+同时断言**超时文案仍然是原文**（脱敏不能把排障信息一起抹掉）。
 
 `check:e2e` 会临时起一个服务（端口 3997）并写入独立的数据目录，跑完自动清理。
 它断言的是真实行为，而不是 mock：未登录是否被拦、登录能否通过、畸形 cookie 会不会打成 500、
@@ -195,6 +200,18 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | `/tags/:tag` | **要** | 按标签筛选 |
 | `/status` | **要** | 完整可用性面板 |
 | `/api/status` | **要**（未登录回 **401 JSON**） | 面板数据 JSON（前端每 30 秒拉一次） |
+
+`/api/status` 的响应是**显式白名单投影**（`src/public-summary.ts`），不是内部结构直接序列化的结果：
+
+- 顶层**恰好 6 个键**：`targets` / `overview` / `incidents` / `generatedAt` / `windowLabel` / `probeIntervalSeconds`；
+- `targets[]` 由内部四层**压平成恰好 10 个键**：`id` / `name` / `group` / `lastStatus` / `uptime` /
+  `avgLatencyMs` / `p95LatencyMs` / `lastError` / `timeline` / `latency`；
+- **`url` 与 `expectStatus` 不在其中**——内网资产地址与判定口径不出网（页面上仍显示，那是靠鉴权保护，两者互补而非互相替代）；
+- 错误文案经脱敏：**超时/状态码这类本服务自己生成的文案原样保留**（排障最需要它），
+  运行时异常只留类别码（如 `连接被拒（ECONNREFUSED）`），无 code 时兜底为 `探测失败`，**绝不回异常原文**
+  （实测原文可能含完整 URL 与口令）。
+
+新增内部字段**默认不会出网**——要出网必须在投影里显式加一行。见 [ADR 0003](docs/adr/0003-public-contract-is-not-internal-structure.md)。
 | `/login` | 匿名 | 登录页（GET 表单 / POST 校验） |
 | `/logout` | 已登录 | 登出（POST；只清本机 cookie） |
 | `/password` | 已登录 | 自助改密（POST） |

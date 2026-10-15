@@ -202,8 +202,11 @@ try {
     while (Date.now() < deadline) {
       try {
         const api = JSON.parse((await authed('/api/status')).body)
-        const t = api.targets.find((x) => x.target.id === id)
-        last = t?.stats?.samples ?? 0
+        // 注意：`/api/status` 已拍平，id 在顶层（`stats.samples` 也被删了，
+        // 所以改用 timeline 长度当「探够了几轮」的信号）。
+        const t = api.targets.find((x) => x.id === id)
+        // ⚠ `stats.samples` 已被字段收敛票删掉，改用 timeline 长度当「探够了几轮」的信号。
+        last = t?.timeline?.length ?? 0
         if (last >= want) return last
       } catch {}
       await sleep(500)
@@ -211,7 +214,7 @@ try {
     return last
   }
   const samples = await waitForSamples('ok', 3)
-  check('累计多轮探测', samples >= 3, `samples=${samples}`)
+  check('累计多轮探测', samples >= 3, `timeline=${samples}`)
 
   console.log('\n[路由（已登录，原有覆盖不缩水）]')
   const routes = [
@@ -246,19 +249,44 @@ try {
   check('不可达目标显示无曲线(而非0)', st.body.includes('chart-empty'))
   check('失败原因展示', st.body.includes('超时') && st.body.includes('不在预期范围内'))
 
-  console.log('\n[API 数据]')
-  const api = JSON.parse((await authed('/api/status')).body)
+  console.log('\n[API 数据（本票断言依赖闸门 + 拍平后的形状）]')
+  const apiRes = await authed('/api/status')
+  const apiBody = apiRes.body
+  const api = JSON.parse(apiBody)
   check('目标数正确', api.targets.length === 3, `got ${api.targets.length}`)
-  const byId = Object.fromEntries(api.targets.map((t) => [t.target.id, t]))
-  check('ok -> up', byId.ok.stats.lastStatus === 'up', byId.ok.stats.lastStatus)
-  check('bad -> degraded', byId.bad.stats.lastStatus === 'degraded', byId.bad.stats.lastStatus)
-  check('dead -> down', byId.dead.stats.lastStatus === 'down', byId.dead.stats.lastStatus)
-  check('down 不记录延迟', byId.dead.stats.avgLatencyMs === null)
-  check('degraded 仍记录延迟', byId.bad.stats.avgLatencyMs !== null)
-  check('可用率为 0-1 之间', byId.ok.stats.uptime !== null && byId.ok.stats.uptime <= 1)
+
+  // ── 公开契约形状：显式白名单，逐键钉住 ──
+  check('顶层恰好 6 个键', Object.keys(api).length === 6, Object.keys(api).join(','))
+  const t0 = api.targets[0]
+  check('targets[] 恰好 10 个键', Object.keys(t0).length === 10, Object.keys(t0).join(','))
+  check(
+    'targets[] 键集符合白名单',
+    JSON.stringify(Object.keys(t0).sort()) ===
+      JSON.stringify(['avgLatencyMs', 'group', 'id', 'lastError', 'lastStatus', 'latency', 'name', 'p95LatencyMs', 'timeline', 'uptime']),
+    Object.keys(t0).sort().join(','),
+  )
+  check('已拍平（不再有嵌套 target/stats 两层）', t0.target === undefined && t0.stats === undefined)
+
+  // ── 泄漏断言：用**响应体子串搜索**，逐字段检查抓不住旁路 ──
+  // 实测过：只投影掉 target.url 之后，仍泄漏的叶子字段是 targets[].lastError 与 incidents[].error。
+  // 注意 `incidents[].targetId` 是**有意保留**的（把事件关联回目标名的连接键，见判定表 §2.2），
+  // 与 targets[] 里被删掉的那个重复字段不是一回事 —— 所以这里不把它当泄漏。
+  for (const word of ['"url"', 'expectStatus', 'samples', 'upCount', 'lastCheckedAt', 'upStreakMs', 'enabled']) {
+    check(`响应体不含内部字段 ${word}`, !apiBody.includes(word), word)
+  }
+
+  const byId = Object.fromEntries(api.targets.map((t) => [t.id, t]))
+  check('ok -> up', byId.ok.lastStatus === 'up', byId.ok.lastStatus)
+  check('bad -> degraded', byId.bad.lastStatus === 'degraded', byId.bad.lastStatus)
+  check('dead -> down', byId.dead.lastStatus === 'down', byId.dead.lastStatus)
+  check('down 不记录延迟', byId.dead.avgLatencyMs === null)
+  check('degraded 仍记录延迟', byId.bad.avgLatencyMs !== null)
+  check('可用率为 0-1 之间', byId.ok.uptime !== null && byId.ok.uptime <= 1)
   check('时间线有数据', byId.ok.timeline.length >= 2, `tl=${byId.ok.timeline.length}`)
   check('延迟序列有数据', byId.ok.latency.length >= 2, `lat=${byId.ok.latency.length}`)
   check('可用率走势有数据', api.overview.length >= 2)
+  check('timeline 点只含 3 个键', Object.keys(byId.ok.timeline[0]).length === 3, JSON.stringify(Object.keys(byId.ok.timeline[0])))
+  check('latency 点只含 2 个键', Object.keys(byId.ok.latency[0]).length === 2, JSON.stringify(Object.keys(byId.ok.latency[0])))
   // 回归：整体可用率必须按「轮」聚合。若按 at 精确分组，每轮会被拆成 total=1 的点，
   // 百分比就只在 0 和 100 之间跳，永远看不到 33% 这种真实值。
   const totals = [...new Set(api.overview.map((p) => p.total))]
@@ -266,8 +294,24 @@ try {
   const pcts = [...new Set(api.overview.map((p) => Math.round((p.up / p.total) * 100)))]
   check('可用率不是 0/100 二值', !pcts.every((v) => v === 0 || v === 100), `pcts=${JSON.stringify(pcts)}`)
   // 回归：P95 不能退化成 max（floor(n*q) 的经典偏差）
-  const s = byId.ok.stats
-  check('P95 >= 平均延迟', s.p95LatencyMs >= s.avgLatencyMs, `p95=${s.p95LatencyMs} avg=${s.avgLatencyMs}`)
+  check('P95 >= 平均延迟', byId.ok.p95LatencyMs >= byId.ok.avgLatencyMs, `p95=${byId.ok.p95LatencyMs} avg=${byId.ok.avgLatencyMs}`)
+
+  // ── 脱敏分流：自有文案必须保住，不能让「统一按 code 分类」把它抹掉 ──
+  check(
+    '排障信息不回归：超时文案仍是原文（不是「探测失败」）',
+    /^超时（>\d+ms）$/.test(byId.dead.lastError || ''),
+    `lastError=${JSON.stringify(byId.dead.lastError)}`,
+  )
+  check(
+    '排障信息不回归：状态码文案仍是原文',
+    /^状态码 \d+ 不在预期范围内$/.test(byId.bad.lastError || ''),
+    `lastError=${JSON.stringify(byId.bad.lastError)}`,
+  )
+  check(
+    'incidents[].error 与 lastError 走同一套脱敏（不能只修一处）',
+    api.incidents.every((i) => i.error === null || /^超时（>\d+ms）$|^状态码 \d+ 不在预期范围内$|^探测失败/.test(i.error)),
+    JSON.stringify(api.incidents.map((i) => i.error).slice(0, 4)),
+  )
 
   console.log('\n[安全性]')
   // 真实转义测试：把攻击载荷放进「文章内容/标题」这条真实数据通路，再断言它没有被当成 HTML 执行。
