@@ -1,0 +1,34 @@
+services:
+  site:
+    build: .
+    image: personal-wiki:latest
+    container_name: personal-wiki
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SITE_TITLE: ${SITE_TITLE:-我的个人站}
+      SITE_DESCRIPTION: ${SITE_DESCRIPTION:-事情分享，以及内网各业务系统的可用性}
+      DATABASE_PATH: /app/data/availability.sqlite
+      TARGETS_PATH: /app/targets.json
+      PROBE_INTERVAL_SECONDS: ${PROBE_INTERVAL_SECONDS:-60}
+      PROBE_TIMEOUT_MS: ${PROBE_TIMEOUT_MS:-5000}
+      PROBE_RETENTION_DAYS: ${PROBE_RETENTION_DAYS:-30}
+    volumes:
+      # 历史库：必须可写
+      - ./data:/app/data
+      # 目标清单与内容：改完重启容器即可生效，容器内只读
+      - ./targets.json:/app/targets.json:ro
+      - ./content:/app/content:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

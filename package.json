@@ -1,0 +1,36 @@
+{
+  "name": "personal-wiki",
+  "version": "0.1.0",
+  "private": true,
+  "description": "个人网站：事情分享 + 内网业务系统可用性展示",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "passwd": "node dist/cli/passwd.js",
+    "check:unit": "npm run build && node scripts/unit-check.mjs",
+    "check:e2e": "node scripts/e2e-check.mjs",
+    "check:docker": "node scripts/check-docker-context.mjs",
+    "verify": "npm run typecheck && npm run check:docker && npm run check:unit"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.6",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.7",
+    "gray-matter": "^4.0.3",
+    "markdown-it": "^15.0.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

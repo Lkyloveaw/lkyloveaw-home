@@ -1,0 +1,15 @@
+node_modules
+dist
+data
+.preview
+.git
+.gitignore
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+docs
+.dsh-progress

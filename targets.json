@@ -1,0 +1,24 @@
+[
+  {
+    "id": "demo-portal",
+    "name": "统一门户（演示「可用」）",
+    "url": "https://example.com/",
+    "group": "演示目标",
+    "expectStatus": [200]
+  },
+  {
+    "id": "demo-degraded",
+    "name": "状态码不符（演示「异常」）",
+    "url": "https://example.com/",
+    "group": "演示目标",
+    "expectStatus": [999],
+    "timeoutMs": 8000
+  },
+  {
+    "id": "demo-down",
+    "name": "不可达地址（演示「故障」）",
+    "url": "http://10.255.255.1/",
+    "group": "演示目标",
+    "timeoutMs": 2000
+  }
+]
