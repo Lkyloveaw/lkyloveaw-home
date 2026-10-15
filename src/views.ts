@@ -98,6 +98,54 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
 </html>`
 }
 
+export interface LoginPageOptions {
+  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
+  error?: string
+  /** 登录成功后的回跳目标（只接受站内路径，调用方已校验）。 */
+  next: string
+  /** 库里一个账号都没有时，登录页要明说「请先用 CLI 建号」，否则用户会以为口令错。 */
+  noAccounts?: boolean
+}
+
+/**
+ * 登录页。刻意**不用 `layout()`**：登录页不该出现站点导航——
+ * 那些链接指向受保护页面，未登录点过去只会被弹回登录页，徒增困惑。
+ */
+export function loginPage(opts: LoginPageOptions, site: { title: string; description: string }): string {
+  const banner = opts.noAccounts
+    ? `<p class="login-hint">尚未创建任何账号。请先在服务器上执行：<br><code>node dist/cli/passwd.js --user &lt;名字&gt; --password &lt;口令&gt;</code></p>`
+    : ''
+  const error = opts.error ? `<p class="login-error">${escapeHtml(opts.error)}</p>` : ''
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · ${escapeHtml(site.title)}</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
+</head>
+<body class="login-body">
+<main class="login-wrap">
+  <h1>${escapeHtml(site.title)}</h1>
+  <p class="login-lede">${escapeHtml(site.description)}</p>
+  ${error}
+  ${banner}
+  <form method="post" action="/login" class="login-form">
+    <input type="hidden" name="next" value="${escapeHtml(opts.next)}">
+    <label>用户名
+      <input type="text" name="username" autocomplete="username" required autofocus>
+    </label>
+    <label>口令
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit">登录</button>
+  </form>
+</main>
+</body>
+</html>`
+}
+
 function postCard(post: PostMeta): string {
   const tags = post.tags
     .map((t) => `<a class="tag" href="/tags/${encodeURIComponent(t)}">${escapeHtml(t)}</a>`)
@@ -274,7 +322,12 @@ function timelineBar(points: TimelinePoint[]): string {
   return `<div class="tl">${cells}</div>`
 }
 
-export function statusPage(summary: StatusSummary, site: { title: string; description: string }): string {
+export function statusPage(
+  summary: StatusSummary,
+  site: { title: string; description: string },
+  /** 一次性提示（改密成功/失败）。属「更显眼」而非核心内容，故只在需要时出现。 */
+  notice?: string,
+): string {
   const groups = new Map<string, Array<{ target: ProbeTarget; stats: TargetStats; timeline: TimelinePoint[]; latency: LatencyPoint[] }>>()
   for (const item of summary.targets) {
     const key = item.target.group || '未分组'
@@ -351,7 +404,7 @@ export function statusPage(summary: StatusSummary, site: { title: string; descri
     <span class="live-tag"><span class="live-dot"></span>每 ${summary.probeIntervalSeconds} 秒探测 · 每 30 秒刷新数值（曲线随页面刷新）</span>
   </div>
   <p class="lede">统计窗口：${escapeHtml(summary.windowLabel)} · 最后更新 <span class="js-generated">${escapeHtml(formatAgo(summary.generatedAt))}</span></p>
-
+${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
   <div class="stat-strip">
     <div class="stat"><span class="stat-num">${upNow}/${summary.targets.length}</span><span class="stat-label">当前可用</span></div>
     <div class="stat"><span class="stat-num">${formatUptime(avgUptime)}</span><span class="stat-label">平均可用率</span></div>

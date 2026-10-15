@@ -291,6 +291,57 @@ main { padding-top: 34px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* ── 登录页 ─────────────────────────────────────────────
+   刻意不复用站点导航：导航指向受保护页面，未登录点过去只会被弹回来，徒增困惑。 */
+.login-body {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; margin: 0; padding: 24px;
+}
+.login-wrap {
+  width: 100%; max-width: 360px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px 28px;
+}
+.login-wrap h1 { font-size: 1.35rem; margin: 0 0 6px; }
+.login-lede { color: var(--fg-dim); font-size: 0.88rem; margin: 0 0 20px; }
+.login-form { display: flex; flex-direction: column; gap: 14px; }
+.login-form label {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 0.82rem; color: var(--fg-dim);
+}
+.login-form input {
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--fg);
+  border-radius: 6px; padding: 9px 11px; font-size: 0.95rem; font-family: inherit;
+}
+.login-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.login-form button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+  padding: 10px 14px; font-size: 0.95rem; font-family: inherit; cursor: pointer; margin-top: 4px;
+}
+.login-form button:hover { filter: brightness(1.08); }
+.login-error {
+  background: rgba(242, 86, 77, 0.14);
+  border: 1px solid rgba(242, 86, 77, 0.4);
+  color: var(--bad); border-radius: 6px; padding: 9px 11px;
+  font-size: 0.85rem; margin: 0 0 16px;
+}
+.login-hint {
+  background: var(--bg-soft); border: 1px dashed var(--border);
+  border-radius: 6px; padding: 10px 12px; font-size: 0.8rem;
+  color: var(--fg-dim); margin: 0 0 16px; line-height: 1.6;
+}
+.login-hint code { font-family: var(--mono); font-size: 0.74rem; color: var(--fg); word-break: break-all; }
+
+/* 面板上的一次性提示（改密结果）与失败横幅 */
+.notice {
+  background: var(--bg-soft); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px; padding: 9px 12px; margin: 0 0 14px;
+  font-size: 0.86rem; color: var(--fg);
+}
+.status-banner { border-left-color: var(--warn); }
+.status-banner a { color: var(--accent); margin-left: 4px; }
+
 @media (max-width: 560px) {
   .header-inner { min-height: 52px; }
   .site-nav a { padding: 4px 8px; font-size: 0.85rem; }

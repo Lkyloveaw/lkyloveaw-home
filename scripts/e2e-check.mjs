@@ -14,15 +14,41 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`)
 }
 
-const get = async (p) => {
-  const res = await fetch(BASE + p, { redirect: 'manual' })
-  return { status: res.status, body: await res.text(), type: res.headers.get('content-type') || '' }
+const get = async (p, opts = {}) => {
+  const res = await fetch(BASE + p, { redirect: 'manual', headers: opts.cookie ? { cookie: opts.cookie } : {} })
+  return {
+    status: res.status,
+    body: await res.text(),
+    type: res.headers.get('content-type') || '',
+    location: res.headers.get('location') || '',
+    setCookie: res.headers.get('set-cookie') || '',
+  }
 }
+
+/** 带会话 cookie 的取数（登录后的常规访问）。 */
+let sessionCookie = ''
+const authed = (p) => get(p, { cookie: sessionCookie })
 
 // 准备一个独立的临时数据目录与目标清单
 const tmpData = path.join(ROOT, '.e2e-tmp')
 fs.rmSync(tmpData, { recursive: true, force: true })
 fs.mkdirSync(tmpData, { recursive: true })
+
+/** 验收用的账号口令（仅本脚本内的临时库）。 */
+const TEST_USER = 'e2euser'
+const TEST_PASS = 'e2e-password-1234'
+const TEST_DB = path.join(tmpData, 'e2e.sqlite')
+
+// 先用 CLI 建号：这同时回归「CLI 在 dist 下可用」这条约束
+// （`scripts/` 不进部署产物，运维入口必须编译进 `dist/`）。
+{
+  const { execFileSync } = await import('node:child_process')
+  execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--password', TEST_PASS], {
+    cwd: ROOT,
+    env: { ...process.env, DATABASE_PATH: TEST_DB },
+    stdio: 'ignore',
+  })
+}
 
 const targets = [
   { id: 'ok', name: '可用系统', url: 'https://example.com/', group: 'G1', expectStatus: [200] },
@@ -37,10 +63,14 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     PORT: String(PORT),
     HOST: '127.0.0.1',
     TARGETS_JSON: JSON.stringify(targets),
-    DATABASE_PATH: path.join(tmpData, 'e2e.sqlite'),
+    DATABASE_PATH: TEST_DB,
     PROBE_INTERVAL_SECONDS: '3',
     PROBE_TIMEOUT_MS: '4000',
     SITE_TITLE: '验收站',
+    // 闸门落地后必需：没配会拒绝启动。
+    SESSION_SECRET: 'e2e-only-secret-not-used-anywhere-else',
+    // 保持默认关，顺便回归「HTTP 下 Secure 必须是关的」。
+    SESSION_COOKIE_SECURE: '0',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
@@ -60,6 +90,110 @@ try {
     await sleep(250)
   }
 
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[闸门：未登录]')
+  // ══════════════════════════════════════════════════════════
+  // 受保护的页面：一律 302 到登录页，且带上 next
+  const protectedPages = ['/', '/posts', '/status', '/about', '/tags/运维', '/posts/why-single-process']
+  for (const p of protectedPages) {
+    const r = await get(p)
+    check(
+      `未登录 GET ${p} -> 302 到 /login`,
+      r.status === 302 && r.location.startsWith('/login'),
+      `got ${r.status} ${r.location}`,
+    )
+  }
+  // API：必须 401 JSON，**不是 302** —— fetch 默认跟随跳转会拿到登录页 HTML，r.json() 会抛错
+  {
+    const r = await get('/api/status')
+    check('未登录 GET /api/status -> 401（不是 302）', r.status === 401, `got ${r.status}`)
+    check('未登录 API 回 JSON error', r.body.includes('unauthorized'), r.body.slice(0, 60))
+  }
+  // 白名单：必须匿名可达
+  for (const p of ['/login', '/healthz', '/style.css', '/status.js']) {
+    const r = await get(p)
+    check(`白名单 ${p} 匿名 200`, r.status === 200, `got ${r.status}`)
+  }
+  // 登录页自己需要样式，否则渲染成裸 HTML
+  {
+    const r = await get('/login')
+    check('登录页引用了 /style.css', r.body.includes('/style.css'))
+    check('登录页含表单', r.body.includes('<form') && r.body.includes('name="password"'))
+  }
+
+  // next 逃逸面：所有站外变体都必须被丢弃并回退到 /
+  for (const bad of ['//evil.com/path', '/\\evil.com/path', '////evil.com', 'https://evil.com/x', '/unknown-junk']) {
+    const r = await get('/login?next=' + encodeURIComponent(bad))
+    const hidden = (r.body.match(/name="next" value="([^"]*)"/) || [])[1]
+    check(`next 逃逸被丢弃：${JSON.stringify(bad)} -> /`, hidden === '/', `hidden=${JSON.stringify(hidden)}`)
+  }
+  {
+    const r = await get('/login?next=' + encodeURIComponent('/status'))
+    const hidden = (r.body.match(/name="next" value="([^"]*)"/) || [])[1]
+    check('合法的 next 被保留', hidden === '/status', `hidden=${JSON.stringify(hidden)}`)
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[登录]')
+  // ══════════════════════════════════════════════════════════
+  const postLogin = async (username, password, next = '/') => {
+    const body = new URLSearchParams({ username, password, next })
+    const res = await fetch(BASE + '/login', {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+    return { status: res.status, setCookie: res.headers.get('set-cookie') || '', body: await res.text() }
+  }
+
+  {
+    const bad = await postLogin(TEST_USER, 'wrong-password-here')
+    check('错误口令 -> 401（不回 cookie）', bad.status === 401 && !bad.setCookie, `got ${bad.status}`)
+    check('错误口令不泄漏账号是否存在', bad.body.includes('用户名或口令不正确'))
+  }
+  {
+    const nobody = await postLogin('no-such-user', 'whatever-123456')
+    check('不存在的用户 -> 401', nobody.status === 401, `got ${nobody.status}`)
+  }
+  {
+    const ok = await postLogin(TEST_USER, TEST_PASS)
+    check('正确口令 -> 302', ok.status === 302, `got ${ok.status}`)
+    check('登录下发了会话 cookie', /session=/.test(ok.setCookie), ok.setCookie.slice(0, 40))
+    check('cookie 是 HttpOnly', /HttpOnly/i.test(ok.setCookie))
+    check('cookie 是 SameSite=Lax', /SameSite=Lax/i.test(ok.setCookie))
+    // HTTP 下开着 Secure 会让浏览器根本不存 cookie，表现为「输对密码又跳回登录页」
+    check('**cookie 不含 Secure**（HTTP 部署下的正确默认）', !/Secure/i.test(ok.setCookie), ok.setCookie)
+    sessionCookie = ok.setCookie.split(';')[0]
+  }
+  {
+    const r = await get('/login', { cookie: sessionCookie })
+    check('已登录访问 /login 不报错', r.status === 200, `got ${r.status}`)
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[会话校验：畸形与失效 cookie 不得 500]')
+  // ══════════════════════════════════════════════════════════
+  const badCookies = [
+    ['session=', '空值'],
+    ['session=garbage', '无分隔符'],
+    ['session=abc.def', '签名长度不对'],
+    ['session=.sig', '点号在开头'],
+    ['session=' + 'A'.repeat(200) + '.short', '超长载荷 + 短签名'],
+    ['other=1', '没有 session 键'],
+    ['session=%E4%B8%AD%E6%96%87.bad', '非 ASCII'],
+  ]
+  for (const [ck, label] of badCookies) {
+    const r = await get('/status', { cookie: ck })
+    check(`畸形 cookie（${label}）-> 302 而非 500`, r.status === 302, `got ${r.status}`)
+    const api = await get('/api/status', { cookie: ck })
+    check(`畸形 cookie（${label}）API -> 401 而非 500`, api.status === 401, `got ${api.status}`)
+  }
+  {
+    const r = await get('/api/status', { cookie: sessionCookie })
+    check('登录后 API 正常 200', r.status === 200, `got ${r.status}`)
+  }
+
   // 等到「累计足够多轮探测」再断言，而不是猜一个睡眠时长：
   // 首轮耗时取决于最慢的目标，固定 sleep 会随机地只采到 1 轮。
   const waitForSamples = async (id, want, timeoutMs = 40000) => {
@@ -67,7 +201,7 @@ try {
     let last = 0
     while (Date.now() < deadline) {
       try {
-        const api = JSON.parse((await get('/api/status')).body)
+        const api = JSON.parse((await authed('/api/status')).body)
         const t = api.targets.find((x) => x.target.id === id)
         last = t?.stats?.samples ?? 0
         if (last >= want) return last
@@ -79,7 +213,7 @@ try {
   const samples = await waitForSamples('ok', 3)
   check('累计多轮探测', samples >= 3, `samples=${samples}`)
 
-  console.log('\n[路由]')
+  console.log('\n[路由（已登录，原有覆盖不缩水）]')
   const routes = [
     ['/', 200],
     ['/posts', 200],
@@ -92,17 +226,17 @@ try {
     ['/nope', 404],
   ]
   for (const [p, want] of routes) {
-    const r = await get(p)
+    const r = await authed(p)
     check(`GET ${p} -> ${want}`, r.status === want, `got ${r.status}`)
   }
-  const tag = await get('/tags/' + encodeURIComponent('运维'))
+  const tag = await authed('/tags/' + encodeURIComponent('运维'))
   check('GET /tags/运维 -> 200', tag.status === 200, `got ${tag.status}`)
-  const post = await get('/posts/why-single-process')
+  const post = await authed('/posts/why-single-process')
   check('GET /posts/:slug -> 200', post.status === 200)
   check('文章渲染出 pre/code', post.body.includes('<pre><code'))
 
   console.log('\n[可用性面板]')
-  const st = await get('/status')
+  const st = await authed('/status')
   check('面板有内联 SVG 曲线', st.body.includes('<svg viewBox'))
   check('延迟曲线存在', st.body.includes('stroke="var(--accent)"'))
   check('可用率曲线存在', st.body.includes('stroke="var(--ok)"'))
@@ -113,7 +247,7 @@ try {
   check('失败原因展示', st.body.includes('超时') && st.body.includes('不在预期范围内'))
 
   console.log('\n[API 数据]')
-  const api = JSON.parse((await get('/api/status')).body)
+  const api = JSON.parse((await authed('/api/status')).body)
   check('目标数正确', api.targets.length === 3, `got ${api.targets.length}`)
   const byId = Object.fromEntries(api.targets.map((t) => [t.target.id, t]))
   check('ok -> up', byId.ok.stats.lastStatus === 'up', byId.ok.stats.lastStatus)
@@ -148,19 +282,116 @@ try {
   )
   try {
     // 列表页：标题/摘要/标签必须被转义
-    const listPage = await get('/posts')
+    const listPage = await authed('/posts')
     check('XSS: 标题未被注入为脚本', !/<script>alert\(1\)<\/script>/.test(listPage.body))
     check('XSS: 转义后的载荷仍在页面上（证明真的渲染过）', listPage.body.includes('&lt;script&gt;'))
     check('XSS: onerror 属性未被注入', !/<img src=x onerror=/.test(listPage.body))
     // 详情页：正文里的 HTML 也必须被当成文本（markdown-it html:false）
-    const detail = await get('/posts/xss-probe')
+    const detail = await authed('/posts/xss-probe')
     check('XSS: 详情页正文未执行 HTML', !/<script>alert\(1\)<\/script>/.test(detail.body))
     check('XSS: 详情页渲染了该文章', detail.status === 200, `status=${detail.status}`)
     // 标签路由：标签名进 URL 也必须安全
-    const tagPage = await get('/tags/' + encodeURIComponent(xss))
+    const tagPage = await authed('/tags/' + encodeURIComponent(xss))
     check('XSS: 标签路由未 500', tagPage.status === 200 || tagPage.status === 404, `status=${tagPage.status}`)
   } finally {
     fs.rmSync(evilFile, { force: true })
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[改密与吊销（会话语义）]')
+  // ══════════════════════════════════════════════════════════
+  const NEW_PASS = 'e2e-password-5678'
+  {
+    // 另一台「设备」先登录，稍后应当被踢掉
+    const otherLogin = await postLogin(TEST_USER, TEST_PASS)
+    const otherCookie = otherLogin.setCookie.split(';')[0]
+    check('第二台设备能登录（前置条件成立）', (await get('/status', { cookie: otherCookie })).status === 200)
+
+    // 改密：当前浏览器重新签发，其他设备失效
+    const body = new URLSearchParams({ current: TEST_PASS, next: NEW_PASS, confirm: NEW_PASS })
+    const res = await fetch(BASE + '/password', {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: sessionCookie },
+      body,
+    })
+    const newCookieHeader = res.headers.get('set-cookie') || ''
+    check('改密成功（200）', res.status === 200, `got ${res.status}`)
+    check('改密后重新下发了 cookie（自己不掉线）', /session=/.test(newCookieHeader), newCookieHeader.slice(0, 30))
+    const rotated = newCookieHeader ? newCookieHeader.split(';')[0] : sessionCookie
+
+    check('改密后当前浏览器仍登录', (await get('/status', { cookie: rotated })).status === 200)
+    // 关键语义：改密递增 token_version，其他设备的旧 cookie 立刻失配
+    const kicked = await get('/status', { cookie: otherCookie })
+    check('**改密后其他设备被踢下线**（旧 cookie 失效）', kicked.status === 302, `got ${kicked.status}`)
+
+    sessionCookie = rotated
+
+    // 旧口令不能再登录
+    const oldPass = await postLogin(TEST_USER, TEST_PASS)
+    check('改密后旧口令不能登录', oldPass.status === 401, `got ${oldPass.status}`)
+    // 新口令可以
+    const newPassLogin = await postLogin(TEST_USER, NEW_PASS)
+    check('改密后新口令可以登录', newPassLogin.status === 302, `got ${newPassLogin.status}`)
+    sessionCookie = newPassLogin.setCookie.split(';')[0]
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[登出]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const res = await fetch(BASE + '/logout', {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie: sessionCookie },
+    })
+    const cleared = res.headers.get('set-cookie') || ''
+    check('登出 -> 302 到登录页', res.status === 302, `got ${res.status}`)
+    check('登出清了 cookie（Max-Age=0）', /Max-Age=0/.test(cleared), cleared)
+    // ⚠ 登出**不是吊销**：签名 cookie 无状态，服务端没有失效名单，
+    // 所以理论上把原 cookie 再拿回来仍然有效。这条断言把这个已知局限钉住，
+    // 防止日后有人误以为登出=吊销。
+    const replayed = await get('/status', { cookie: sessionCookie })
+    check(
+      '已知局限：登出后原 cookie 重放仍有效（登出=本机遗忘，不是吊销）',
+      replayed.status === 200,
+      `got ${replayed.status}`,
+    )
+    // 真吊销通道：CLI --revoke-sessions
+    const { execFileSync } = await import('node:child_process')
+    execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--revoke-sessions'], {
+      cwd: ROOT,
+      env: { ...process.env, DATABASE_PATH: TEST_DB },
+      stdio: 'ignore',
+    })
+    const afterRevoke = await get('/status', { cookie: sessionCookie })
+    check('CLI --revoke-sessions 之后旧 cookie 真失效', afterRevoke.status === 302, `got ${afterRevoke.status}`)
+    // 且口令未被改，仍能登录
+    const stillWorks = await postLogin(TEST_USER, NEW_PASS)
+    check('--revoke-sessions 不改口令，原口令仍可登录', stillWorks.status === 302, `got ${stillWorks.status}`)
+    sessionCookie = stillWorks.setCookie.split(';')[0]
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[停用账号立即生效]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const live = await get('/status', { cookie: sessionCookie })
+    check('停用前是登录态（前置条件成立）', live.status === 200, `got ${live.status}`)
+    const { execFileSync } = await import('node:child_process')
+    const cliEnv = { ...process.env, DATABASE_PATH: TEST_DB }
+    execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--disable'], { cwd: ROOT, env: cliEnv, stdio: 'ignore' })
+    const disabled = await get('/status', { cookie: sessionCookie })
+    check('**停用后立刻失效**（enabled 每请求被查）', disabled.status === 302, `got ${disabled.status}`)
+    const apiDisabled = await get('/api/status', { cookie: sessionCookie })
+    check('停用后 API 也 401', apiDisabled.status === 401, `got ${apiDisabled.status}`)
+    // 停用账号即使口令正确也不放行
+    const loginDisabled = await postLogin(TEST_USER, NEW_PASS)
+    check('停用账号不能登录（口令正确也不行）', loginDisabled.status === 401, `got ${loginDisabled.status}`)
+    execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--enable'], { cwd: ROOT, env: cliEnv, stdio: 'ignore' })
+    const reLogin = await postLogin(TEST_USER, NEW_PASS)
+    check('重新启用后可以登录', reLogin.status === 302, `got ${reLogin.status}`)
+    sessionCookie = reLogin.setCookie.split(';')[0]
   }
 
   console.log('\n[进程健壮性]')
