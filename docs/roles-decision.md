@@ -183,7 +183,7 @@ CLI `--revoke-sessions` 保留（map Notes 第 2 条）。
 
 | 票 | 本票留给它的 |
 | --- | --- |
-| [管理台的信息架构与入口](https://github.com/Lkyloveaw/lkyloveaw-home/issues/23) | 只读访问管理台的**呈现形态**（入口不渲染 / 403 / 404）、破坏性操作的二次确认 |
+| [管理台的信息架构与入口](https://github.com/Lkyloveaw/lkyloveaw-home/issues/23) | 只读访问管理台的**呈现形态**（入口不渲染 / 403 / 404）、破坏性操作的二次确认 —— **⚠ 已回答（已关闭）**：顶栏不渲染入口 + 直访得 **403**（不是 404）；破坏性操作的判据与必勾确认框见 [`docs/admin-console-ia-decision.md`](admin-console-ia-decision.md) §3 / §5。本节其余结论一条未改 |
 | [写路径的鉴权面](https://github.com/Lkyloveaw/lkyloveaw-home/issues/25) | 守卫的调用点、授权判定函数形态、CSRF、校验与错误回显 |
 | [会话吊销的落地设计](https://github.com/Lkyloveaw/lkyloveaw-home/issues/29) | 只需覆盖登出 / 过期 / 账号停用 / 改密四种失效——**角色变更不在其中**（§3 已定） |
 | [实现批次怎么切](https://github.com/Lkyloveaw/lkyloveaw-home/issues/27) | 迁移语句、`getAuthState` 扩列、守卫函数、CLI `--role`、管理台角色操作，都要切进批次票 |

@@ -210,33 +210,51 @@ main { padding-top: 34px; }
   gap: 14px;
 }
 .target-card { padding: 16px 17px; }
-.target-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.target-head h3 { margin: 0; font-size: 1rem; flex: 1; }
-.uptime { font-variant-numeric: tabular-nums; font-size: 0.9rem; color: var(--fg-dim); }
+.target-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+.target-head h3 { margin: 0; font-size: 1rem; flex: 1; min-width: 0; }
+.uptime { font-variant-numeric: tabular-nums; }
 .target-url {
-  margin: 0 0 12px; font-size: 0.78rem; font-family: var(--mono);
+  margin: 0 0 10px; font-size: 0.78rem; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .target-url a { color: var(--fg-faint); }
 .target-url a:hover { color: var(--accent); }
 
+/* 状态点：**形状不同**，不是只有颜色不同。
+   up = 实心圆 · degraded = 方块 · down = 三角 · 无数据 = 空心圆。
+   灰度打印与红绿色盲下靠形状仍然分得开（CONTEXT.md 的「状态」词条要求三档不许退化）。 */
 .dot {
   display: inline-block; width: 9px; height: 9px; border-radius: 50%;
   background: var(--unknown); flex: 0 0 auto;
 }
-.dot.ok { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
-.dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent); }
-.dot.bad { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent); }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); border-radius: 1px; }
+.dot.bad { background: var(--bad); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.dot.unknown { background: transparent; box-shadow: inset 0 0 0 1.5px var(--unknown); }
 
-/* 状态时间线条：每格 = 一次探测 */
-.tl { display: flex; gap: 2px; height: 22px; margin: 0 0 12px; }
-.tl-cell {
-  flex: 1 1 0; border-radius: 2px; background: var(--unknown); min-width: 2px;
+/* 状态徽标：与点同义的文字标签（形状 + 文字是两层冗余，不是装饰）。 */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--fg-dim); background: var(--bg-soft);
+  font-family: var(--mono); font-size: 0.72rem; white-space: nowrap;
 }
-.tl-cell.up { background: var(--ok); }
-.tl-cell.degraded { background: var(--warn); }
-.tl-cell.down { background: var(--bad); }
-.tl-empty { background: var(--bg-soft); border: 1px dashed var(--border); border-radius: 4px; }
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+.badge.warn { color: var(--warn); border-color: var(--warn); }
+.badge.bad { color: var(--bad); border-color: var(--bad); }
+
+/* 状态格带：每格 = 一次探测，**格数固定**（见 views.ts 的 CELL_STRIP_LEN）。
+   格数固定才能让各卡横向可比；缺的历史画成空心格，不假装 up。 */
+.cell-strip { display: flex; gap: 1px; height: 18px; margin: 0 0 6px; }
+.cell-strip i { flex: 1 1 0; min-width: 0; border-radius: 1px; background: var(--unknown); }
+.cell-strip i.up { background: var(--ok); }
+.cell-strip i.degraded { background: var(--warn); }
+.cell-strip i.down { background: var(--bad); }
+.cell-strip i.cell-missing { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.cell-caption {
+  margin: 0 0 12px; font-family: var(--mono); font-size: 0.72rem;
+  color: var(--fg-faint); font-variant-numeric: tabular-nums;
+}
 
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 0; }
 .kv div { display: flex; justify-content: space-between; gap: 8px; }

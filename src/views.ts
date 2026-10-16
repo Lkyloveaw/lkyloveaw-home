@@ -311,19 +311,48 @@ summary: 可选的一句话摘要
   return layout({ title: '关于', description: site.description, active: 'about', body }, site)
 }
 
-function timelineBar(points: TimelinePoint[]): string {
-  // ⚠ 必须带 `data-timeline` 钩子：卡片只有 `data-target`，`.tl` 容器原本**无标识**，
-  // 前端没法定位它做重绘。空态与非空态结构不同，所以要整块重建。
-  if (!points.length) return '<div class="tl tl-empty" data-timeline><span class="sr">暂无数据</span></div>'
-  const cells = points
-    .map(
-      (p) =>
-        `<i class="tl-cell ${p.status}" title="${escapeHtml(`${formatTime(p.at)} · ${p.status === 'up' ? '可用' : p.status === 'degraded' ? '异常' : '故障'}${p.latencyMs != null ? ` · ${p.latencyMs}ms` : ''}`)}"></i>`,
+/**
+ * 把探测历史渲染成一条**定宽**的状态格带。
+ *
+ * 为什么固定格数（而不是按实际点数铺）：刚部署时只有两三次探测，按实际点数渲染会缩成一根小条，
+ * 看起来像布局坏了；更关键的是**各卡格数不一致就没法横向比**——而「横向比」正是卡片墙的全部意义。
+ *
+ * ⚠ 缺少的历史画成**空心格**（`cell-missing`），不是留白、更不是假装 up。
+ * 库里确实没有那段时间的记录，画成任何状态都是撒谎。窗口填满后就不再出现空心格。
+ */
+const CELL_STRIP_LEN = 56
+
+function cellStrip(points: TimelinePoint[], want = CELL_STRIP_LEN): string {
+  const recent = points.slice(-want)
+  const cells: string[] = []
+  for (let i = 0; i < want - recent.length; i++) cells.push('<i class="cell-missing"></i>')
+  for (const p of recent) {
+    cells.push(
+      `<i class="${p.status}" title="${escapeHtml(`${formatTime(p.at)} · ${STATUS_TEXT[p.status] ?? p.status}${p.latencyMs != null ? ` · ${p.latencyMs}ms` : ''}`)}"></i>`,
     )
-    .join('')
-  return `<div class="tl" data-timeline>${cells}</div>`
+  }
+  return cells.join('')
 }
 
+/** 三档状态的文字。`degraded` 与 `down` 必须分开——处置方式完全不同（CONTEXT.md 的「状态」词条）。 */
+const STATUS_TEXT: Record<string, string> = { up: '可用', degraded: '异常', down: '故障' }
+
+/**
+ * 状态 → CSS 类名。**状态值与类名不是一套词**：
+ * 领域状态是 `up/degraded/down`，而 `.dot` / `.badge` 的样式类一直是 `ok/warn/bad`
+ * （`statusDot()` 早就在做这个映射）。
+ * ⚠ 这里必须复用同一张表。第一版直接输出 `badge ${state}` 写出 `badge degraded`，
+ * 而 CSS 只认 `.badge.warn` —— 徽标一个颜色都没上，且**肉眼看不出是 bug**（只是"看起来素了点"）。
+ */
+const STATUS_CLASS: Record<string, string> = { up: 'ok', degraded: 'warn', down: 'bad' }
+
+/**
+ * 可用性面板 = **卡片墙 · 时间格**（票 #21 三变体原型定稿，见 `docs/visual-prototype-decision.md`）。
+ *
+ * 每个目标一张自洽的卡：状态徽标 + **定宽时间格带** + 延迟曲线 + 键值。
+ * 这里只做**数据驱动重绘能对上**的改动：卡上保留 `data-target`/`data-state`（`status.js` 的钩子），
+ * 格带与曲线**整块重建**（空态与非空态结构不同，只改 class 换不回来）。
+ */
 export function statusPage(
   summary: StatusSummary,
   site: { title: string; description: string },
@@ -365,15 +394,21 @@ export function statusPage(
       ${items
         .map(({ target, stats: s, timeline, latency }) => {
           const state = s.lastStatus ?? 'unknown'
+          const badge = s.lastStatus
+            ? `<span class="badge ${STATUS_CLASS[s.lastStatus] ?? 'unknown'}">${escapeHtml(STATUS_TEXT[s.lastStatus] ?? s.lastStatus)}</span>`
+            : '<span class="badge">无数据</span>'
           return `<article class="card target-card" data-target="${escapeHtml(target.id)}" data-state="${escapeHtml(state)}">
         <div class="target-head">
           ${statusDot(s.lastStatus)}
           <h3>${escapeHtml(target.name)}</h3>
-          <span class="uptime">${formatUptime(s.uptime)}</span>
+          ${badge}
         </div>
         <p class="target-url"><a href="${escapeHtml(target.url)}" rel="noreferrer noopener" target="_blank">${escapeHtml(target.url)}</a></p>
-        ${timelineBar(timeline)}
-        ${latencyChart(latency, 520, 110, xRange)}
+        <div class="cell-strip" data-timeline role="img"
+          aria-label="${escapeHtml(target.name)}：最近 ${timeline.length} 次探测（旧 → 新），可用率 ${formatUptime(s.uptime)}"
+        >${cellStrip(timeline)}</div>
+        <p class="cell-caption">最近 ${timeline.length} 次探测 · 旧 → 新 · 可用率 <span class="uptime">${formatUptime(s.uptime)}</span></p>
+        ${latencyChart(latency, 232, 54, xRange)}
         <dl class="kv">
           <div><dt>延迟</dt><dd>${s.avgLatencyMs != null ? `${s.avgLatencyMs} ms` : '—'}</dd></div>
           <div><dt>P95</dt><dd>${s.p95LatencyMs != null ? `${s.p95LatencyMs} ms` : '—'}</dd></div>
@@ -417,7 +452,7 @@ ${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
   ${summary.targets.length ? `<h2 class="group-title">整体可用率走势</h2>
   ${uptimeChart(summary.overview, 760, 130, xRange)}
   <h2 class="group-title">各系统明细</h2>` : ''}
-  ${summary.targets.length ? cards : '<p class="empty">还没有配置被监控的系统。编辑 <code>targets.json</code> 后服务会自动开始探测。</p>'}
+  ${summary.targets.length ? cards : '<p class="empty">还没有配置被监控的系统。在管理台的「目标」里新增，或首次启动时写 <code>targets.json</code> 导入。</p>'}
 
   <h2 class="group-title">近期异常</h2>
   ${incidents}

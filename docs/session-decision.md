@@ -20,7 +20,7 @@
 | 1 | 密钥没配 | **拒绝启动**，报错里给生成命令 |
 | 2 | 过期方式 | **7 天绝对过期**，不做滑动续期 |
 | 3 | 改密/停用后旧 cookie | **立刻作废**，靠 `token_version` 比对；**新增该列** |
-| 4 | 登出 | **只清 cookie**，不建服务端吊销名单；真吊销走 CLI |
+| 4 | 登出 | **只清 cookie**，不建服务端吊销名单；真吊销走 CLI —— **⚠ 已修订**，见下 |
 | 5 | 载荷 | 只放 `uid` + `exp` + `pv`，**不放用户名** |
 | 6 | `Secure` 开关 | `SESSION_COOKIE_SECURE=0\|1`，**默认 0（关）** |
 
@@ -138,6 +138,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 → 判据是「**重启能不能自愈**」：能自愈的（还没建账号）放行 + 告警；不能自愈的（缺密钥）直接停。
 
+> **同一判据的后续实例（2026-10-16）**：[写路径的鉴权面](https://github.com/Lkyloveaw/lkyloveaw-home/issues/25)
+> 用同一条判据给 `SITE_ORIGIN`（写路径的期望 origin）定了「缺失即拒绝启动」，
+> 见 [`docs/write-path-auth-decision.md`](write-path-auth-decision.md) §3.2。
+> 本文的结论一条未改。
+
 **密钥要求**：≥32 字节随机。不强制编码格式（接受任意字符串，但 `README` 推荐上面那条命令）。长度不足时 `console.warn` 但不阻止——**不设硬门槛**，因为拦截一个「能用但偏弱」的密钥，代价是用户把密钥写短以绕过检查，反而更糟。
 
 ---
@@ -214,6 +219,14 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 **`Max-Age` 与 `exp` 必须一致**（都是 7 天）。两者不一致的后果是：cookie 被浏览器留着但服务端判过期，或反之——用户看到"看上去还登着但一点就跳登录"。
 
 ### 8.2 登出 = 清 cookie，**不建服务端吊销名单**
+
+> ⚠ **本节的结论已被推翻（2026-10-16）。** 新决定见
+> [`docs/session-revoke-decision.md`](session-revoke-decision.md)（票
+> [会话吊销的落地设计](https://github.com/Lkyloveaw/lkyloveaw-home/issues/29)，map
+> [个人站自管化](https://github.com/Lkyloveaw/lkyloveaw-home/issues/20)）：
+> **登出 = 服务端真吊销**——建 `sessions` 表，cookie 载荷追加 `sid`，登出把该行标记 `revoked_at`。
+> 本节**保留**是为了留下推理链：其中「不建名单可以，但**必须留一个真吊销的出口**」这条论证仍然成立，
+> 出口从「只有 CLI」变成「登出 + CLI」。下面这段文字描述的是**修订前**的行为，不是当前行为。
 
 **必须写进 README 和这个判定表的局限**：签名 cookie 是**无状态**的，`Set-Cookie: session=; Max-Age=0` 只能让**当前这个浏览器**忘掉它。**已经泄漏或被复制走的那份 token，在 `exp` 之前依然有效**，服务端无从知道它存在。
 
@@ -303,6 +316,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 | `.env.example` | 记录 `SESSION_SECRET`（含生成命令）、`SESSION_COOKIE_SECURE`（含"HTTP 下开了会登录失败"的告警） |
 | `README.md` | 密钥生成步骤；**登出不是吊销**的语义声明（§8.2）；真吊销走 CLI（§9）；`Secure` 与 HTTPS 的关系 |
 | `scripts/e2e-check.mjs` | 见 §12 |
+| `.env.example` / `README.md` | **由 [写路径的鉴权面](https://github.com/Lkyloveaw/lkyloveaw-home/issues/25) 追加**：`SITE_ORIGIN`（示例 + 「就是浏览器地址栏里那个 origin」，缺失即拒绝启动）、`TRUST_PROXY`（默认 `false`，**不许填 `true`**）。见 [`docs/write-path-auth-decision.md`](write-path-auth-decision.md) §3 |
 
 **`verifySession` 抽成不依赖 Fastify 的纯函数**（与 #5 把 `toPublicSummary()` 抽出来的理由相同）：判定表 §4 的 14 个用例可以**不过 HTTP 直接断言**，包括"签名长度不对不抛 500"这种 HTTP 层很难稳定复现的情形。
 
