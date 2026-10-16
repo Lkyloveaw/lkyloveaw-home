@@ -30,6 +30,16 @@ class El {
     this.className = ''
     this.parentNode = null
   }
+  /** status.js 的 redrawChart 第一行就读 classList —— 没有它 paint 根本跑不到格带那步。 */
+  get classList() {
+    const self = this
+    const list = () => String(self.className).split(/\s+/).filter(Boolean)
+    return {
+      contains: (c) => list().includes(c),
+      add: (c) => { if (!list().includes(c)) self.className = list().concat(c).join(' ') },
+      remove: (c) => { self.className = list().filter((x) => x !== c).join(' ') },
+    }
+  }
   set textContent(v) { this._text = String(v == null ? '' : v); this.children = [] }
   get textContent() {
     if (this.children.length) return this.children.map((c) => c.textContent).join('')
@@ -107,13 +117,18 @@ const doc = {
 }
 const docRoot = new El('body')
 doc._byId['status-root'] = docRoot
+// 失败提示会插到 #status-root 前面（root.parentNode.insertBefore）——
+// 给它一个父节点，否则「取数失败」的兜底路径会把整个测试脚本炸掉，而不是变成一条失败断言。
+docRoot.parentNode = new El('html')
 
-// 两张卡片 + 延迟曲线容器 + 时序条
+// 两张卡片 + 延迟曲线容器 + 状态格带（标记必须与 src/views.ts 的 statusPage 一致）
+const cards = {}
+const CELLS = 56
 for (const id of ['ok', 'dead']) {
   const card = new El('article')
   card.setAttribute('data-target', id)
   const dot = new El('span'); dot.className = 'dot unknown'
-  const up = new El('span'); up.className = 'uptime'
+  const badge = new El('span'); badge.className = 'badge'; badge.textContent = '无数据'
   const kvdd = [new El('dd'), new El('dd'), new El('dd'), new El('dd')]
   const chart = new El('figure')
   chart.className = 'chart'
@@ -130,14 +145,23 @@ for (const id of ['ok', 'dead']) {
   chart.appendChild(svg)
   const cap = new El('span'); cap.className = 'chart-avg'
   chart.appendChild(cap)
-  const tl = new El('div'); tl.setAttribute('data-timeline', ''); tl.className = 'tl tl-empty'
-  tl.innerHTML = '<span class="sr">暂无数据</span>'
 
-  card.appendChild(dot); card.appendChild(up)
+  // 格带：容器类名由服务端给（cell-strip），格数由 data-cells 给。
+  const strip = new El('div')
+  strip.className = 'cell-strip'
+  strip.setAttribute('data-timeline', '')
+  strip.setAttribute('data-cells', String(CELLS))
+  const caption = new El('p'); caption.className = 'cell-caption'
+  const count = new El('span'); count.className = 'js-cells'; count.textContent = '0'
+  const up = new El('span'); up.className = 'uptime'; up.textContent = '暂无数据'
+  caption.appendChild(count); caption.appendChild(up)
+
+  card.appendChild(dot); card.appendChild(badge)
   for (const d of kvdd) card.appendChild(d)
-  card.appendChild(chart); card.appendChild(tl)
+  card.appendChild(chart); card.appendChild(strip); card.appendChild(caption)
   docRoot.appendChild(card)
   doc._byId['card-' + id] = card
+  cards[id] = { card, dot, badge, strip, count, up }
 }
 // 可用率曲线
 const wide = new El('figure')
@@ -157,12 +181,33 @@ const stamp = new El('span'); stamp.className = 'js-generated'; stamp.textConten
 docRoot.appendChild(stamp)
 
 // ── 加载 chart-path.js 与 status.js ──
+// 喂给 status.js 的假载荷：两张卡，点数刻意**少于** data-cells，好验证「缺位补空心格」。
+const pt = (at, status, ms) => ({ at, status, avgLatencyMs: ms, latencyMs: ms })
+const PAYLOAD = {
+  generatedAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+  overview: [],
+  targets: [
+    {
+      id: 'ok', lastStatus: 'up', uptime: 0.999, avgLatencyMs: 12, p95LatencyMs: 20, lastError: null,
+      timeline: [pt(1, 'up', 12), pt(2, 'up', 13), pt(3, 'up', 11), pt(4, 'up', 12), pt(5, 'up', 12)],
+      latency: [pt(1, 'up', 12), pt(2, 'up', 13), pt(3, 'up', 11), pt(4, 'up', 12), pt(5, 'up', 12)],
+    },
+    {
+      id: 'dead', lastStatus: 'down', uptime: 0.5, avgLatencyMs: null, p95LatencyMs: null, lastError: '连接超时',
+      timeline: [pt(1, 'up', 9), pt(2, 'degraded', 40), pt(3, 'down', 0)],
+      latency: [pt(1, 'up', 9), pt(2, 'degraded', 40)],
+    },
+  ],
+}
+
+let tickFn = null
 const sandbox = {
   document: doc,
   console,
-  setInterval: () => 0,
-  fetch: () => Promise.reject(new Error('not used')),
+  setInterval: (fn) => { tickFn = fn; return 0 },
+  fetch: () => Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve(PAYLOAD) }),
   Promise,
+  setTimeout,
   Date,
   Math,
   Number,
@@ -177,13 +222,22 @@ vm.createContext(sandbox)
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/chart-path.js'), 'utf8'), sandbox, { filename: 'chart-path.js' })
 check('chart-path.js 挂上 ChartPath', !!sandbox.ChartPath)
 vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/status.js'), 'utf8'), sandbox, { filename: 'status.js' })
-check('status.js 加载后注册了 __overview 之外的运行时（无异常）', true)
+check('status.js 加载后注册了运行时（无异常）', true)
+
+// ── 真跑一遍刷新：抓 setInterval 的回调直接调用，等微任务链跑完再断言 DOM ──
+if (!tickFn) {
+  check('status.js 注册了定时刷新（能抓到 setInterval 回调）', false)
+} else {
+  tickFn()
+  await new Promise((r) => setTimeout(r, 0))
+}
 
 // status.js 是 IIFE，paint 不可直接调用 —— 用 setInterval 捕获的方式不好，
 // 改为：从 chart-path 侧验证「同样的输入前端能算出 d」，再单独验证字段路径。
 // 这里改为直接检查 status.js 的源码语义：它必须读顶层 id（拍平后的形状）。
 // 去掉注释再检查字段路径——否则「解释这次改动的注释」会被误判成残留的旧代码。
 const src = fs.readFileSync(path.join(ROOT, 'public/status.js'), 'utf8')
+const views_src = fs.readFileSync(path.join(ROOT, 'src/views.ts'), 'utf8')
 const code = src
   .replace(/\/\*[\s\S]*?\*\//g, '')   // 块注释
   .replace(/(^|[^:])\/\/.*$/gm, '$1') // 行注释（不误伤 http://）
@@ -202,8 +256,73 @@ check('调用了 ChartPath.linePath', /CP\.linePath\(/.test(code))
 check('调用了 ChartPath.areaPath', /CP\.areaPath\(/.test(code))
 check('调用了 expandDomain（只扩不缩）', /CP\.expandDomain\(/.test(code))
 check('重写了折线/面积的 d', /setAttribute\('d'/.test(code))
-check('重建了时序条 innerHTML（空态双向可切）', /tl\.innerHTML/.test(code))
-check('时序条 title 与状态同步生成', /title="/.test(src) && /tl-cell /.test(code))
+console.log('\n[格带：客户端重建必须守住服务端契约]')
+{
+  const { strip, count } = cards.ok
+  // ⚠ 这几条是被真事故逼出来的：旧版客户端把容器写成 'tl tl-empty'，
+  // 等于把 cell-strip 整个抹掉 → 容器失去 display:flex，格带塌成看不见的东西。
+  check('容器类名仍是 cell-strip（客户端没写 className）', strip.className === 'cell-strip', `实际 "${strip.className}"`)
+  check(`格数恒为 data-cells=${CELLS}，不随点数变`, strip.children.length === CELLS, `实际 ${strip.children.length}`)
+  const missing = strip.children.filter((c) => c.className === 'cell-missing').length
+  check('缺的历史补 cell-missing（不假装 up）', missing === CELLS - 5, `实际 ${missing}`)
+  const lastOk = strip.children[strip.children.length - 1]
+  check('末格状态类名与服务端同一套词', lastOk.className === 'up', `实际 "${lastOk.className}"`)
+  check('格子 title 带中文状态标签', /可用/.test(lastOk.getAttribute('title') || ''))
+
+  const dead = cards.dead.strip
+  const lastDead = dead.children[dead.children.length - 1]
+  check('故障目标的末格是 down', lastDead.className === 'down', `实际 "${lastDead.className}"`)
+  check('空态也是 N 个格（结构相同，无需切类名）', dead.children.length === CELLS, `实际 ${dead.children.length}`)
+  check('说明行的次数跟着刷新', count.textContent === '5', `实际 "${count.textContent}"`)
+}
+
+console.log('\n[徽标与点必须同时更新（否则 30 秒后互相矛盾）]')
+{
+  const { dot, badge } = cards.dead
+  check('点更新为 dot bad', dot.className === 'dot bad', `实际 "${dot.className}"`)
+  check('徽标同步为 badge bad', badge.className === 'badge bad', `实际 "${badge.className}"`)
+  check('徽标文字同步为「故障」', badge.textContent === '故障', `实际 "${badge.textContent}"`)
+  const okBadge = cards.ok.badge
+  check('正常目标徽标为 badge ok /「可用」', okBadge.className === 'badge ok' && okBadge.textContent === '可用', `实际 "${okBadge.className}"/"${okBadge.textContent}"`)
+}
+
+console.log('\n[状态词：服务端与客户端必须是同一套映射]')
+{
+  // 领域状态是 up/degraded/down，样式类是 ok/warn/bad —— 两套词对不上就会**静默**丢颜色
+  // （真发生过：徽标输出 badge up，而 CSS 只认 .badge.ok）。
+  const views = fs.readFileSync(path.join(ROOT, 'src/views.ts'), 'utf8')
+  const pairs = (s) => {
+    const out = {}
+    for (const m of s.matchAll(/['"]?(\w+)['"]?\s*:\s*'([^']*)'/g)) out[m[1]] = m[2]
+    return out
+  }
+  const serverClass = pairs((views.match(/const STATUS_CLASS[^=]*=\s*\{([^}]*)\}/) || [, ''])[1])
+  const serverText = pairs((views.match(/const STATUS_TEXT[^=]*=\s*\{([^}]*)\}/) || [, ''])[1])
+  const clientClass = pairs((src.match(/var STATE_CLASS\s*=\s*\{([^}]*)\}/) || [, ''])[1])
+  const clientText = pairs((src.match(/var STATE_TEXT\s*=\s*\{([^}]*)\}/) || [, ''])[1])
+  check('服务端 STATUS_CLASS 三档齐全', serverClass.up && serverClass.degraded && serverClass.down, JSON.stringify(serverClass))
+  check('客户端 STATE_CLASS 与服务端逐项一致', JSON.stringify(serverClass) === JSON.stringify(clientClass), `服务端 ${JSON.stringify(serverClass)} / 客户端 ${JSON.stringify(clientClass)}`)
+  check('客户端 STATE_TEXT 与服务端逐项一致', JSON.stringify(serverText) === JSON.stringify(clientText), `服务端 ${JSON.stringify(serverText)} / 客户端 ${JSON.stringify(clientText)}`)
+}
+
+console.log('\n[CSS 类名：客户端与视图发出的类必须真的有样式]')
+{
+  const css = fs.readFileSync(path.join(ROOT, 'public/style.css'), 'utf8')
+  check('CSS 定义了 .cell-strip 容器', /\.cell-strip\s*\{/.test(css))
+  check('CSS 定义了 .cell-strip i 基底', /\.cell-strip i\s*\{/.test(css))
+  for (const s of ['up', 'degraded', 'down', 'cell-missing']) {
+    check(`CSS 定义了 .cell-strip i.${s}`, new RegExp('\\.cell-strip i\\.' + s + '\\s*\\{').test(css))
+  }
+  check('CSS 定义了 .badge 三档', ['ok', 'warn', 'bad'].every((s) => new RegExp('\\.badge\\.' + s + '\\s*\\{').test(css)))
+  // 死契约必须清干净：留着会让人以为旧类还能用
+  check('CSS 已无 .tl-cell（死契约）', !/\.tl-cell/.test(css))
+  check('CSS 已无 .tl-empty（死契约）', !/\.tl-empty/.test(css))
+  check('客户端已无 tl-cell（死契约）', !/tl-cell/.test(code))
+  check('客户端已无 tl-empty（死契约）', !/tl-empty/.test(code))
+  // 格数的唯一真源在服务端
+  check('views.ts 渲染 data-cells（格数的唯一真源）', /data-cells="?\$\{CELL_STRIP_LEN\}/.test(views_src))
+  check('views.ts 定义了 CELL_STRIP_LEN', /const CELL_STRIP_LEN\s*=\s*\d+/.test(views_src))
+}
 check('不再有静默吞掉的空 catch', !/\/\* 静默失败/.test(code))
 check('401 与网络抖动分成两种提示', /'auth'/.test(src) && /'network'/.test(code))
 check('恢复成功后清掉提示', /clearBanner\(\)/.test(code))

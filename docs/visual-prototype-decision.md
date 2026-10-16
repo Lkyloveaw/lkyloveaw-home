@@ -82,9 +82,59 @@ map Notes 第 6 条已经定了大方向：**整站风格 = B+C 混合**（数�
 | `public/style.css` | 新增 `.badge`（三档配色）与 `.cell-strip`（含 `.cell-missing`）；删掉 `.tl` / `.tl-cell` / `.tl-empty` |
 | `src/views.ts` 的 `statusDot()` | **不动**，但 `.dot` 的三档形状改成**真的不同形状**（圆 / 方块 / 三角 / 空心圆），并把原先的 `box-shadow` 光晕去掉——那是装饰，而形状是**信息** |
 
-**保留的兼容契约**（`status.js` 与面板检查靠它）：
-`#status-root` · 每卡的 `data-target` / `data-state` · 格带的 `data-timeline`（**整块重建**，
-因为空态与非空态结构不同）· 格带 `title` 与状态同步生成。
+**面板是服务端渲染 + 客户端每 30 秒重绘的两段式**，所以改标记就等于改**跨文件契约**。
+本次涉及三个标签与两个属性：
+
+| 钩子 | 谁读它 | 用途 |
+| --- | --- | --- |
+| `#status-root` | `status.js` | 存在性检查（没有它脚本直接退出） |
+| `data-target="<id>"` | `status.js` | 把 API 的 item 对回卡片 |
+| `data-state` | 无 | 保留给调试/样式 |
+| `data-timeline` | `status.js` | 定位格带容器 |
+| **`data-cells`** | `status.js` | **格数的唯一真源**（服务端给 `CELL_STRIP_LEN`，客户端照它铺格） |
+| `.js-cells` | `status.js` | 说明行里「最近 N 次」的数字 |
+
+### ⚠ 客户端那一半第一版是坏的，而且是用户发现的
+
+我第一版只改了服务端渲染，**没有改 `status.js` 的重建逻辑**。客户端仍按旧契约重建格带，
+于是首屏看着完全正常、**30 秒后自动刷新时格带就塌掉**：
+
+| `status.js` 的旧写法 | 后果 |
+| --- | --- |
+| `tl.className = 'tl tl-empty'` / `= 'tl'` | **把 `cell-strip` 类名整个抹掉** → 容器失去 `display:flex`，格带塌成看不见的东西 |
+| `<i class="tl-cell ...">` | 那批 CSS 已在本票删除；且**只渲染实际点数**，把「固定 56 格」的刻意设计抹平 |
+| 空态只放 `<span class="sr">` | `sr` 只给读屏，**肉眼什么都看不到**（原先靠 `.tl-empty` 的虚线框，也删了） |
+
+另外我还**引入**了一个新错：卡片新增的 `.badge` 客户端不更新，而 `.dot` 会更新 ——
+30 秒后会出现「点已经变红、徽标还写着可用」的**自相矛盾**，比不更新更糟。
+
+**根因是同一个**：`up/degraded/down`（领域状态）与 `ok/warn/bad`（样式类）是两套词，
+而这层映射在服务端与客户端各写了一份。所以修法是把它在客户端也收敛成一处
+（`STATE_CLASS` / `STATE_TEXT`），并**加断言强制两边逐项相等**。
+
+**空态与非空态的结构问题一并消失了**：既然格数固定，两种状态就都是「N 个格」，
+不再需要在两种结构间切类名 —— 而**正是那个类名切换把容器样式搞坏的**。
+
+### ⚠ 为什么原来的面板检查没拦住它
+
+`panel-check.mjs` 里那两条断言写的是：
+
+```js
+check('重建了时序条 innerHTML（空态双向可切）', /tl\.innerHTML/.test(code))
+check('时序条 title 与状态同步生成', /title="/.test(src) && /tl-cell /.test(code))
+```
+
+它们**把旧实现钉住了**——`/tl-cell /` 恰恰要求客户端继续用那个已经被删掉的类名，
+所以 21/21 全绿，却对真正的断点完全无感。而且整个 harness **从未真正执行过 `paint`**
+（stub 连 `classList` 都没有，`redrawChart` 第一行就会抛），21 项里绝大多数只是**正则查源码文本**。
+
+**修法（本票一并做掉）**：把检查从「查源码文本」改成「**喂数据 → 真跑 `paint` → 断言 DOM**」：
+捕获 `setInterval` 的回调直接调用、`fetch` 换成返回假载荷的 stub，然后断言格带类名、
+格数、空心格补齐、徽标与点同步、说明行数字。并补上三条**跨文件断言**：
+服务端与客户端的状态映射逐项相等、CSS 必须定义客户端会发出的每个类名、死契约必须清干净。
+
+**并验证了这些断言真的会失败**：把三处旧 bug 故意打回去，得到 **8 项红**；修好后全绿。
+（会失败的测才算测。）panel-check 由 21 项增到 **47 项**。
 
 **一处落地时写错、真机验证才抓到的 bug**：徽标最初输出 `badge ${state}`，
 于是类名是 `badge up` / `badge degraded` / `badge down`，而 CSS 只认 `.badge.ok/.warn/.bad`
@@ -104,13 +154,15 @@ map Notes 第 6 条已经定了大方向：**整站风格 = B+C 混合**（数�
 | 检查 | 结果 |
 | --- | --- |
 | `tsc --noEmit` | 0 错 |
-| `npm run check:chart`（含 panel-check） | **21/21 全过** —— 证明 `status.js` 的契约没被改坏 |
-| 产品 `/status` | HTTP 200，含 4 个 `.cell-strip`、4 个 `data-timeline`、`#status-root` 在 |
-| 每卡格数 | **56 / 56 / 56 / 56**（定宽成立） |
-| 格带分布 | 42 空 + 14 实（每档一个：up / degraded / down / down）—— 三档都真的渲染出来了 |
-| 三档徽标 | `badge ok` / `badge warn` / `badge bad` 各 1；无数据徽标 1 |
+| `npm run verify`（仓库完整验收） | **exit 0，共 282 项全过**（unit 86 · leak 32 · chart 40 · panel 47 · backup 50 · probe 10 · restart 17） |
+| `panel-check.mjs` | **47/47**（改造后：喂数据真跑 `paint` 再断言 DOM，不再是正则查文本） |
+| 断言有效性 | 故意打回三处旧 bug → **8 项红**；修好后全绿（会失败的测才算测） |
+| 产品 `/status` | HTTP 200；`data-cells="56"` ×4、`.js-cells` ×4、`.cell-strip` ×4 |
+| 每卡格数 | **56 / 56 / 56 / 56**（定宽成立），空心格随探测推进逐格减少 |
+| 格带分布 | 每档一个（up / degraded / down / down）—— 三档都真的渲染出来了 |
+| 三档徽标 | `badge ok` / `badge warn` / `badge bad` 各就位 |
 | 三档形状 | `.dot.bad` 的 `clip-path: polygon(50% 0, 100% 100%, 0 100%)` 在 CSS 里生效 |
-| 旧类清除 | `tl-cell` / `tl-empty` / `class="tl"` 在产品页上**全部为 0** |
+| 死契约清除 | `tl-cell` / `tl-empty` / `class="tl` 在产品页与 CSS 上**全部为 0** |
 | 原型隔离 | 产品页 `pv-bar=0`；`?variant=A` 不再有任何特殊行为 |
 
 ### 未验证的部分（诚实登记）

@@ -404,10 +404,10 @@ export function statusPage(
           ${badge}
         </div>
         <p class="target-url"><a href="${escapeHtml(target.url)}" rel="noreferrer noopener" target="_blank">${escapeHtml(target.url)}</a></p>
-        <div class="cell-strip" data-timeline role="img"
+        <div class="cell-strip" data-timeline data-cells="${CELL_STRIP_LEN}" role="img"
           aria-label="${escapeHtml(target.name)}：最近 ${timeline.length} 次探测（旧 → 新），可用率 ${formatUptime(s.uptime)}"
         >${cellStrip(timeline)}</div>
-        <p class="cell-caption">最近 ${timeline.length} 次探测 · 旧 → 新 · 可用率 <span class="uptime">${formatUptime(s.uptime)}</span></p>
+        <p class="cell-caption">最近 <span class="js-cells">${timeline.length}</span> 次探测 · 旧 → 新 · 可用率 <span class="uptime">${formatUptime(s.uptime)}</span></p>
         ${latencyChart(latency, 232, 54, xRange)}
         <dl class="kv">
           <div><dt>延迟</dt><dd>${s.avgLatencyMs != null ? `${s.avgLatencyMs} ms` : '—'}</dd></div>

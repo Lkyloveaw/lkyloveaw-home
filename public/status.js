@@ -17,6 +17,25 @@
   /** 共享横轴：整页所有曲线用同一个时间范围，否则各卡片的曲线会各自铺满宽度，时长看起来一样长。 */
   var xRange = null
 
+  /**
+   * 状态 → 样式类名 / 中文标签。
+   *
+   * ⚠ **必须与 `src/views.ts` 的 `STATUS_CLASS` / `STATUS_TEXT` 保持一致。**
+   * 领域状态是 `up/degraded/down`，而样式类是 `ok/warn/bad`——两套词对不上就会**静默**丢掉颜色
+   * （真发生过：徽标输出 `badge up`，而 CSS 只认 `.badge.ok`，徽标一个颜色都没上，
+   * 肉眼看只像「素了点」）。这里是客户端那一半，改服务端时必须一起改。
+   */
+  var STATE_CLASS = { up: 'ok', degraded: 'warn', down: 'bad' }
+  var STATE_TEXT = { up: '可用', degraded: '异常', down: '故障' }
+
+  /** 没有数据时的兜底：状态可能为 null/未知，类名与文字都要能落下来。 */
+  function stateClass(status) {
+    return STATE_CLASS[status] || 'unknown'
+  }
+  function stateText(status) {
+    return STATE_TEXT[status] || '无数据'
+  }
+
   // ── 失败态 ─────────────────────────────────────────────
   // 判据（来自 #10）：面板是「一眼扫过」的界面，提示**不能喧宾夺主，但绝不能看不见**。
   // 401（会话过期）与瞬时抖动必须分开——把「需要重新登录」和「刚好抖了一下」混成
@@ -70,12 +89,17 @@
       if (!card) return
 
       var dot = card.querySelector('.dot')
-      if (dot) {
-        var state = item.lastStatus || 'unknown'
-        var cls =
-          'dot ' +
-          (state === 'up' ? 'ok' : state === 'degraded' ? 'warn' : state === 'down' ? 'bad' : 'unknown')
-        if (dot.className !== cls) dot.className = cls
+      var state = item.lastStatus || 'unknown'
+      var cls = 'dot ' + stateClass(item.lastStatus)
+      if (dot && dot.className !== cls) dot.className = cls
+
+      // ⚠ 徽标必须与点**同时**更新。只更新点的话，30 秒后两者会互相矛盾
+      // （点已经变红，徽标还写着「可用」）——比不更新更糟，因为它开始骗人。
+      var badge = card.querySelector('.badge')
+      if (badge) {
+        var bcls = 'badge ' + stateClass(item.lastStatus)
+        if (badge.className !== bcls) badge.className = bcls
+        text(badge, stateText(item.lastStatus))
       }
 
       text(card.querySelector('.uptime'), item.uptime == null ? '暂无数据' : (item.uptime * 100).toFixed(2) + '%')
@@ -213,38 +237,43 @@
   // ── 时序条 ─────────────────────────────────────────────
 
   /**
-   * 重建 `.tl-cell` 状态条。
-   * 用**整块重建 innerHTML**（与曲线空态同一手法）：空态 `.tl-empty` 与非空结构不同，
-   * 只改 class 的话两种状态没法互相切换。
+   * 重建状态格带（`.cell-strip`）。
+   *
+   * ⚠ 三条硬约束，都是踩过坑才写在这里的：
+   *
+   * 1. **绝不写 `className`**。旧版把容器改成 `tl tl-empty` / `tl`，等于把 `cell-strip`
+   *    整个抹掉 → 容器失去 `display:flex`，格带**塌成一条看不见的东西**。
+   *    格带只需要换 `innerHTML`，容器类名由服务端说了算。
+   * 2. **格数取自服务端的 `data-cells`**（不是按实际点数铺）。定宽是刻意的：
+   *    各卡格数不一致就没法横向比，而「横向比」是卡片墙的全部意义。缺的补空心格。
+   * 3. **空态与非空态结构相同**（都是 N 个格），所以**不需要**在两种结构间切换——
+   *    旧版为此专门做了一个 `tl-empty` 类，正是那个类名切换把容器样式搞坏的。
    */
   function paintTimeline(byId) {
     Object.keys(byId).forEach(function (id) {
       var item = byId[id]
       var card = document.querySelector('[data-target="' + id + '"]')
       if (!card) return
-      var tl = card.querySelector('[data-timeline]')
-      if (!tl) return
-      var pts = item.timeline || []
-      if (!pts.length) {
-        if (!tl.classList.contains('tl-empty')) {
-          tl.className = 'tl tl-empty'
-          tl.innerHTML = '<span class="sr">暂无数据</span>'
-        }
-        return
-      }
+      var strip = card.querySelector('[data-timeline]')
+      if (!strip) return
+
+      var want = parseInt(strip.getAttribute('data-cells'), 10)
+      if (!(want > 0)) want = 56 // 兜底：老页面没有该属性时也不至于渲染成 0 格
+
+      var pts = (item.timeline || []).slice(-want)
       var html = ''
-      for (var i = 0; i < pts.length; i++) {
+      var i
+      for (i = 0; i < want - pts.length; i++) html += '<i class="cell-missing"></i>'
+      for (i = 0; i < pts.length; i++) {
         var p = pts[i]
         // title 必须与格子状态**同步更新**，否则悬停看到的是旧数据
-        var label = p.status === 'up' ? '可用' : p.status === 'degraded' ? '异常' : '故障'
-        var t = formatTime(p.at) + ' · ' + label + (p.latencyMs != null ? ' · ' + p.latencyMs + 'ms' : '')
-        html += '<i class="tl-cell ' + p.status + '" title="' + esc(t) + '"></i>'
+        var t = formatTime(p.at) + ' · ' + stateText(p.status) + (p.latencyMs != null ? ' · ' + p.latencyMs + 'ms' : '')
+        html += '<i class="' + p.status + '" title="' + esc(t) + '"></i>'
       }
-      if (tl.classList.contains('tl-empty')) {
-        // 从空态切回有数据：结构不同，整块换
-        tl.className = 'tl'
-      }
-      tl.innerHTML = html
+      strip.innerHTML = html
+
+      // 说明行里的「最近 N 次」也得跟着走，否则刷新后数字会一直停在首屏那个值。
+      text(card.querySelector('.js-cells'), String(pts.length))
     })
   }
 
