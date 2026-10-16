@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body class="auth-body">
+<nav class="preview" style="position:fixed;top:0;left:0;right:0"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html">首页</a>
+  <a href="posts.html">分享</a>
+  <a href="post.html">文章</a>
+  <a href="status.html">面板</a>
+  <a href="admin.html">管理台</a>
+  <a href="admin-targets.html">管理台·目标</a>
+  <a href="login.html" aria-current="page">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<main class="auth" style="margin-top:var(--sp-6)">
+  <div class="card">
+    <h1>我的个人站</h1>
+    <p class="lede">事情分享，以及内网各业务系统的可用性</p>
+
+    <!-- 失败态：说得清哪一条错了，不是「输入有误」 -->
+    <p class="notice notice-bad" style="font-family:var(--font-sans);font-size:var(--fs-sm)">
+      用户名或口令不正确
+      <span class="muted" style="display:block;margin-top:2px;font-size:var(--fs-xs)">
+        （刻意不区分「用户名不存在」「口令错」「账号已停用」——避免泄漏哪些用户名有效）
+      </span>
+    </p>
+
+    <form class="form" method="post" action="#">
+      <div class="field">
+        <label for="u">用户名</label>
+        <input type="text" id="u" name="username" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="p">口令</label>
+        <input type="password" id="p" name="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary" type="submit">登录</button>
+    </form>
+  </div>
+  <p class="auth-foot">内网站点 · 需要登录才能访问</p>
+</main>
+</body>
+</html>

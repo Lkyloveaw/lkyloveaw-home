@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理台 · 目标 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+<nav class="preview"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html">首页</a>
+  <a href="posts.html">分享</a>
+  <a href="post.html">文章</a>
+  <a href="status.html">面板</a>
+  <a href="admin.html">管理台</a>
+  <a href="admin-targets.html" aria-current="page">管理台·目标</a>
+  <a href="login.html">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<header class="console-bar"><div class="wrap">
+  <nav class="console-nav">
+    <a href="admin.html">概览</a>
+    <a href="admin-targets.html" aria-current="page">目标</a>
+    <a href="admin.html">账号</a>
+    <a href="admin.html">备份</a>
+    <a href="admin.html">站点设置</a>
+  </nav>
+  <span class="who">admin@本机 · <a href="login.html">登出</a></span>
+</div></header>
+
+<main class="wrap console">
+  <section class="section">
+    <div class="section-head">
+      <h1>目标</h1>
+      <a class="more" href="index.html">← 回站点</a>
+    </div>
+
+    <!-- 提示：闭集 key → 文本。未知 key 不渲染任何东西。 -->
+    <p class="notice" style="font-family:var(--font-sans);font-size:var(--fs-sm)">
+      已保存目标「知识库」。
+    </p>
+
+    <p class="muted" style="font-size:var(--fs-xs);margin:0 0 var(--sp-5)">
+      真源是数据库。首次启动时从 <code>targets.json</code> 导入过一次，之后那个文件被忽略。
+    </p>
+
+    <!-- 先给一张「一眼扫完」的索引表，再给可编辑的卡片。
+         表负责扫读（对齐的列才能横向比较），卡片负责改——不用引入「点编辑才展开」的新交互。 -->
+    <h2 class="group-title" style="margin-top:0">一览</h2>
+    <table class="table" style="margin-bottom:var(--sp-6)">
+      <thead>
+        <tr><th>状态</th><th>id</th><th>名称</th><th>分组</th><th>预期</th><th class="num">历史行数</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="badge ok"><span class="dot ok"></span>探测中</span></td>
+          <td><code>wiki</code></td><td>知识库</td><td>办公</td><td class="tnum">200</td><td class="num">128,340</td>
+          <td><a href="#edit-wiki">编辑 ↓</a></td>
+        </tr>
+        <tr>
+          <td><span class="badge ok"><span class="dot ok"></span>探测中</span></td>
+          <td><code>ledger</code></td><td>记账</td><td>办公</td><td class="tnum">200–399</td><td class="num">128,340</td>
+          <td><a href="#edit-ledger">编辑 ↓</a></td>
+        </tr>
+        <tr style="color:var(--fg-dim)">
+          <td><span class="badge"><span class="dot unknown"></span>已停用</span></td>
+          <td><code>gw</code></td><td>网关</td><td>网络</td><td class="tnum">200–399</td><td class="num">128,340</td>
+          <td><a href="#edit-gw">编辑 ↓</a></td>
+        </tr>
+        <tr>
+          <td><span class="badge">无数据</span></td>
+          <td><code>tmp-test</code></td><td>临时测试</td><td class="muted">—</td><td class="tnum">200</td><td class="num">0</td>
+          <td><a href="#edit-tmp">编辑 ↓</a> · <span class="muted">可删除</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted" style="font-size:var(--fs-xs);margin:calc(-1 * var(--sp-4)) 0 var(--sp-6)">
+      ⚠ 最后一行「历史行数 = 0」是唯一会显示<strong>删除</strong>按钮的那种目标（见文末）——
+      判据是「有没有东西可丢」，不是用户选。
+    </p>
+
+    <!-- ── 新增 ─────────────────────────────────────────────── -->
+    <h2 class="group-title" style="margin-top:0">新增目标</h2>
+    <form class="form" method="post" action="#" style="max-width:52rem">
+      <div class="grid-2" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr))">
+        <div class="field">
+          <label for="n-id">id（创建后不可改）</label>
+          <input type="text" id="n-id" name="id" placeholder="wiki">
+          <span class="hint">它是历史库的关联键。要换 id 请新增一个再停用旧的。</span>
+        </div>
+        <div class="field">
+          <label for="n-name">名称</label>
+          <input type="text" id="n-name" name="name" placeholder="知识库">
+        </div>
+      </div>
+      <div class="field">
+        <label for="n-url">URL</label>
+        <input type="text" id="n-url" name="url" placeholder="http://10.0.0.10/">
+        <span class="hint">只接受 http/https；<strong>URL 里不能带凭证</strong>（用户名或口令都会被拒）。</span>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="n-group">分组（可空）</label>
+          <input type="text" id="n-group" name="group" placeholder="办公">
+        </div>
+        <div class="field">
+          <label for="n-expect">预期状态码（可空）</label>
+          <input type="text" id="n-expect" name="expectStatus" placeholder="200,301">
+          <span class="hint">留空 = 200–399 都算可用。</span>
+        </div>
+      </div>
+      <div class="actions"><button class="btn btn-primary" type="submit">新增</button></div>
+    </form>
+
+    <hr class="hr">
+
+    <!-- ── 分组标题 + 行内编辑 ──────────────────────────────── -->
+    <h2 class="group-title" style="margin-top:0">办公</h2>
+
+    <div class="card" style="margin-bottom:var(--sp-3)" id="edit-wiki">
+      <form class="form" method="post" action="#" style="max-width:52rem;gap:var(--sp-3)">
+        <div class="grid-2">
+          <div class="field">
+            <label for="t1-id">id（只读）</label>
+            <input type="text" id="t1-id" value="wiki" readonly>
+          </div>
+          <div class="field">
+            <label for="t1-name">名称</label>
+            <input type="text" id="t1-name" value="知识库">
+          </div>
+        </div>
+        <div class="field">
+          <label for="t1-url">URL</label>
+          <input type="text" id="t1-url" value="http://10.0.0.10/">
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="t1-group">分组</label>
+            <input type="text" id="t1-group" value="办公">
+          </div>
+          <div class="field">
+            <label for="t1-expect">预期状态码</label>
+            <input type="text" id="t1-expect" value="200">
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button class="btn btn-primary btn-sm" type="submit">保存</button>
+          <button class="btn btn-sm" type="submit" name="action" value="target-disable">停用</button>
+          <span class="muted" style="font-size:var(--fs-xs);align-self:center">
+            停用后不再探测，历史保留，面板上不再显示它。
+          </span>
+        </div>
+      </form>
+    </div>
+
+    <h2 class="group-title">网络</h2>
+
+    <!-- 已停用：一眼看出它还在库里但不再探测 -->
+    <div class="card" style="margin-bottom:var(--sp-3);border-style:dashed" id="edit-gw">
+      <div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-3)">
+        <span class="dot unknown"><span class="sr">已停用</span></span>
+        <strong>网关</strong>
+        <span class="badge">已停用</span>
+        <span class="muted" style="font-size:var(--fs-xs)">id=gw · 有 128,340 条历史</span>
+      </div>
+      <form class="form" method="post" action="#" style="max-width:52rem;gap:var(--sp-3)">
+        <div class="grid-2">
+          <div class="field">
+            <label for="t2-id">id（只读）</label>
+            <input type="text" id="t2-id" value="gw" readonly>
+          </div>
+          <div class="field">
+            <label for="t2-name">名称</label>
+            <input type="text" id="t2-name" value="网关">
+          </div>
+        </div>
+        <div class="field">
+          <label for="t2-url">URL</label>
+          <input type="text" id="t2-url" value="http://10.0.0.1/">
+        </div>
+        <div class="inline-actions">
+          <button class="btn btn-primary btn-sm" type="submit">保存</button>
+          <button class="btn btn-sm" type="submit" name="action" value="target-enable">启用</button>
+          <span class="muted" style="font-size:var(--fs-xs);align-self:center">
+            启用后从下一轮开始探测；「连续可用」从启用那一刻重新起算。
+          </span>
+        </div>
+      </form>
+    </div>
+
+    <!-- 开了一个目标的删除：**只有当它没有任何历史**时才真的是「删除」 -->
+    <div class="card" style="border-style:dashed" id="edit-tmp">
+      <div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2)">
+        <span class="dot unknown"><span class="sr">无数据</span></span>
+        <strong>临时测试</strong>
+        <span class="badge">无任何历史</span>
+      </div>
+      <p class="muted" style="font-size:var(--fs-xs);margin:0 0 var(--sp-3);font-family:var(--font-sans)">
+        还没有探测记录，所以它可以被<strong>真正删除</strong>（不是停用）——删了不丢任何东西。
+        有历史的目标不显示这个按钮，只显示「停用」。
+      </p>
+      <form method="post" action="#" class="actions">
+        <button class="btn btn-danger btn-sm" type="submit" name="action" value="target-delete">删除</button>
+      </form>
+    </div>
+
+    <hr class="hr">
+
+    <!-- ── 账号页上的必勾确认框（此处示意形态） ──────────────── -->
+    <h2 class="group-title" style="margin-top:0">破坏性操作的二次确认（示意）</h2>
+    <p class="muted" style="font-size:var(--fs-xs);margin:0 0 var(--sp-4);font-family:var(--font-sans)">
+      只给三个动作加：<strong>重置口令 · 停用账号 · 降级角色</strong>。
+      用原生 <code>&lt;input type="checkbox" required&gt;</code>，不用 JS <code>confirm()</code>——
+      禁用 JS 时 <code>confirm()</code> 根本不执行，这道防线会消失。
+    </p>
+
+    <form class="form" method="post" action="#" style="max-width:36rem">
+      <div class="field">
+        <label for="a-pw">为新口令（占位）</label>
+        <input type="password" id="a-pw" value="········">
+        <span class="hint">口令不会回填到页面上；失败时也不回填。</span>
+      </div>
+      <label class="confirm" for="cf">
+        <input type="checkbox" id="cf" name="confirm" required>
+        <span>
+          <strong>我确认：</strong>这会立刻让「alice」<strong>所有设备</strong>上的登录失效（服务端吊销）。
+          新口令由我另行告知对方。
+        </span>
+      </label>
+      <div class="actions">
+        <button class="btn btn-danger" type="submit">重置口令</button>
+        <span class="muted" style="font-size:var(--fs-xs)">没勾上面这一项时，浏览器会拦住提交；服务端也会再判一次。</span>
+      </div>
+    </form>
+
+    <hr class="hr">
+
+    <!-- ── 只读用户：没有入口，直访 403 ─────────────────────── -->
+    <h2 class="group-title" style="margin-top:0">只读用户看到什么</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--sp-4)">
+      <div class="card">
+        <h3 style="margin:0 0 var(--sp-2);font-size:var(--fs-sm);font-family:var(--font-sans)">顶栏：不给入口</h3>
+        <div class="site-nav" style="font-size:var(--fs-sm)">
+          <a href="#">首页</a><a href="#">分享</a><a href="#">系统可用性</a><a href="#">关于</a>
+        </div>
+        <p class="muted" style="font-size:var(--fs-xs);margin:var(--sp-3) 0 0;font-family:var(--font-sans)">
+          只有 4 项。不做灰色、不做点了报错——那等于每次点都吃一次错。
+        </p>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 var(--sp-2);font-size:var(--fs-sm);font-family:var(--font-sans)">直访 <code>/admin</code>：403</h3>
+        <p class="notice notice-bad" style="margin:0;font-family:var(--font-sans);font-size:var(--fs-sm)">
+          <strong>403</strong> · 这个页面需要管理员权限。当前账号是<strong>只读</strong>。
+          <span class="muted" style="display:block;margin-top:2px;font-size:var(--fs-xs)">回首页</span>
+        </p>
+        <p class="muted" style="font-size:var(--fs-xs);margin:var(--sp-3) 0 0;font-family:var(--font-sans)">
+          用 403 不用 404：只读数一下顶栏项数就知道管理台存在，404 换来的只是运维自己排查时的一次困惑。
+        </p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="wrap">
+  <span>管理台 · 目标</span>
+  <span class="spacer"></span>
+  <span>原型 · 可丢弃</span>
+</div></footer>
+</body>
+</html>

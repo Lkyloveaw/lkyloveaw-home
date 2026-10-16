@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统可用性 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+<nav class="preview"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html">首页</a>
+  <a href="posts.html">分享</a>
+  <a href="post.html">文章</a>
+  <a href="status.html" aria-current="page">面板</a>
+  <a href="admin.html">管理台</a>
+  <a href="admin-targets.html">管理台·目标</a>
+  <a href="login.html">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<header class="site-header"><div class="wrap header-inner">
+  <a class="brand" href="index.html">我的个人站</a>
+  <nav class="site-nav">
+    <a href="index.html">首页</a>
+    <a href="posts.html">分享</a>
+    <a href="status.html" aria-current="page">系统可用性</a>
+    <a href="admin.html">管理</a>
+  </nav>
+</div></header>
+
+<main class="wrap panel">
+  <section class="section">
+    <div class="section-head">
+      <h1>内网业务系统可用性</h1>
+      <span class="badge"><span class="dot unknown"></span>每 60 秒探测</span>
+    </div>
+    <p class="lede" style="font-size:var(--fs-sm)">
+      统计窗口：最近 24 小时 · 最后更新 1 分钟前
+      <span class="muted">（原型数据为静态示意）</span>
+    </p>
+
+    <div class="stat-strip" style="margin-top:var(--sp-5)">
+      <div class="stat"><span class="stat-num">2/3</span><span class="stat-label">当前可用</span></div>
+      <div class="stat"><span class="stat-num">96.42%</span><span class="stat-label">平均可用率</span></div>
+      <div class="stat"><span class="stat-num">287 ms</span><span class="stat-label">平均延迟</span></div>
+      <div class="stat"><span class="stat-num has-fault">3</span><span class="stat-label">近期异常</span></div>
+    </div>
+
+    <h2 class="group-title">整体可用率走势</h2>
+    <figure style="margin:0">
+      <!-- 服务端渲染的内联 SVG：禁用 JS 也能看，不需要图表库 -->
+      <svg viewBox="0 0 760 130" width="100%" height="130" role="img"
+           aria-label="整体可用率走势：窗口内平均 96.4%，03:00 附近跌至 33.3%，之后回升至 100%">
+        <rect x="0" y="0" width="760" height="130" fill="none"/>
+        <!-- 网格 -->
+        <g stroke="var(--border)" stroke-width="1">
+          <line x1="0" y1="123.2" x2="760" y2="123.2"/>
+          <line x1="0" y1="68.4" x2="760" y2="68.4"/>
+          <line x1="0" y1="13.6" x2="760" y2="13.6"/>
+        </g>
+        <g fill="var(--fg-faint)" font-family="ui-monospace, monospace" font-size="10">
+          <text x="2" y="120">0%</text>
+          <text x="2" y="65.4">50%</text>
+          <text x="2" y="10.6">100%</text>
+        </g>
+        <!-- 曲线 -->
+        <path d="M8,13.6 L70.7,13.6 L133.3,13.6 L196,13.6 L258.7,13.6 L321.3,13.6 L384,13.6 L446.7,91.8 L509.3,13.6 L572,13.6 L634.7,68.4 L697.3,13.6 L752,13.6"
+              fill="none" stroke="var(--ok)" stroke-width="2" stroke-linejoin="round"/>
+        <!-- 故障点标出来：一眼看到是哪一段 -->
+        <g fill="var(--bad)">
+          <circle cx="446.7" cy="91.8" r="3.5"/>
+          <circle cx="634.7" cy="68.4" r="3.5"/>
+        </g>
+      </svg>
+      <figcaption class="muted" style="font-size:var(--fs-xs);margin-top:var(--sp-2)">
+        窗口内平均可用率 96.4% · 红点为故障轮次（03:00 与 17:00）
+      </figcaption>
+    </figure>
+
+    <h2 class="group-title">各系统明细</h2>
+
+    <h3 class="group-title" style="margin-bottom:var(--sp-3)">办公</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:var(--sp-4)">
+
+      <!-- 可用 -->
+      <article class="card">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <span class="dot ok"><span class="sr">可用</span></span>
+          <h3 style="margin:0;flex:1;font-size:var(--fs-lg)">知识库</h3>
+          <span class="tnum" style="color:var(--fg-dim);font-size:var(--fs-sm)">99.82%</span>
+        </div>
+        <p style="margin:var(--sp-1) 0 var(--sp-3);font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          <a href="#" class="muted">http://10.0.0.10/</a>
+        </p>
+        <div class="tl" role="img" aria-label="最近 60 次探测全部可用">
+          <i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell warn"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i>
+        </div>
+        <svg viewBox="0 0 520 110" width="100%" height="110" role="img" aria-label="知识库延迟曲线：30–60 毫秒，一次 210 毫秒尖峰">
+          <path d="M8,55 L50.9,44 L93.8,52 L136.7,46 L179.6,57 L222.5,48 L265.4,53 L308.3,45 L351.2,51 L394.1,58 L437,47 L480,50 L512,52"
+                fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+        <dl class="kv" style="margin-top:var(--sp-2)">
+          <div><dt>延迟</dt><dd>42 ms</dd></div>
+          <div><dt>P95</dt><dd>68 ms</dd></div>
+          <div><dt>连续可用</dt><dd>3 小时</dd></div>
+          <div><dt>最后检查</dt><dd>1 分钟前</dd></div>
+        </dl>
+      </article>
+
+      <!-- 异常（degraded）：形状是方块，不是只有颜色不同 -->
+      <article class="card">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <span class="dot warn"><span class="sr">异常</span></span>
+          <h3 style="margin:0;flex:1;font-size:var(--fs-lg)">记账</h3>
+          <span class="tnum" style="color:var(--fg-dim);font-size:var(--fs-sm)">89.45%</span>
+        </div>
+        <p style="margin:var(--sp-1) 0 var(--sp-3);font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          <a href="#" class="muted">http://10.0.0.21/</a>
+        </p>
+        <div class="tl" role="img" aria-label="最近 40 次探测中约四分之一为异常">
+          <i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell down"></i>
+        </div>
+        <svg viewBox="0 0 520 110" width="100%" height="110" role="img" aria-label="记账延迟曲线：多次 1200 毫秒尖峰">
+          <path d="M8,80 L50.9,76 L93.8,28 L136.7,74 L179.6,70 L222.5,26 L265.4,77 L308.3,30 L351.2,72 L394.1,75 L437,25 L480,73 L512,70"
+                fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+        <dl class="kv" style="margin-top:var(--sp-2)">
+          <div><dt>延迟</dt><dd>318 ms</dd></div>
+          <div><dt>P95</dt><dd>1 240 ms</dd></div>
+          <div><dt>连续可用</dt><dd>0 分钟</dd></div>
+          <div><dt>最后检查</dt><dd>1 分钟前</dd></div>
+        </dl>
+        <p class="notice notice-bad" style="margin:var(--sp-3) 0 0;font-family:var(--font-sans);font-size:var(--fs-xs)">
+          状态码 503 不在预期范围内
+        </p>
+      </article>
+
+      <!-- 故障（down）：三角形 + 延迟断线（不画成 0） -->
+      <article class="card">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <span class="dot bad"><span class="sr">故障</span></span>
+          <h3 style="margin:0;flex:1;font-size:var(--fs-lg)">网关</h3>
+          <span class="tnum" style="color:var(--fg-dim);font-size:var(--fs-sm)">99.99%</span>
+        </div>
+        <p style="margin:var(--sp-1) 0 var(--sp-3);font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          <a href="#" class="muted">http://10.0.0.1/</a>
+        </p>
+        <div class="tl" role="img" aria-label="最近 40 次探测最后 6 次为故障">
+          <i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell up"></i><i class="tl-cell down"></i><i class="tl-cell down"></i><i class="tl-cell down"></i><i class="tl-cell down"></i><i class="tl-cell down"></i><i class="tl-cell down"></i>
+        </div>
+        <svg viewBox="0 0 520 110" width="100%" height="110" role="img" aria-label="网关延迟曲线：最后一段无数据，曲线断开而不是画成 0">
+          <path d="M8,40 L50.9,38 L93.8,44 L136.7,39 L179.6,42 L222.5,37 L265.4,43 L308.3,40 L351.2,41 L394.1,38"
+                fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+          <!-- 断线：故障段没有点，曲线在这里停住（不画成 0ms，那会看起来「更快了」） -->
+        </svg>
+        <dl class="kv" style="margin-top:var(--sp-2)">
+          <div><dt>延迟</dt><dd>—</dd></div>
+          <div><dt>P95</dt><dd>41 ms</dd></div>
+          <div><dt>连续可用</dt><dd>0 分钟</dd></div>
+          <div><dt>最后检查</dt><dd>1 分钟前</dd></div>
+        </dl>
+        <p class="notice notice-bad" style="margin:var(--sp-3) 0 0;font-family:var(--font-sans);font-size:var(--fs-xs)">
+          超时（&gt;5000ms）
+        </p>
+      </article>
+    </div>
+
+    <h2 class="group-title">近期异常</h2>
+    <table class="table">
+      <thead><tr><th>时间</th><th>系统</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="tnum">2026-10-16 17:04</td><td>网关</td><td>超时（&gt;5000ms）</td></tr>
+        <tr><td class="tnum">2026-10-16 17:03</td><td>网关</td><td>超时（&gt;5000ms）</td></tr>
+        <tr><td class="tnum">2026-10-16 03:11</td><td>记账</td><td>状态码 503 不在预期范围内</td></tr>
+        <tr><td class="tnum">2026-10-16 03:00</td><td>知识库</td><td>超时（&gt;5000ms）</td></tr>
+      </tbody>
+    </table>
+
+    <p class="muted" style="font-size:var(--fs-xs);margin-top:var(--sp-5)">
+      ⚠ 原型说明：曲线是手写的静态 SVG（真站点由服务端生成）。
+      注意三处设计决定——<strong>故障段的延迟曲线断开而不是画成 0</strong>（0ms 会看起来「更快了」）、
+      <strong>三档状态各带独立形状</strong>、<strong>故障轮次在总体走势上打点</strong>。
+    </p>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="wrap">
+  <span>事情分享，以及内网各业务系统的可用性</span>
+  <span class="spacer"></span>
+  <span>原型 · 可丢弃</span>
+</div></footer>
+</body>
+</html>

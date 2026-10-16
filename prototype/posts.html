@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分享 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+<nav class="preview"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html">首页</a>
+  <a href="posts.html" aria-current="page">分享</a>
+  <a href="post.html">文章</a>
+  <a href="status.html">面板</a>
+  <a href="admin.html">管理台</a>
+  <a href="admin-targets.html">管理台·目标</a>
+  <a href="login.html">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<header class="site-header"><div class="wrap header-inner">
+  <a class="brand" href="index.html">我的个人站</a>
+  <nav class="site-nav">
+    <a href="index.html">首页</a>
+    <a href="posts.html" aria-current="page">分享</a>
+    <a href="status.html">系统可用性</a>
+    <a href="admin.html">管理</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+  <section class="section">
+    <div class="section-head">
+      <h1>分享</h1>
+      <span class="muted" style="font-family:var(--data-font);font-size:var(--fs-xs)">共 3 篇</span>
+    </div>
+
+    <div class="tag-bar">
+      <a class="tag tag-active" href="posts.html">全部 <span class="muted">3</span></a>
+      <a class="tag" href="posts.html">运维 <span class="muted">1</span></a>
+      <a class="tag" href="posts.html">网络 <span class="muted">1</span></a>
+      <a class="tag" href="posts.html">前端 <span class="muted">1</span></a>
+      <a class="tag" href="posts.html">取舍 <span class="muted">1</span></a>
+      <a class="tag" href="posts.html">数据库 <span class="muted">1</span></a>
+      <a class="tag" href="posts.html">备份 <span class="muted">1</span></a>
+    </div>
+
+    <div class="post-list">
+      <a class="post-item" href="post.html">
+        <h3>把个人站搬到内网：登录闸门是怎么加上的</h3>
+        <p class="summary">从「谁都能访问」到「默认拒绝、白名单放行」，中间踩过的坑比想象中多——尤其是静态资源也会被钩子拦下这件事。</p>
+        <ul class="tags"><li><a class="tag" href="posts.html">运维</a></li><li><a class="tag" href="posts.html">网络</a></li></ul>
+      </a>
+      <a class="post-item" href="post.html">
+        <h3>为什么我给可用性面板画了内联 SVG，而不是引一个图表库</h3>
+        <p class="summary">曲线是服务端渲染的，禁用 JS 也能看，也不需要第二个构建产物。代价是自己写映射函数，但那份映射可以被断言。</p>
+        <ul class="tags"><li><a class="tag" href="posts.html">前端</a></li><li><a class="tag" href="posts.html">取舍</a></li></ul>
+      </a>
+      <a class="post-item" href="post.html">
+        <h3>SQLite 备份：不要 cp，也不要相信 busy:0</h3>
+        <p class="summary">只拷 .sqlite 得到的是空库；而 PASSIVE checkpoint 返回 busy:0 时可能只搬了 2/33 页。这两条都是实测出来的。</p>
+        <ul class="tags"><li><a class="tag" href="posts.html">数据库</a></li><li><a class="tag" href="posts.html">备份</a></li></ul>
+      </a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="wrap">
+  <span>事情分享，以及内网各业务系统的可用性</span>
+  <span class="spacer"></span>
+  <span>原型 · 可丢弃</span>
+</div></footer>
+</body>
+</html>
