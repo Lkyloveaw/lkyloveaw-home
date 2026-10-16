@@ -216,7 +216,15 @@ summary: 可选的一句话摘要
 ```
 
 文件名形如 `2026-01-01-hello.md` 时，日期前缀会被去掉，slug 为 `hello`。
-`draft: true` 的文章不出现在列表里，但可以通过直链访问。
+
+**`draft: true` 的文章不出现在任何列表里，也（按设计）不能通过直链访问**——
+直接访问 `/posts/<slug>` 会得到 **404**。原因是 `getPost()` 只从 `listPosts()` 的结果里找，
+而后者已经过滤掉草稿。
+
+> 这条曾经与实现矛盾：旧版 README 写着「不出现在列表里，**但可以通过直链访问**」，
+> 而实测是 404。**实现比文档更严格**，所以改的是文档（2026-10-15 决定）。
+> 若将来想要「可凭链接预览的草稿」，那是一个**新特性**（需要引入「未发布但可访问」的概念，
+> 并想清它该如何受登录与索引约束），不在「只修缺陷」的范围内。
 
 ## Docker 部署
 
@@ -232,13 +240,34 @@ docker compose up -d --build
 ## 自检
 
 ```bash
-npm run verify        # = typecheck + check:docker + check:unit + check:leak + check:chart + check:backup
+npm run verify        # typecheck + docker + unit + leak + chart + backup + restart
+npm run check:all     # = verify + check:e2e（全量）
 npm run check:unit    # 凭据与会话的纯函数断言（86 项，不需要起服务）
-npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（31 项）
+npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（32 项）
 npm run check:chart   # 曲线几何的交叉断言 + 面板行为（61 项）
-npm run check:backup  # 入口校验、checkpoint、备份与恢复（46 项）
-npm run check:e2e     # 真实起服务、真实探测、逐项断言（需要先 npm run build）
+npm run check:backup  # 入口校验、checkpoint、备份与恢复，含探测循环集成（60 项）
+npm run check:restart # 真杀进程再起：历史与会话是否活过重启（17 项）
+npm run check:e2e     # 真实起服务、真实探测、逐项断言（152 项，需要先 npm run build）
 ```
+
+### ⚠ 写安全断言时的一条硬规矩
+
+**每一条安全断言都必须先证明载荷真的出现在页面上，再断言它没有被当成代码执行。**
+
+理由是踩过的坑：旧版 e2e 有两条断言是 `!/<script>alert/` 与 `!/href="javascript:/`。
+被测页面里**本来就没有**这些字面量，它们**不注入任何载荷**，所以永远通过——
+这是「38 项通过」里最没含金量的一条，**会给放行提供虚假信心**。
+
+现在的写法是先断言 `&lt;script&gt;` 出现在页面里（证明载荷真的渲染过、注入面确实有效），
+然后才断言它没有被执行。同理，断言「属性内逃逸」时不能写「页面上没有 `onmouseover`」——
+转义后那段文本仍然存在、只是无害，要断言的是**带真实引号的属性断裂序列不存在**。
+
+`check:e2e` 覆盖 7 个注入面：文章标题/摘要/标签、文章正文、标签路由的 `<h1>` 回显、
+登录页 `next` 隐藏域、目标名、错误文案上屏、站点标题。
+
+`check:restart` 是唯一**真的杀进程再起**的套件：断言历史活过重启、**旧 cookie 仍有效**
+（`SESSION_SECRET` 稳定，不会每次重启把所有人踢下线），并带一个**对照组**——
+换个密钥重启，旧 cookie 必须失效（否则前一条断言是恒真的）。
 
 `check:unit` 用临时数据目录跑，断言的是口令校验、`token_version` 迁移、会话签名与
 `next` 逃逸面等纯逻辑——包括「签名长度不对不能抛异常」这类在 HTTP 层很难稳定复现的情形。
@@ -255,9 +284,8 @@ npm run check:e2e     # 真实起服务、真实探测、逐项断言（需要�
 （实测它可能报 `busy:0` 却只搬了 2/33 页）、只拷 `.sqlite` 的副本**打不开 `probes` 表**、
 残留 `-wal` 会让恢复**读到另一个库的数据**。
 
-`check:e2e` 会临时起一个服务（端口 3997）并写入独立的数据目录，跑完自动清理。
-它断言的是真实行为，而不是 mock：未登录是否被拦、登录能否通过、畸形 cookie 会不会打成 500、
-改密是否只踢掉其他设备、停用是否立刻生效，以及探测的三种状态、失败点是否不记录延迟、曲线是否真的渲染出来。
+`check:e2e` 还会断言并发访问（24 个并发请求全部成功且数据自洽）与**无目标清单**时
+面板不崩、明说「还没有配置被监控的系统」。
 
 ## Docker 部署中的原生模块
 

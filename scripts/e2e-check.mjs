@@ -333,30 +333,76 @@ try {
     ),
     JSON.stringify(api.incidents.map((i) => i.error).slice(0, 5)),
   )
-  console.log('\n[安全性]')
-  // 真实转义测试：把攻击载荷放进「文章内容/标题」这条真实数据通路，再断言它没有被当成 HTML 执行。
-  // 旧版本是 `!/<script>alert/.test(body)`——页面里本来就没有那个字面量，恒真，等于没测。
+  console.log('\n[安全性：真实载荷注入]')
+  // ⚠ **断言质量原则**（本票定下的规矩，写在这里以免日后又写出恒真断言）：
+  //   每一条安全断言都必须**先证明载荷真的出现在页面上**，再断言它没有被当成代码执行。
+  //   否则「页面上没出现 `<script>`」这种断言，在**根本没有注入**时也永远通过——
+  //   旧版那两条 `!/<script>alert/` 与 `!/href="javascript:/` 就是这样：恒真，零含金量。
+  // 载荷同时覆盖「标签闭合逃逸」与「属性内逃逸」两种形态。
   const xss = '<script>alert(1)</script><img src=x onerror=alert(2)>'
+  const attrXss = '" onmouseover="alert(3)" x="'
   const evilDir = path.join(ROOT, 'content')
   const evilFile = path.join(evilDir, '2026-01-02-xss-probe.md')
   fs.writeFileSync(
     evilFile,
-    `---\ntitle: ${JSON.stringify(xss)}\ntags: [${JSON.stringify(xss)}]\nsummary: ${JSON.stringify(xss)}\n---\n\n${xss}\n`,
+    `---\ntitle: ${JSON.stringify(xss)}\ntags: [${JSON.stringify(xss)}]\nsummary: ${JSON.stringify(attrXss)}\n---\n\n${xss}\n`,
     'utf8',
   )
   try {
-    // 列表页：标题/摘要/标签必须被转义
+    // ── 注入面 1：文章标题 / 摘要 / 标签（列表页）──
     const listPage = await authed('/posts')
-    check('XSS: 标题未被注入为脚本', !/<script>alert\(1\)<\/script>/.test(listPage.body))
-    check('XSS: 转义后的载荷仍在页面上（证明真的渲染过）', listPage.body.includes('&lt;script&gt;'))
-    check('XSS: onerror 属性未被注入', !/<img src=x onerror=/.test(listPage.body))
-    // 详情页：正文里的 HTML 也必须被当成文本（markdown-it html:false）
+    check('注入面1 列表页：载荷**确实被渲染**（证明注入生效，否则下面的断言恒真）',
+      listPage.body.includes('&lt;script&gt;'), '页面里找不到转义后的载荷')
+    check('注入面1 列表页：标题未被注入为脚本', !/<script>alert\(1\)<\/script>/.test(listPage.body))
+    check('注入面1 列表页：onerror 属性未被注入', !/<img src=x onerror=/.test(listPage.body))
+    // ⚠ 属性内逃逸的判据要精确：转义后页面上仍会出现**无害的**文本 ` onmouseover=`，
+    // 因为真正起作用的是引号被换成了 `&quot;`——它不再是属性分隔符。
+    // 所以不能断言「页面上没有 onmouseover」，而要断言：**带真实引号的属性断裂序列不存在**，
+    // 且载荷的引号**确实**被转义了（否则这条断言又变成恒真）。
+    check('注入面1 列表页：真实引号的属性断裂序列不存在', !listPage.body.includes('" onmouseover="'))
+    check('注入面1 列表页：载荷里的引号确实被转义（&quot;）', listPage.body.includes('&quot; onmouseover=&quot;'))
+
+    // ── 注入面 2：文章正文（详情页，markdown-it html:false）──
     const detail = await authed('/posts/xss-probe')
-    check('XSS: 详情页正文未执行 HTML', !/<script>alert\(1\)<\/script>/.test(detail.body))
-    check('XSS: 详情页渲染了该文章', detail.status === 200, `status=${detail.status}`)
-    // 标签路由：标签名进 URL 也必须安全
+    check('注入面2 详情页：渲染了该文章', detail.status === 200, `status=${detail.status}`)
+    check('注入面2 详情页：正文载荷**确实被渲染**', detail.body.includes('&lt;script&gt;'))
+    check('注入面2 详情页：正文未执行 HTML', !/<script>alert\(1\)<\/script>/.test(detail.body))
+
+    // ── 注入面 3：标签路由把 tag **回显进 <h1>**（`标签：<payload>`）──
+    // 这条以前只断言「不 500」，而「不 500」完全不能说明转义对不对。
     const tagPage = await authed('/tags/' + encodeURIComponent(xss))
-    check('XSS: 标签路由未 500', tagPage.status === 200 || tagPage.status === 404, `status=${tagPage.status}`)
+    check('注入面3 标签路由：未 500', tagPage.status === 200 || tagPage.status === 404, `status=${tagPage.status}`)
+    if (tagPage.status === 200) {
+      check('注入面3 标签路由：h1 里的载荷**确实被渲染**', tagPage.body.includes('&lt;script&gt;'))
+      check('注入面3 标签路由：h1 未被注入为脚本', !/<script>alert\(1\)<\/script>/.test(tagPage.body))
+    }
+
+    // ── 注入面 4：登录页的 `next` 隐藏域（未登录即可见，是闸门带来的**新**回显面）──
+    // `next` 先过 `isSafeNextPath`，所以逃逸值会被丢弃；这里测的是**万一被保留**时渲染也必须转义。
+    {
+      const loginPage = await get('/login?next=' + encodeURIComponent('/posts/xss-probe'))
+      check('注入面4 登录页：合法 next 被保留并渲染', loginPage.body.includes('value="/posts/xss-probe"'))
+      const evilNext = await get('/login?next=' + encodeURIComponent('"><script>alert(9)</script>'))
+      check('注入面4 登录页：逃逸 next 被丢弃（回退 /）', /name="next" value="\/"/.test(evilNext.body), '未回退')
+      check('注入面4 登录页：响应里没有可执行脚本', !/<script>alert\(9\)<\/script>/.test(evilNext.body))
+    }
+
+    // ── 注入面 5：目标名（来自 targets.json，属运维输入而非用户输入，仍须转义）──
+    {
+      const panel = await authed('/status')
+      check('注入面5 面板：目标名**确实被渲染**', panel.body.includes('状态码不符'), '找不到已知目标名')
+      check('注入面5 面板：目标名未被当成 HTML', !/<script>alert\(1\)<\/script>/.test(panel.body))
+    }
+
+    // ── 注入面 6：错误文案上屏（写入侧已脱敏，上屏仍要转义）──
+    {
+      const panel = await authed('/status')
+      check('注入面6 面板：失败原因可见（证明这条通路在用）', panel.body.includes('target-error') || panel.body.includes('超时'))
+      check('注入面6 面板：错误文案里没有可执行标记', !/onerror=alert/.test(panel.body))
+    }
+
+    // ── 注入面 7：站点标题/描述（来自环境变量 SITE_TITLE）──
+    check('注入面7 站点标题被正确渲染', listPage.body.includes('验收站'), 'SITE_TITLE 未出现在页面')
   } finally {
     fs.rmSync(evilFile, { force: true })
   }
@@ -458,9 +504,99 @@ try {
     sessionCookie = reLogin.setCookie.split(';')[0]
   }
 
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[并发访问]')
+  // ══════════════════════════════════════════════════════════
+  // 并发下最容易出问题的是「每请求查一次库」的会话校验：并发读写同一个 SQLite 连接，
+  // 以及「同一个 cookie 被 N 个请求同时校验」。这里断言全部成功且数据一致。
+  {
+    const N = 24
+    const paths = ['/status', '/api/status', '/', '/posts', '/healthz', '/login']
+    const results2 = await Promise.all(
+      Array.from({ length: N }, (_, i) => {
+        const p = paths[i % paths.length]
+        const isPublic = p === '/healthz' || p === '/login'
+        return (isPublic ? get(p) : authed(p)).then((r) => ({ p, status: r.status, body: r.body }))
+      }),
+    )
+    const bad = results2.filter((r) => r.status !== 200 && r.status !== 302)
+    check(`并发 ${N} 个请求全部成功（无 5xx）`, bad.length === 0, bad.map((b) => `${b.p}=${b.status}`).join(','))
+    // 并发会话校验必须一致：受保护路径在**同一个有效 cookie** 下不该有的 200 有的 302
+    const protectedOnes = results2.filter((r) => !['/healthz', '/login'].includes(r.p))
+    const statuses = [...new Set(protectedOnes.map((r) => r.status))]
+    check('并发下会话校验结果一致（同一 cookie 不会时而有效时而失效）', statuses.length === 1, `statuses=${statuses.join(',')}`)
+    // 并发下 API 数据也要自洽
+    const apis = results2.filter((r) => r.p === '/api/status')
+    const shapes = new Set(
+      apis.map((r) => {
+        try { return Object.keys(JSON.parse(r.body)).sort().join(',') } catch { return 'PARSE_FAIL' }
+      }),
+    )
+    check('并发下 API 形状自洽（没有半个响应）', shapes.size === 1 && !shapes.has('PARSE_FAIL'), [...shapes].join(' | '))
+  }
+
   console.log('\n[进程健壮性]')
   check('服务全程未崩溃', child.exitCode === null && !/启动失败/.test(serverLog))
   check('探测日志正常输出', /\[probe\]/.test(serverLog))
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[无目标清单：面板不崩，明说「还没配置」]')
+  // ══════════════════════════════════════════════════════════
+  // 单独起一个实例（端口 3994）而不是复用主实例：主实例有 3 个目标，改不了。
+  {
+    const PORT2 = 3994
+    const BASE2 = `http://127.0.0.1:${PORT2}`
+    const child2 = spawn(process.execPath, ['dist/server.js'], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        PORT: String(PORT2),
+        HOST: '127.0.0.1',
+        TARGETS_JSON: '[]',
+        DATABASE_PATH: TEST_DB, // 复用同一个库：账号建在那个库里，换库会登不上
+        SESSION_SECRET: 'e2e-empty-targets-secret',
+        SITE_TITLE: '空目标站',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let log2 = ''
+    child2.stdout.on('data', (d) => (log2 += d))
+    child2.stderr.on('data', (d) => (log2 += d))
+    try {
+      let up = false
+      for (let i = 0; i < 40; i++) {
+        try { if ((await fetch(BASE2 + '/healthz')).ok) { up = true; break } } catch {}
+        await sleep(250)
+      }
+      check('无目标清单时服务仍能启动（不因空清单崩溃）', up, '未起来')
+      if (up) {
+        // 未登录仍应被闸门拦住
+        const anon = await fetch(BASE2 + '/status', { redirect: 'manual' })
+        check('无目标时闸门仍生效（未登录 302）', anon.status === 302, `got ${anon.status}`)
+        // 登录后看面板
+        const lr = await fetch(BASE2 + '/login', {
+          method: 'POST', redirect: 'manual',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ username: TEST_USER, password: NEW_PASS, next: '/status' }),
+        })
+        const ck = (lr.headers.get('set-cookie') || '').split(';')[0]
+        check('无目标实例也能登录（共用同一个库，账号在）', ck.startsWith('session='), `login=${lr.status}`)
+        const panel = await fetch(BASE2 + '/status', { headers: { cookie: ck } })
+        const html = await panel.text()
+        check('无目标时面板 200（不是 500）', panel.status === 200, `got ${panel.status}`)
+        check('面板明说「还没有配置被监控的系统」而不是空白', /还没有配置被监控的系统/.test(html), html.slice(0, 200).replace(/\s+/g, ' '))
+        const api = await fetch(BASE2 + '/api/status', { headers: { cookie: ck } })
+        const body = await api.json()
+        check('空清单时 API 返回空数组（不是 null/undefined）', Array.isArray(body.targets) && body.targets.length === 0, JSON.stringify(body.targets))
+        check('空清单时 overview 也是数组', Array.isArray(body.overview))
+        check('空清单时服务未崩溃', child2.exitCode === null && !/启动失败/.test(log2), log2.slice(-200))
+        check('启动时给出「还没有配置被监控的系统」提示', /还没有配置被监控的系统/.test(log2), log2.split('\n').find((l) => l.includes('配置')) || '(无)')
+      }
+    } finally {
+      child2.kill('SIGTERM')
+      await sleep(600)
+    }
+  }
 } finally {
   child.kill('SIGTERM')
   await sleep(800)
