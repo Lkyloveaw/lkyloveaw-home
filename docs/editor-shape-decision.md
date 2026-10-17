@@ -101,5 +101,11 @@
 主分支只留**本文件**与 ADR 0006。
 
 **主分支上不留**：`src/prototype/`（6 个文件）、`scripts/prototype-editor-verify.sh`、`package.json` 的 `prototype:editor`。
-定稿后清理：删掉 worktree、删掉本地与远程的 `prototype/editor-shape` 分支
-（该分支从未进入主分支，所以**主分支不需要 revert 任何东西**）。
+**清理（已做）**：删掉临时 worktree、停掉 :3100 的原型进程。
+**分支 `prototype/editor-shape` 保留**（本地与远程都留）—— 按原型技能 §6，**整套变体是这次决定的主源**，
+留一个能被解析的指针才算把证据链闭上（与 #21 的 `prototype/status-variants` 同一做法）。
+因为该分支从未进入主分支，所以**主分支不需要 revert 任何东西**。
+
+**指向它的地方**：本文件 §3 与 §9、[#34](https://github.com/Lkyloveaw/lkyloveaw-home/issues/34) 的定稿评论。
+手写编辑器那条落选路线的量化代价（342 行反向转换器、真实输入 5/6 项丢失）只在该分支的
+`src/prototype/NOTES.md` §5 里，删了分支就查不到 —— 这是它必须留着的具体理由。
