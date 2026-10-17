@@ -481,6 +481,49 @@ try {
   }
 
   // ══════════════════════════════════════════════════════════
+  console.log('\n[中文 slug（规格 #48 的「前提条件」）]')
+  // ══════════════════════════════════════════════════════════
+  // 规格把「`/posts/:slug` 补 `decodeURIComponent`」写成「允许中文 slug」的**前提条件**：
+  // 「不修这条，『允许中文』就是假的」。
+  // #54 修它的时候只**人工**验过一次 —— 这里把它钉成常驻断言：少了它，
+  // 这条前提随时可能被下一次重构悄悄推翻，而没人会发现（因为所有既有断言都用 ASCII slug）。
+  {
+    const CN_SLUG = '中文标题探针'
+    const CN_TEXT = '中文 slug 的正文'
+    const insertCnProbe = () => {
+      const db = new Database(TEST_DB)
+      const now = Date.now()
+      const body = JSON.stringify(markdownToDoc(CN_TEXT).doc.toJSON())
+      db.prepare(
+        `INSERT INTO articles (slug, title, body, summary, date, tags, draft, created_at, updated_at, deleted_at)
+         VALUES (?, '中文 slug 探针', ?, '', '2026-01-04', '[]', 0, ?, ?, NULL)
+         ON CONFLICT(slug) DO UPDATE SET draft = 0, deleted_at = NULL, updated_at = excluded.updated_at`,
+      ).run(CN_SLUG, body, now, now)
+      db.close()
+    }
+    const dropCnProbe = () => {
+      const db = new Database(TEST_DB)
+      db.prepare(`DELETE FROM articles WHERE slug = ?`).run(CN_SLUG)
+      db.close()
+    }
+
+    insertCnProbe()
+    try {
+      const encoded = await authed('/posts/' + encodeURIComponent(CN_SLUG))
+      check(
+        '中文 slug：**编码后的直链 200**（这条就是 decodeURIComponent 的回归）',
+        encoded.status === 200,
+        `status=${encoded.status}`,
+      )
+      check('中文 slug：正文真的渲染了（证明 200 不是因为落到别的页面）', encoded.body.includes(CN_TEXT))
+      const listWithCn = await authed('/posts')
+      check('中文 slug：列表页的链接也是编码过的', listWithCn.body.includes(encodeURIComponent(CN_SLUG)))
+    } finally {
+      dropCnProbe()
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
   console.log('\n[改密与吊销（会话语义）]')
   // ══════════════════════════════════════════════════════════
   const NEW_PASS = 'e2e-password-5678'

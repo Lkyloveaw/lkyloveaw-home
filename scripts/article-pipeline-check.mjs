@@ -188,6 +188,90 @@ const rowspanHtml = docToHtml(
 check('合并单元格：rowspan 出现', rowspanHtml.includes('rowspan="2"'), rowspanHtml)
 
 // ─────────────────────────────────────────────────────────────
+console.log('\n== 六、出口纪律（规格 #48 的出口表） ==')
+
+// 规格把出口**按读者命名**，理由写得很直白：「名字本身在说我是给谁看的，diff 时能一眼审出泄漏」。
+// 断言能钉住的只有名字这一半（行为那一半在 e2e 的草稿断言里，那里带对照组）；
+// 但名字这一半恰好是最容易在重构里悄悄退回去的 —— 所以值得钉。
+const contentModule = await import('../dist/content.js')
+check('读面出口用的是规格里的名字（listPublishedPosts）', typeof contentModule.listPublishedPosts === 'function')
+check('读面出口用的是规格里的名字（getPublishedPost）', typeof contentModule.getPublishedPost === 'function')
+check('含糊的旧名字没有回来（listPosts / getPost）', !('listPosts' in contentModule) && !('getPost' in contentModule), Object.keys(contentModule).join(','))
+check(
+  '内容层没有导出「不过滤」的读取口（那会绕开出口纪律）',
+  !Object.keys(contentModule).some((k) => /^(peek|listAll|getAny)/.test(k)),
+  Object.keys(contentModule).join(','),
+)
+
+// ─────────────────────────────────────────────────────────────
+console.log('\n== 七、对象规则（规格 #48 的 slug / 标签 / 上限） ==')
+
+// ⚠ 必须**先**设环境变量再动态 import：`config.ts` 在模块加载时就读 env，
+//    静态 import 会被提升到赋值之前，于是你会连到一个不该连的库（unit-check.mjs 同样的坑）。
+const sandbox = fs.mkdtempSync(path.join(root, '.article-rules-sandbox-'))
+process.env.DATABASE_PATH = path.join(sandbox, 'rules.sqlite')
+const rules = await import('../dist/article-rules.js')
+const store = await import('../dist/store.js')
+
+// slug 形状
+check('slug：中文可以', rules.validateSlug('运维笔记').ok)
+check('slug：字母数字连字符下划线可以', rules.validateSlug('a-B_9').ok)
+check('slug：空 → 拒', !rules.validateSlug('   ').ok)
+check('slug：带空格 → 拒', !rules.validateSlug('有 空格').ok)
+check('slug：带斜杠 → 拒', !rules.validateSlug('a/b').ok)
+check('slug：正好 64 个 → 过', rules.validateSlug('啊'.repeat(64)).ok)
+check('slug：65 个 → 拒（按**码位**算，不是 UTF-16 单元）', !rules.validateSlug('啊'.repeat(65)).ok)
+
+// 唯一性：跨草稿与回收站（规格的 unit 接缝里点名的一条）
+// ⚠ 用 `initStore()` **返回的那个连接**改行，不要再开第二个连接：
+// 实测第二个连接看不到这里刚建的表（同名文件、同一路径，但看到的是空库）——
+// 与其猜是 WAL 还是路径的问题，不如就用同一个连接，顺便少一个可能出错的环节。
+const db = store.initStore()
+const baseArticle = (slug, draft) => ({
+  slug,
+  title: `标题-${slug}`,
+  body: JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '正文' }] }] }),
+  summary: null,
+  date: '2026-01-01',
+  tags: '[]',
+  draft,
+  now: Date.now(),
+})
+store.upsertArticleWithRevision(baseArticle('occupied', 1))
+const asDraft = rules.checkSlugAvailable('occupied')
+check('唯一性：草稿占位（不可用）', asDraft.available === false && asDraft.inTrash === false, JSON.stringify(asDraft))
+
+// 把它挪进回收站（回收站的**动作**归 #51，这里只是摆出那个状态）
+db.prepare(`UPDATE articles SET deleted_at = ? WHERE slug = ?`).run(Date.now(), 'occupied')
+const asTrashed = rules.checkSlugAvailable('occupied')
+check('唯一性：**回收站里也占位**（规格 #48）', asTrashed.available === false, JSON.stringify(asTrashed))
+check('唯一性：能告诉调用方「它在回收站里」（400 文案要用）', asTrashed.inTrash === true, JSON.stringify(asTrashed))
+check('冲突文案含占用者的标题', rules.slugConflictMessage('occupied', asTrashed).includes('标题-occupied'))
+check('冲突文案明说它在回收站里', rules.slugConflictMessage('occupied', asTrashed).includes('回收站'))
+check('唯一性：没被占用的 slug 可用', rules.checkSlugAvailable('free-one').available === true)
+
+// 标签
+const tagCase = rules.normalizeTags(['运维', ' a/b ', '运维', '', '网络'])
+check('标签：去重且保序', JSON.stringify(tagCase.tags) === JSON.stringify(['运维', '网络']), JSON.stringify(tagCase.tags))
+check('标签：含斜杠的被挑出来（名字即 URL，斜杠会打断它）', tagCase.rejected.includes('a/b'), JSON.stringify(tagCase.rejected))
+check('标签：逗号分隔的字符串也认', JSON.stringify(rules.normalizeTags('运维，网络').tags) === JSON.stringify(['运维', '网络']))
+check('标签：超长被挑出来', rules.normalizeTags(['x'.repeat(65)]).rejected.length === 1)
+
+// 正文上限（按字节）
+check('正文：正好 256 KiB → 过', rules.validateBodySize('a'.repeat(256 * 1024)).ok)
+check('正文：256 KiB + 1 字节 → 拒', !rules.validateBodySize('a'.repeat(256 * 1024 + 1)).ok)
+check('正文：中文按 UTF-8 字节算（一个汉字 3 字节）', rules.bodySizeBytes('中') === 3)
+
+// 发布后不可改 slug
+check('slug 不可改：草稿可以改', !rules.violatesSlugImmutability({ slug: 'a', draft: 1 }, 'b'))
+check('slug 不可改：**已发布不能改**', rules.violatesSlugImmutability({ slug: 'a', draft: 0 }, 'b'))
+check('slug 不可改：已发布但 slug 没变（保存别的字段）不算违规', !rules.violatesSlugImmutability({ slug: 'a', draft: 0 }, 'a'))
+check('slug 不可改：新文章不算违规', !rules.violatesSlugImmutability(undefined, 'a'))
+
+store.closeStore()
+fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+
+// ─────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(60)}`)
 if (failed === 0) {
   console.log(`✅ 全部通过：${passed} 项`)

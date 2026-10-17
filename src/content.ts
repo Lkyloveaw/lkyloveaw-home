@@ -7,7 +7,8 @@
  *
  * 本文件里有两类东西，别混：
  *
- * - **读面出口**（`listPosts` / `getPost` / `listTags`）：**读者视角**，滤草稿 + 滤已删除，
+ * - **读面出口**（`listPublishedPosts` / `getPublishedPost`）：**读者视角**，滤草稿 + 滤已删除，
+ *   **零布尔参数**。`listTags()` 只是它的派生视图，不是第 6 个出口。
  *   **零布尔参数**（见 `src/store.ts` 里 `listArticlesForReaders()` 的注释）。
  * - **导入路径**（`importArticlesIfEmpty` / `reimportArticlesFromDisk`）：写库，只有启动与 CLI 调它。
  *
@@ -24,7 +25,6 @@ import { docToHtml } from './article-html.js'
 import { markdownToDoc } from './article-import.js'
 import {
   getArticleForReaders,
-  getAnyArticleRow,
   hasAnyArticle,
   listArticlesForReaders,
   upsertArticleWithRevision,
@@ -110,8 +110,15 @@ function toPost(row: ArticleRow): Post | null {
 
 // ── 读面出口（读者视角；滤草稿 + 滤已删除）──────────────────────
 
-/** 读面出口 1：读者能看到的文章，按日期倒序。 */
-export function listPosts(): Post[] {
+/**
+ * **读面出口 1**：读者能看到的文章，按日期倒序。
+ *
+ * ⚠ 名字里的「Published」是**纪律的一部分**，不是啰嗦：过滤维度有两个（草稿 / 已删除），
+ * 布尔参数会有四种组合、漏传一个就是泄漏。所以出口按**读者**命名 ——
+ * 「名字本身在说我是给谁看的，diff 时能一眼审出泄漏」（规格 #48 的出口表）。
+ * 管理台的出口叫 `listArticlesForAdmin()`，回收站的那个叫 `listTrashedArticles()`（都还没实现，归 #50/#51）。
+ */
+export function listPublishedPosts(): Post[] {
   const posts: Post[] = []
   for (const row of listArticlesForReaders()) {
     const post = toPost(row)
@@ -120,17 +127,22 @@ export function listPosts(): Post[] {
   return posts
 }
 
-/** 读面出口 2：按 slug 取一篇读者能看到的。找不到 / 是草稿 / 在回收站 → `undefined`（→ 404）。 */
-export function getPost(slug: string): Post | undefined {
+/** **读面出口 2**：按 slug 取一篇读者能看到的。找不到 / 是草稿 / 在回收站 → `undefined`（→ 404）。 */
+export function getPublishedPost(slug: string): Post | undefined {
   const row = getArticleForReaders(slug)
   if (!row) return undefined
   return toPost(row) ?? undefined
 }
 
-/** 全部标签及文章数，按出现次数倒序。复用读面出口 1，所以草稿不会漏进标签页。 */
+/**
+ * 全部标签及文章数，按出现次数倒序。
+ *
+ * **它不是第 6 个出口**：它只从**出口 1** 派生，自己没有取数语句 —— 所以草稿漏不进标签页，
+ * 而「泄漏面只有那 5 个具名出口」这句话依然成立（规格 #48）。
+ */
 export function listTags(): Array<{ tag: string; count: number }> {
   const counts = new Map<string, number>()
-  for (const post of listPosts()) {
+  for (const post of listPublishedPosts()) {
     for (const tag of post.tags) {
       counts.set(tag, (counts.get(tag) ?? 0) + 1)
     }
@@ -306,7 +318,4 @@ export function warnContentDirIsNoLongerInput(): void {
   }
 }
 
-/** 给 CLI 的 `--list` 用：库里那一行的原始状态（不过读者过滤）。 */
-export function peekArticleRow(slug: string): ArticleRow | undefined {
-  return getAnyArticleRow(slug)
-}
+/** 给 CLI 的 `--list` 用：库里那一行的原始状态（**不过读者过滤**）。 */

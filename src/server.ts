@@ -7,9 +7,9 @@ import Fastify from 'fastify'
 import fastifyStatic from '@fastify/static'
 import { assertSessionSecret, config } from './config.js'
 import {
-  getPost,
+  getPublishedPost,
   importArticlesIfEmpty,
-  listPosts,
+  listPublishedPosts,
   listTags,
   warnContentDirIsNoLongerInput,
 } from './content.js'
@@ -227,17 +227,17 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   app.get('/', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return homePage(listPosts(), buildSummary(), site)
+    return homePage(listPublishedPosts(), buildSummary(), site)
   })
 
   app.get('/posts', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return postsPage(listPosts(), listTags(), site)
+    return postsPage(listPublishedPosts(), listTags(), site)
   })
 
   app.get('/tags/:tag', async (req, reply) => {
     const tag = decodeURIComponent((req.params as { tag: string }).tag)
-    const posts = listPosts().filter((p) => p.tags.includes(tag))
+    const posts = listPublishedPosts().filter((p) => p.tags.includes(tag))
     reply.type('text/html; charset=utf-8')
     return postsPage(posts, listTags(), site, `标签：${tag}`, tag)
   })
@@ -245,7 +245,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   app.get('/posts/:slug', async (req, reply) => {
     // ⚠ **必须解码**，与 /tags/:tag 对齐。少了这一步，「slug 允许中文」就是假的：
     // /posts/中文slug 会 404，而库里明明有那一篇（研究 §2.2 记过这个不对称）。
-    const post = getPost(decodeURIComponent((req.params as { slug: string }).slug))
+    const post = getPublishedPost(decodeURIComponent((req.params as { slug: string }).slug))
     if (!post) {
       reply.code(404).type('text/html; charset=utf-8')
       return notFoundPage(site)
