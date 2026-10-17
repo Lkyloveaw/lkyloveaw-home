@@ -42,7 +42,34 @@
 
 ## 2. 五张票的详细边界
 
-### 票① 引库与文档模型 · 文章搬进 SQLite · 读面按 schema 渲染
+> ⚠ **2026-10-17 修订：票① 拆成 ①a / ①b** —— 票① 的票面自己写着「若发现超出一票的尺寸，当场再拆一票，不在票内拖」。
+> 它把「**格式与两个转换**」和「**搬库与读面切换**」装在一张票里，各自都是一次会话的量。
+> **前端构建步骤也从票① 移到票②**：只有**编辑器**需要打包，①a 的 schema 与渲染都在**服务端**。
+> （顺带一条实测：`esbuild@0.28.2` **已在依赖树里** —— 它是 `tsx` 的传递依赖，票② 可以复用，不必新增顶层依赖。）
+> 下面「原票① 的边界」一节留档，已按本节拆开。
+
+### 票①a 文档格式与两个转换（[#49](https://github.com/Lkyloveaw/lkyloveaw-home/issues/49)）
+
+**交付**：`src/article-doc.ts`（**schema 的唯一定义** —— 也是票② 的编辑器必须对齐的那份契约）·
+`src/article-import.ts`（Markdown → 文档，基于**已有的** markdown-it）·
+`src/article-html.ts`（文档 → HTML 的**闭集发射器**，取代 markdown-it 在读面的位置）·
+`scripts/article-pipeline-check.mjs`。运行期只新增 `prosemirror-model` 一个依赖（Node 侧，不需要 DOM）。
+
+**站点零变化**：纯新增模块 + 断言，不碰路由、不碰库、不碰 e2e 夹具。
+
+**验收**：两篇真文章走 `import → doc → html` 之后**结构等价**（表格仍是 `<table>` · 代码块仍是 `<pre><code>` **且语言标注保住** · 引用块仍是 `<blockquote>` · 列表仍是 `<ul>`/`<ol>`）；畸形 JSON / 不存在的节点类型必须**抛错**。
+
+### 票①b 搬库与读面切换（[#54](https://github.com/Lkyloveaw/lkyloveaw-home/issues/54)）
+
+**交付**：`articles` + `article_revisions` 建表 · 首次导入 · `src/cli/` 重导**逃生口** ·
+`src/content.ts` 出口改**按读者分组的具名函数**（零布尔参数）· 三条读路由改从库读 ·
+**`/posts/:slug` 补 `decodeURIComponent`** · e2e 夹具改成**直接写库** · `docker-compose.yml` 那句注释。
+
+**验收**：`/posts/why-single-process` · `/posts` · `/tags/运维` 仍 **200**；草稿纪律不变；逃生口可用；`npm run verify` 全绿。
+
+---
+
+### 原票① 的边界（留档：已按上面拆成 ①a / ①b）
 
 **这是本批最大的一张，但它不可再分**（见 §1 前两条耦合点）。
 
@@ -189,11 +216,11 @@
 
 **硬依赖（写进阻塞边的就这几条）**
 
-- ② ← ①：渲染器与表结构在 ①。
+- ② ← ①b（#54）← ①a（#49）：**格式**在 ①a，**表结构与读面**在 ①b，写路径才轮到 ②。
 - ② ← **#37 #38 #39**（跨图）：管理台外壳、`requireAdmin`、CSRF 面、notice 闭集。
 - ③ ← ②：回收站与修订是写通道之上的动作。
 - ④ ← **#41**（规格）+ ②。
-- ⑤ ← ①②③④。
+- ⑤ ← ①a ①b ②③④。
 
 **软约束（写在票面上，不写进阻塞边）**
 
@@ -217,11 +244,11 @@
 
 | 文件 | 票 | 说明 |
 | --- | --- | --- |
-| 前端构建配置（新）· `public/` 下的打包产物 | ① | 编辑面产物；闸门白名单要加 |
-| schema 定义（新） | ① | **不启用 raw HTML 节点** |
+| 前端构建配置（新）· `public/` 下的打包产物 | **②** | 只有编辑器需要打包；闸门白名单要加。可用树里已有的 `esbuild`（`tsx` 的传递依赖） |
+| `src/article-doc.ts` · `article-import.ts` · `article-html.ts`（新） | ①a | **不启用 raw HTML 节点**；schema 是票② 编辑器的对齐契约 |
 | `src/store.ts` | ① | `articles` / `article_revisions` 建表与查询 |
 | `src/content.ts` | ① | 出口改成按读者分组的具名函数；渲染改走 schema |
-| `src/cli/`（新文件） | ① | 重导逃生口 |
+| `src/cli/`（新文件） | ①b | 重导逃生口 |
 | `src/server.ts` | ①（读面路由）· ②（`/admin/articles` 路由） | 两张票都动，**区域不重叠** |
 | `src/views.ts` | ②（管理台文章页）· ④（图片节点渲染） | |
 | 编辑器前端源码（新） | ②（正文）· ④（图片节点） | |
