@@ -81,6 +81,45 @@ export function initStore(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_probes_target_at ON probes (target_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_probes_round   ON probes (round_at ASC);
   `)
+
+  /*
+   * 文章的两张表（规格 #48 的「存储」一节）。
+   *
+   * `body` 存**结构化文档 JSON**，不是 Markdown、也不是 HTML —— 读面按闭集 schema 在服务端渲染
+   * （`src/article-html.ts`），那条「不可信输入不直接进页面」的属性和它绑在一起（ADR 0006）。
+   *
+   * `deleted_at` **正交**于 `draft`：它不是第三个状态，不覆盖「原来是草稿还是已发布」，
+   * 所以还原不需要 WordPress 那种 `_wp_trash_meta_status` 旁路（研究 #36 时核过）。
+   */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS articles (
+      slug       TEXT PRIMARY KEY,
+      title      TEXT    NOT NULL,
+      body       TEXT    NOT NULL,
+      summary    TEXT,
+      date       TEXT    NOT NULL,
+      tags       TEXT    NOT NULL DEFAULT '[]',
+      draft      INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_articles_read ON articles (draft, deleted_at, date DESC);
+
+    CREATE TABLE IF NOT EXISTS article_revisions (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug     TEXT    NOT NULL,
+      title    TEXT    NOT NULL,
+      body     TEXT    NOT NULL,
+      summary  TEXT,
+      date     TEXT    NOT NULL,
+      tags     TEXT    NOT NULL,
+      draft    INTEGER NOT NULL,
+      saved_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_article_revisions_slug ON article_revisions (slug, saved_at DESC);
+  `)
+
   return db
 }
 
@@ -415,6 +454,162 @@ export function getUptimeRaw(windowMs: number, limit = 120): OverviewPoint[] {
     )
     .all(since, expected, limit) as Array<{ at: number; total: number; up: number }>
   return rows.map((r) => ({ at: r.at, up: r.up, total: r.total }))
+}
+
+// ── 文章：SQL 都留在这里，领域规则（渲染 / 派生摘要 / 出口分组）在 src/content.ts ──
+
+export interface ArticleRow {
+  slug: string
+  title: string
+  /** **结构化文档 JSON**（字符串形态）。 */
+  body: string
+  summary: string | null
+  /** `YYYY-MM-DD` 定长文本，保留字符串排序语义。 */
+  date: string
+  /** JSON 数组字符串。 */
+  tags: string
+  /** 1 = 草稿，0 = 已发布。 */
+  draft: number
+  createdAt: number
+  updatedAt: number
+  /** 非空 = 在回收站。**正交于 draft**，不覆盖它。 */
+  deletedAt: number | null
+}
+
+export interface ArticleInput {
+  slug: string
+  title: string
+  body: string
+  summary: string | null
+  date: string
+  tags: string
+  draft: number
+  /** 下一次写库的时间戳（created_at 只在首次写入时用它）。 */
+  now: number
+}
+
+const toArticleRow = (r: Record<string, unknown>): ArticleRow => ({
+  slug: String(r.slug),
+  title: String(r.title),
+  body: String(r.body),
+  summary: r.summary === null || r.summary === undefined ? null : String(r.summary),
+  date: String(r.date),
+  tags: String(r.tags),
+  draft: Number(r.draft),
+  createdAt: Number(r.created_at),
+  updatedAt: Number(r.updated_at),
+  deletedAt: r.deleted_at === null || r.deleted_at === undefined ? null : Number(r.deleted_at),
+})
+
+/** 库里有任何一篇文章吗（首次导入的前提）。 */
+export function hasAnyArticle(): boolean {
+  const row = handle().prepare(`SELECT COUNT(*) AS n FROM articles`).get() as { n: number }
+  return row.n > 0
+}
+
+/** 不做读者过滤的取行 —— 只给导入路径用（它要判断「有没有变化」）。 */
+export function getAnyArticleRow(slug: string): ArticleRow | undefined {
+  const row = handle().prepare(`SELECT * FROM articles WHERE slug = ?`).get(slug) as
+    | Record<string, unknown>
+    | undefined
+  return row ? toArticleRow(row) : undefined
+}
+
+/**
+ * **读面出口（读者视角）**：滤掉草稿、滤掉回收站，按日期倒序。
+ * 「零布尔参数」这条纪律就是为了这个函数存在 —— 需要「带草稿」的调用方必须去用管理台/回收站的出口，
+ * 而不是给这里传一个 `includeDrafts`（那种参数在调用点读不出意图，草稿泄漏就靠 diff 时一眼可审来防）。
+ */
+export function listArticlesForReaders(): ArticleRow[] {
+  const rows = handle()
+    .prepare(
+      `SELECT * FROM articles
+        WHERE draft = 0 AND deleted_at IS NULL
+        ORDER BY date DESC, slug ASC`,
+    )
+    .all() as Array<Record<string, unknown>>
+  return rows.map(toArticleRow)
+}
+
+/** **读面出口（读者视角）**：单篇。找不到 / 是草稿 / 在回收站 → `undefined`（调用方给 404）。 */
+export function getArticleForReaders(slug: string): ArticleRow | undefined {
+  const row = handle()
+    .prepare(`SELECT * FROM articles WHERE slug = ? AND draft = 0 AND deleted_at IS NULL`)
+    .get(slug) as Record<string, unknown> | undefined
+  return row ? toArticleRow(row) : undefined
+}
+
+/**
+ * 写一篇文章，**并在同一事务里留一条修订**（#32：每次保存都留一行全文快照）。
+ *
+ * 内容与库里那一行**完全相同时不写**：否则每次「重导一遍没改过的文件」都会堆一条无意义的修订，
+ * 「退回上一版」就会被自己重复的版本淹没。返回值告诉调用方到底写没写。
+ */
+export function upsertArticleWithRevision(input: ArticleInput): 'inserted' | 'updated' | 'unchanged' {
+  const db = handle()
+  const existing = getAnyArticleRow(input.slug)
+
+  if (
+    existing &&
+    existing.title === input.title &&
+    existing.body === input.body &&
+    existing.summary === input.summary &&
+    existing.date === input.date &&
+    existing.tags === input.tags &&
+    existing.draft === input.draft &&
+    existing.deletedAt === null
+  ) {
+    return 'unchanged'
+  }
+
+  const run = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO articles (slug, title, body, summary, date, tags, draft, created_at, updated_at, deleted_at)
+       VALUES (@slug, @title, @body, @summary, @date, @tags, @draft, @now, @now, NULL)
+       ON CONFLICT(slug) DO UPDATE SET
+         title = excluded.title, body = excluded.body, summary = excluded.summary,
+         date = excluded.date, tags = excluded.tags, draft = excluded.draft,
+         updated_at = excluded.updated_at, deleted_at = NULL`,
+    ).run({
+      slug: input.slug,
+      title: input.title,
+      body: input.body,
+      summary: input.summary,
+      date: input.date,
+      tags: input.tags,
+      draft: input.draft,
+      now: input.now,
+    })
+    db.prepare(
+      `INSERT INTO article_revisions (slug, title, body, summary, date, tags, draft, saved_at)
+       VALUES (@slug, @title, @body, @summary, @date, @tags, @draft, @now)`,
+    ).run({
+      slug: input.slug,
+      title: input.title,
+      body: input.body,
+      summary: input.summary,
+      date: input.date,
+      tags: input.tags,
+      draft: input.draft,
+      now: input.now,
+    })
+  })
+  run()
+  return existing ? 'updated' : 'inserted'
+}
+
+/** 库里全部文章的概览（CLI 的 `--list` 用；不做读者过滤，因为它就是给管理员看的）。 */
+export function listAllArticlesForAdmin(): Array<Pick<ArticleRow, 'slug' | 'title' | 'date' | 'draft' | 'deletedAt'>> {
+  const rows = handle()
+    .prepare(`SELECT slug, title, date, draft, deleted_at FROM articles ORDER BY date DESC, slug ASC`)
+    .all() as Array<Record<string, unknown>>
+  return rows.map((r) => ({
+    slug: String(r.slug),
+    title: String(r.title),
+    date: String(r.date),
+    draft: Number(r.draft),
+    deletedAt: r.deleted_at === null || r.deleted_at === undefined ? null : Number(r.deleted_at),
+  }))
 }
 
 export function closeStore(): void {

@@ -341,13 +341,31 @@ try {
   // 载荷同时覆盖「标签闭合逃逸」与「属性内逃逸」两种形态。
   const xss = '<script>alert(1)</script><img src=x onerror=alert(2)>'
   const attrXss = '" onmouseover="alert(3)" x="'
-  const evilDir = path.join(ROOT, 'content')
-  const evilFile = path.join(evilDir, '2026-01-02-xss-probe.md')
-  fs.writeFileSync(
-    evilFile,
-    `---\ntitle: ${JSON.stringify(xss)}\ntags: [${JSON.stringify(xss)}]\nsummary: ${JSON.stringify(attrXss)}\n---\n\n${xss}\n`,
-    'utf8',
-  )
+  // ⚠ 真源搬进 SQLite 之后（票 #54），**往 `content/` 写文件根本没有读者** —— 那是老夹具的做法。
+  // 现在直接往库里写一行，并用**同一个** markdown → 文档的转换器造 body：
+  // 这样这一面对「导入器」也顺带是一次回归，而不是绕过它造一条只有渲染器认得的数据。
+  const { markdownToDoc } = await import('../dist/article-import.js')
+  const { default: Database } = await import('better-sqlite3')
+  const XSS_SLUG = 'xss-probe'
+  const insertArticleFixture = () => {
+    const db = new Database(TEST_DB)
+    const now = Date.now()
+    const body = JSON.stringify(markdownToDoc(xss).doc.toJSON())
+    db.prepare(
+      `INSERT INTO articles (slug, title, body, summary, date, tags, draft, created_at, updated_at, deleted_at)
+       VALUES (@slug, @title, @body, @summary, @date, @tags, 0, @now, @now, NULL)
+       ON CONFLICT(slug) DO UPDATE SET
+         title = excluded.title, body = excluded.body, summary = excluded.summary,
+         tags = excluded.tags, draft = 0, deleted_at = NULL, updated_at = excluded.updated_at`,
+    ).run({ slug: XSS_SLUG, title: xss, body, summary: attrXss, date: '2026-01-02', tags: JSON.stringify([xss]), now })
+    db.close()
+  }
+  const deleteArticleFixture = () => {
+    const db = new Database(TEST_DB)
+    db.prepare(`DELETE FROM articles WHERE slug = ?`).run(XSS_SLUG)
+    db.close()
+  }
+  insertArticleFixture()
   try {
     // ── 注入面 1：文章标题 / 摘要 / 标签（列表页）──
     const listPage = await authed('/posts')
@@ -404,7 +422,62 @@ try {
     // ── 注入面 7：站点标题/描述（来自环境变量 SITE_TITLE）──
     check('注入面7 站点标题被正确渲染', listPage.body.includes('验收站'), 'SITE_TITLE 未出现在页面')
   } finally {
-    fs.rmSync(evilFile, { force: true })
+    deleteArticleFixture()
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[草稿纪律（迁移后必须一字不变）]')
+  // ══════════════════════════════════════════════════════════
+  // 为什么这条断言归本票（#54）：草稿过滤原来在 `listPosts()` 的内存里，本票把它挪进了 SQL
+  // （`listArticlesForReaders()` 的 `WHERE draft = 0`）—— 挪动过滤位置正是最容易漏草稿的动作。
+  //
+  // ⚠ 写法按 ADR 0004 的纪律：**「草稿不在列表里」是一条否定断言，如果那篇根本没入库，它也照样通过。**
+  // 所以下面配了**对照组**：把它改成已发布，它必须**当场出现**。少了对照组，前两条是恒真的
+  // ——研究 §4 核实过，本仓此前一条草稿断言都没有，正是这种恒真断言留下的空档。
+  {
+    const DRAFT_SLUG = 'draft-probe'
+    const DRAFT_TITLE = '草稿探针'
+    const DRAFT_TAG = '草稿标记'
+    const setDraftState = (draft) => {
+      const db = new Database(TEST_DB)
+      const now = Date.now()
+      const body = JSON.stringify(markdownToDoc('这一篇用来验证草稿纪律。').doc.toJSON())
+      db.prepare(
+        `INSERT INTO articles (slug, title, body, summary, date, tags, draft, created_at, updated_at, deleted_at)
+         VALUES (?, ?, ?, '', '2026-01-03', ?, ?, ?, ?, NULL)
+         ON CONFLICT(slug) DO UPDATE SET draft = excluded.draft, deleted_at = NULL, updated_at = excluded.updated_at`,
+      ).run(DRAFT_SLUG, DRAFT_TITLE, body, JSON.stringify([DRAFT_TAG]), draft, now, now)
+      db.close()
+    }
+    const dropDraftProbe = () => {
+      const db = new Database(TEST_DB)
+      db.prepare(`DELETE FROM articles WHERE slug = ?`).run(DRAFT_SLUG)
+      db.close()
+    }
+
+    setDraftState(1)
+    try {
+      const list = await authed('/posts')
+      check('草稿：**不在**文章列表里', !list.body.includes(DRAFT_TITLE), '列表页出现了草稿标题')
+      const byTag = await authed('/tags/' + encodeURIComponent(DRAFT_TAG))
+      check('草稿：标签页里也没有它', !byTag.body.includes(DRAFT_TITLE))
+      // ⚠ 判据不能写成「标签页里搜不到这个标签名」——那个页面的 `<h1>` 回显的正是 URL 里的标签
+      // （`标签：草稿标记`），所以字符串**按设计**就该出现。要在**标签条**上验：
+      // 标签条取的是 `listTags()`（读面出口），草稿的标签不该进得去。
+      check('草稿：它的标签也不在列表页的标签条里', !list.body.includes(DRAFT_TAG))
+      const direct = await authed('/posts/' + DRAFT_SLUG)
+      check('草稿：直链 **404**（不是「凭链接可预览」）', direct.status === 404, `status=${direct.status}`)
+
+      // ── 对照组：证明上面三条不是恒真 ──
+      setDraftState(0)
+      const listAfter = await authed('/posts')
+      check('对照组：**改成已发布后它当场出现**（证明前三条不是恒真）', listAfter.body.includes(DRAFT_TITLE))
+      const directAfter = await authed('/posts/' + DRAFT_SLUG)
+      check('对照组：已发布的直链 200', directAfter.status === 200, `status=${directAfter.status}`)
+      check('对照组：正文真的渲染了', directAfter.body.includes('验证草稿纪律'))
+    } finally {
+      dropDraftProbe()
+    }
   }
 
   // ══════════════════════════════════════════════════════════

@@ -1,13 +1,35 @@
 /**
- * 内容层：把 content/ 下的 Markdown 读成文章对象。
- * 设计取舍：进程内做缓存 + 按 mtime 失效。文章数量在个人站这个量级（几百篇以内），
- * 全量重解析的成本远低于维护一套索引文件的成本。
+ * 内容层：文章的**读面出口**与**导入路径**。
+ *
+ * 真源是 SQLite 的 `articles` 表（票 #32 定下的）。`content/*.md` 只在**首次导入**时读一次
+ * ——此后改文件对站点**没有任何影响**（启动时只打一行警告）。这不是「暂时」的状态：
+ * 编辑入口归网页（#50），在它落地之前，改文章靠 `src/cli/articles.js --reimport` 这个**逃生口**。
+ *
+ * 本文件里有两类东西，别混：
+ *
+ * - **读面出口**（`listPosts` / `getPost` / `listTags`）：**读者视角**，滤草稿 + 滤已删除，
+ *   **零布尔参数**（见 `src/store.ts` 里 `listArticlesForReaders()` 的注释）。
+ * - **导入路径**（`importArticlesIfEmpty` / `reimportArticlesFromDisk`）：写库，只有启动与 CLI 调它。
+ *
+ * 渲染**不在这里**：文档 → HTML 是 `src/article-html.ts` 的闭集发射器。
+ * 本文件只做「取行 → 校验文档 → 渲染 → 组装 Post」这层编排，以及导入时的 front-matter 规则。
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import matter from 'gray-matter'
-import MarkdownIt from 'markdown-it'
+import type { Node as PMNode } from 'prosemirror-model'
 import { config } from './config.js'
+import { docFromJson, docToJson } from './article-doc.js'
+import { docToHtml } from './article-html.js'
+import { markdownToDoc } from './article-import.js'
+import {
+  getArticleForReaders,
+  getAnyArticleRow,
+  hasAnyArticle,
+  listArticlesForReaders,
+  upsertArticleWithRevision,
+  type ArticleRow,
+} from './store.js'
 
 export interface PostMeta {
   slug: string
@@ -23,20 +45,116 @@ export interface Post extends PostMeta {
   readingMinutes: number
 }
 
-const md = new MarkdownIt({
-  html: false, // 内容是自己写的，但关掉内联 HTML 可以少一个 XSS 面
-  linkify: true,
-  typographer: true,
-})
+// ── 组装 ──────────────────────────────────────────────────────
 
-interface CacheEntry {
-  mtimeMs: number
-  post: Post
+/** 文档里的纯文本（块之间补空格，否则相邻段落会粘成一个词）。 */
+function plainText(node: PMNode): string {
+  let out = ''
+  node.forEach((child) => {
+    if (child.isText) {
+      out += child.text ?? ''
+      return
+    }
+    if (child.type.name === 'hardBreak') {
+      out += ' '
+      return
+    }
+    const inner = plainText(child)
+    out += child.isBlock ? ` ${inner} ` : inner
+  })
+  return out
 }
 
-const cache = new Map<string, CacheEntry>()
+/** 没写 summary 时从正文里摘一句。入参已经是纯文本，所以不必再去标记。 */
+function deriveSummary(plain: string): string {
+  const text = plain.replace(/\s+/g, ' ').trim()
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text
+}
 
-/** 从文件名得到 slug：允许 content/2026-01-01-hello.md 这种带日期的写法。 */
+function parseTags(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed.map((t) => String(t)).filter(Boolean)
+  } catch {
+    /* 落到下面：当成空标签，并已经在下面登记过日志 */
+  }
+  return []
+}
+
+/**
+ * 一行 → 一篇可渲染的文章。
+ * 坏内容在这里被**接住**：跳过该篇并留下日志，而不是让它冒到 HTTP 层变成 500
+ * （沿用旧 `content.ts` 对「一篇坏文章不该让整站 500」的取舍；「显眼」由这行 `console.error` 负责）。
+ */
+function toPost(row: ArticleRow): Post | null {
+  try {
+    const doc = docFromJson(JSON.parse(row.body))
+    const plain = plainText(doc)
+    const summary = row.summary?.trim() ? row.summary.trim() : deriveSummary(plain)
+    const dense = plain.replace(/\s+/g, '').length
+    return {
+      slug: row.slug,
+      title: row.title,
+      date: row.date,
+      summary,
+      tags: parseTags(row.tags),
+      draft: row.draft === 1,
+      html: docToHtml(doc),
+      readingMinutes: Math.max(1, Math.round(dense / 400)),
+    }
+  } catch (err) {
+    console.error(`[content] 跳过无法渲染的文章 ${row.slug}：${(err as Error).message}`)
+    return null
+  }
+}
+
+// ── 读面出口（读者视角；滤草稿 + 滤已删除）──────────────────────
+
+/** 读面出口 1：读者能看到的文章，按日期倒序。 */
+export function listPosts(): Post[] {
+  const posts: Post[] = []
+  for (const row of listArticlesForReaders()) {
+    const post = toPost(row)
+    if (post) posts.push(post)
+  }
+  return posts
+}
+
+/** 读面出口 2：按 slug 取一篇读者能看到的。找不到 / 是草稿 / 在回收站 → `undefined`（→ 404）。 */
+export function getPost(slug: string): Post | undefined {
+  const row = getArticleForReaders(slug)
+  if (!row) return undefined
+  return toPost(row) ?? undefined
+}
+
+/** 全部标签及文章数，按出现次数倒序。复用读面出口 1，所以草稿不会漏进标签页。 */
+export function listTags(): Array<{ tag: string; count: number }> {
+  const counts = new Map<string, number>()
+  for (const post of listPosts()) {
+    for (const tag of post.tags) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+}
+
+// ── 导入路径 ──────────────────────────────────────────────────
+
+export interface ImportSummary {
+  inserted: number
+  updated: number
+  unchanged: number
+  /** slug 与本次已导入的重复，被跳过（先到者胜）。 */
+  skipped: number
+  /** **解析失败**的文件数。它与 `skipped` 分开：CLI 靠它决定退出码，别把「重名跳过」也算成失败。 */
+  failed: number
+  /** 值得说出来但不阻断导入的事（认不出的构造、不安全地址、重复 slug……）。 */
+  warnings: string[]
+}
+
+/** 从文件名得到 slug：允许 `content/2026-01-01-hello.md` 这种带日期的写法。 */
 function slugFromFile(file: string): string {
   return path
     .basename(file, path.extname(file))
@@ -64,86 +182,131 @@ function toTags(value: unknown): string[] {
   return []
 }
 
-/** 没写 summary 时从正文里摘一句，避免列表页出现空描述。 */
-function deriveSummary(body: string): string {
-  const plain = body
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[#>*_`~-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return plain.length > 120 ? `${plain.slice(0, 120)}…` : plain
-}
-
-function parseFile(file: string): Post {
-  const stat = fs.statSync(file)
-  const raw = fs.readFileSync(file, 'utf8')
-  const parsed = matter(raw)
-  const data = parsed.data as Record<string, unknown>
-
-  const slug = typeof data.slug === 'string' && data.slug.trim() ? data.slug.trim() : slugFromFile(file)
-  const body = parsed.content.trim()
-  const words = body.replace(/\s+/g, '').length
-
-  return {
-    slug,
-    title:
-      typeof data.title === 'string' && data.title.trim()
-        ? data.title.trim()
-        : slug.replace(/[-_]/g, ' '),
-    date: toIsoDate(data.date, stat.mtimeMs),
-    summary:
-      typeof data.summary === 'string' && data.summary.trim() ? data.summary.trim() : deriveSummary(body),
-    tags: toTags(data.tags),
-    draft: data.draft === true,
-    html: md.render(body),
-    readingMinutes: Math.max(1, Math.round(words / 400)),
+/**
+ * 读 `content/` 下的 Markdown 并写库。
+ *
+ * **`date` 的回落**：这里保留「解析失败 → 文件 mtime」，这是**导入路径的显式例外** ——
+ * 网页新建的文章没有文件、没有 mtime，那边回落的是创建时间（#32 的日期决定）。
+ * 两边的回落值不同，是因为两边的输入本来就不同，不是为了省事。
+ */
+function importFromDisk(): ImportSummary {
+  const summary: ImportSummary = {
+    inserted: 0,
+    updated: 0,
+    unchanged: 0,
+    skipped: 0,
+    failed: 0,
+    warnings: [],
   }
-}
 
-/** 列出全部已发布文章，按日期倒序。draft: true 的不出现在列表里。 */
-export function listPosts(): Post[] {
-  if (!fs.existsSync(config.contentDir)) return []
+  if (!fs.existsSync(config.contentDir)) {
+    summary.warnings.push(`内容目录不存在，没有可导入的文件：${config.contentDir}`)
+    return summary
+  }
+
   const files = fs
     .readdirSync(config.contentDir)
     .filter((f) => /\.(md|markdown)$/i.test(f))
-    .map((f) => path.join(config.contentDir, f))
+    .sort()
 
-  const posts: Post[] = []
+  /** 同一次导入里 slug 撞车时**保留第一个**（与旧的 `getPost()` 用 `find()` 的语义一致），并把这件事说出来。 */
+  const seen = new Map<string, string>()
+
   for (const file of files) {
+    const full = path.join(config.contentDir, file)
     try {
-      const stat = fs.statSync(file)
-      const cached = cache.get(file)
-      if (cached && cached.mtimeMs === stat.mtimeMs) {
-        posts.push(cached.post)
+      const stat = fs.statSync(full)
+      const parsed = matter(fs.readFileSync(full, 'utf8'))
+      const data = parsed.data as Record<string, unknown>
+
+      const slug = typeof data.slug === 'string' && data.slug.trim() ? data.slug.trim() : slugFromFile(full)
+
+      const previous = seen.get(slug)
+      if (previous) {
+        summary.skipped += 1
+        summary.warnings.push(`slug「${slug}」在 ${previous} 已经用过，${file} 被跳过（先到者胜）`)
         continue
       }
-      const post = parseFile(file)
-      cache.set(file, { mtimeMs: stat.mtimeMs, post })
-      posts.push(post)
+      seen.set(slug, file)
+
+      const body = parsed.content.trim()
+      const { doc, warnings } = markdownToDoc(body)
+      for (const w of warnings) summary.warnings.push(`${file}：${w}`)
+
+      const result = upsertArticleWithRevision({
+        slug,
+        title:
+          typeof data.title === 'string' && data.title.trim()
+            ? data.title.trim()
+            : slug.replace(/[-_]/g, ' '),
+        body: JSON.stringify(docToJson(doc)),
+        summary:
+          typeof data.summary === 'string' && data.summary.trim() ? data.summary.trim() : null,
+        date: toIsoDate(data.date, stat.mtimeMs),
+        tags: JSON.stringify(toTags(data.tags)),
+        draft: data.draft === true ? 1 : 0,
+        now: Date.now(),
+      })
+      if (result === 'inserted') summary.inserted += 1
+      else if (result === 'updated') summary.updated += 1
+      else summary.unchanged += 1
     } catch (err) {
-      // 一篇坏文章不该让整站 500：跳过并留下日志。
-      console.error(`[content] 跳过无法解析的文章 ${file}：`, (err as Error).message)
+      // 一个坏文件不该让整段导入停摆 —— 但必须**留下名字**，不许静默。
+      summary.failed += 1
+      summary.warnings.push(`${file} 解析失败，已跳过：${(err as Error).message}`)
     }
   }
 
-  return posts.filter((p) => !p.draft).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  return summary
 }
 
-export function getPost(slug: string): Post | undefined {
-  return listPosts().find((p) => p.slug === slug)
+function reportSummary(summary: ImportSummary): void {
+  console.log(
+    `[content] 导入完成：新增 ${summary.inserted} · 更新 ${summary.updated} · 未变 ${summary.unchanged} · 重名跳过 ${summary.skipped} · 解析失败 ${summary.failed}`,
+  )
+  for (const w of summary.warnings) console.warn(`[content] 注意：${w}`)
 }
 
-/** 全部标签及文章数，按出现次数倒序。 */
-export function listTags(): Array<{ tag: string; count: number }> {
-  const counts = new Map<string, number>()
-  for (const post of listPosts()) {
-    for (const tag of post.tags) {
-      counts.set(tag, (counts.get(tag) ?? 0) + 1)
-    }
+/**
+ * **首次导入**：库里一篇文章都没有时才从 `content/*.md` 读（与 `targets.json`、`.env` 同一条规则）。
+ * 返回 `null` = 库非空，什么都没做。
+ */
+export function importArticlesIfEmpty(): ImportSummary | null {
+  if (hasAnyArticle()) return null
+  const summary = importFromDisk()
+  reportSummary(summary)
+  return summary
+}
+
+/**
+ * **逃生口**：忽略「库为空」这个前提，按文件重导。
+ *
+ * 它是 #50 落地之前**唯一的编辑通道**：改 `content/*.md` → 跑 `node dist/cli/articles.js --reimport`。
+ * 只 upsert，**不删**库里多出来的行（删是回收站的语义，归 #51）；
+ * 没改动的文章不会写库、也不会堆一条重复修订（见 `upsertArticleWithRevision`）。
+ */
+export function reimportArticlesFromDisk(): ImportSummary {
+  const summary = importFromDisk()
+  reportSummary(summary)
+  return summary
+}
+
+/** 启动时的那行警告：文件不再是输入了。只在真的存在文件时打，免得凭空吓人。 */
+export function warnContentDirIsNoLongerInput(): void {
+  try {
+    if (!fs.existsSync(config.contentDir)) return
+    const files = fs.readdirSync(config.contentDir).filter((f) => /\.(md|markdown)$/i.test(f))
+    if (!files.length) return
+    console.warn(
+      `[content] ${config.contentDir} 下的 ${files.length} 个文件不再是输入（真源已搬到 SQLite）；` +
+        `要按文件重导请跑 node dist/cli/articles.js --reimport`,
+    )
+  } catch {
+    /* 这里只是提醒，读不到目录不值得让启动失败 */
   }
-  return [...counts.entries()]
-    .map(([tag, count]) => ({ tag, count }))
-    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+}
+
+/** 给 CLI 的 `--list` 用：库里那一行的原始状态（不过读者过滤）。 */
+export function peekArticleRow(slug: string): ArticleRow | undefined {
+  return getAnyArticleRow(slug)
 }

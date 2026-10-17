@@ -202,7 +202,14 @@ node dist/cli/backup.js --verify <file>  # 校验一份备份（恢复前必做�
 
 ## 写一篇文章
 
-在 `content/` 下放一个 `.md`：
+> ⚠ **2026-10-17 起，`content/` 下的 Markdown 不再是真源**（票 [#32](https://github.com/Lkyloveaw/lkyloveaw-home/issues/32) / [#54](https://github.com/Lkyloveaw/lkyloveaw-home/issues/54)）：
+> 文章的真源是 SQLite 的 `articles` 表，`content/*.md` **只在「首次导入」时读一次**（库为空时）。
+> **网页写路径还没落地**（[#50](https://github.com/Lkyloveaw/lkyloveaw-home/issues/50) 在做），
+> 在那之前改文章的办法是：改 `content/` 下的文件 → `node dist/cli/articles.js --reimport`。
+> 改完文件**直接重启是没有效果的**（启动时只打一行警告），这不是 bug。
+> 下面这段保留的是**导入格式**的说明 —— 它仍然准确地描述了「一个 `.md` 该怎么写」。
+
+在 `content/` 下放一个 `.md`（**它会在首次导入时被读进库**）：
 
 ```markdown
 ---
@@ -217,9 +224,15 @@ summary: 可选的一句话摘要
 
 文件名形如 `2026-01-01-hello.md` 时，日期前缀会被去掉，slug 为 `hello`。
 
+**导进库之后，正文以结构化文档保存**，读面按**闭集 schema** 在服务端渲染
+（`src/article-doc.ts` / `src/article-html.ts`）。导入器认得的构造见 `src/article-import.ts`：
+`##` 标题 · 有序/无序列表 · 围栏代码块（**连语言标注一起**）· 引用块 · GFM 表格 · 行内代码 / 粗体 / 斜体 / 链接 / 图片。
+**认不出的构造会打警告**（`--reimport` 的输出里），不会被静默丢掉。
+
 **`draft: true` 的文章不出现在任何列表里，也（按设计）不能通过直链访问**——
-直接访问 `/posts/<slug>` 会得到 **404**。原因是 `getPost()` 只从 `listPosts()` 的结果里找，
-而后者已经过滤掉草稿。
+直接访问 `/posts/<slug>` 会得到 **404**。原因是读面出口只取「已发布且不在回收站」的行：
+`listArticlesForReaders()` 的 `WHERE draft = 0 AND deleted_at IS NULL`，
+而 `getPost()` 只从同一个出口的结果里找。
 
 > 这条曾经与实现矛盾：旧版 README 写着「不出现在列表里，**但可以通过直链访问**」，
 > 而实测是 404。**实现比文档更严格**，所以改的是文档（2026-10-15 决定）。

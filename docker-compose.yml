@@ -19,8 +19,11 @@ services:
     volumes:
       # 历史库：必须可写
       - ./data:/app/data
-      # 目标清单与内容：改完重启容器即可生效，容器内只读
+      # 目标清单：改完重启容器即可生效，容器内只读
       - ./targets.json:/app/targets.json:ro
+      # 内容目录：**只在首次导入时读一次** —— 文章的真源已搬进 SQLite 的 articles 表（票 #32/#54）。
+      # 改这里的 Markdown 对站点没有任何影响；要按文件重导跑 `node dist/cli/articles.js --reimport`。
+      # 仍然只读挂进容器：导入只需要读，不需要写。
       - ./content:/app/content:ro
     healthcheck:
       test:

@@ -6,7 +6,13 @@ import path from 'node:path'
 import Fastify from 'fastify'
 import fastifyStatic from '@fastify/static'
 import { assertSessionSecret, config } from './config.js'
-import { getPost, listPosts, listTags } from './content.js'
+import {
+  getPost,
+  importArticlesIfEmpty,
+  listPosts,
+  listTags,
+  warnContentDirIsNoLongerInput,
+} from './content.js'
 import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
@@ -86,6 +92,10 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   initStore()
   initUsers()
+  // 首次导入：**库里一篇文章都没有时**才读 content/*.md（与 targets.json、.env 同一条规则）。
+  // 之后那些文件就不再是输入 —— 改它们对站点没有任何影响，只由下面这行提醒一次。
+  importArticlesIfEmpty()
+  warnContentDirIsNoLongerInput()
 
   // 存量脏数据清洗：历史 `error` 列里可能残留含 URL/凭证的异常原文。
   // 写入侧已修，但那只影响新行——已落库的得在这里洗掉。幂等，启动时自动跑。
@@ -233,7 +243,9 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   })
 
   app.get('/posts/:slug', async (req, reply) => {
-    const post = getPost((req.params as { slug: string }).slug)
+    // ⚠ **必须解码**，与 /tags/:tag 对齐。少了这一步，「slug 允许中文」就是假的：
+    // /posts/中文slug 会 404，而库里明明有那一篇（研究 §2.2 记过这个不对称）。
+    const post = getPost(decodeURIComponent((req.params as { slug: string }).slug))
     if (!post) {
       reply.code(404).type('text/html; charset=utf-8')
       return notFoundPage(site)
