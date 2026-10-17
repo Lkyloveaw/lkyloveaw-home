@@ -23,6 +23,16 @@ import { markdownToDoc } from '../dist/article-import.js'
 
 const root = path.resolve(import.meta.dirname, '..')
 
+// ⚠ **沙箱必须在任何「会加载 `config.ts`」的 import 之前设好。**
+// `config.ts` 在**模块加载时**就把 env 读成常量，而 ESM 的模块缓存意味着**第一次加载之后就改不动了**：
+// 一旦某个 import 先把 config 拉进来，之后再设 `DATABASE_PATH` 是无效的。
+//
+// 这个坑我在这份文件里**真的踩过一次**：第六节的 `import('../dist/content.js')` 先把 config 定在了真库上，
+// 第七节才设沙箱 —— 于是对象规则的夹具**写进了 `data/availability.sqlite`**（还留了一条修订行，事后手工清掉）。
+// 所以：沙箱在这里就建，而且**整份脚本自始至终不碰真库**。
+const sandbox = fs.mkdtempSync(path.join(root, '.article-check-sandbox-'))
+process.env.DATABASE_PATH = path.join(sandbox, 'check.sqlite')
+
 /** 与读面同参 —— 对比必须建立在同一套解析选项上。 */
 const md = new MarkdownIt({ html: false, linkify: true, typographer: true })
 
@@ -206,10 +216,8 @@ check(
 // ─────────────────────────────────────────────────────────────
 console.log('\n== 七、对象规则（规格 #48 的 slug / 标签 / 上限） ==')
 
-// ⚠ 必须**先**设环境变量再动态 import：`config.ts` 在模块加载时就读 env，
-//    静态 import 会被提升到赋值之前，于是你会连到一个不该连的库（unit-check.mjs 同样的坑）。
-const sandbox = fs.mkdtempSync(path.join(root, '.article-rules-sandbox-'))
-process.env.DATABASE_PATH = path.join(sandbox, 'rules.sqlite')
+// ⚠ 这里**不再**建沙箱：沙箱与 `DATABASE_PATH` 已经在文件顶部设好，
+// 因为必须早于任何会加载 `config.ts` 的 import（详见那里的注释 —— 这是踩过的坑，不是理论）。
 const rules = await import('../dist/article-rules.js')
 const store = await import('../dist/store.js')
 
