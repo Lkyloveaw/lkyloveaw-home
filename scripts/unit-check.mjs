@@ -363,6 +363,113 @@ try {
 }
 
 console.log(`\n${'─'.repeat(60)}`)
+// ════════════════════════════════════════════════════
+section('sessions: 判定表 24 用例（docs/session-revoke-decision.md §5）')
+// ════════════════════════════════════════════════════
+// ⚠ 这张表在产出它的那次会话里**一行都没实测过**（那次没有命令通道，文档 §11 末尾承认了）。
+//    本节的职责就是把它**跑成绿**；跑出与文档不一致的行，**改文档**，不要改断言去迁就实现
+//    —— 第 13 行（老 cookie 必须 malformed）与第 24 行（登出≠踢所有设备）尤其容易被「顺手放宽」。
+{
+  const SECRET = config.sessionSecret
+  const now = 1_800_000_000_000
+  const TTL = 7 * 24 * 60 * 60 * 1000
+  const sessionsStore = await import(mod('dist/sessions-store.js'))
+
+  // 拿一个**真实**账号：会话行要 JOIN 得到它（顶层那个 `alice`，用户名已归一为小写）。
+  // `pv` 必须**现读**：前面 CLI 那节跑过 `--revoke-sessions`，token_version 已经不是 1 了。
+  const aliceId = alice.id
+  const pv = users.findById(aliceId).token_version
+
+  /** 判定所需状态的字面量 —— 判定表可以直接构造它，不必造库、不必造 HTTP。 */
+  const stateFor = (sid, sessionOver = {}, userOver = {}) => ({
+    session: { sid, uid: aliceId, pv, expiresAt: now + TTL, revokedAt: null, ...sessionOver },
+    user: { id: aliceId, enabled: 1, tokenVersion: pv, ...userOver },
+  })
+  const mk = (over = {}) => session.signSession(SECRET, { uid: aliceId, exp: now + TTL, pv, sid: 'S', ...over })
+  const d = (token, state, at = now) => session.decideSession(SECRET, token, state, at)
+  /** 用**指定的载荷字符串**签名（造畸形载荷用；签名本身仍然是真的）。 */
+  const raw = (payloadText) => {
+    const pb = Buffer.from(payloadText).toString('base64url')
+    return pb + '.' + crypto.createHmac('sha256', SECRET).update(pb).digest().toString('base64url')
+  }
+
+  check('1 签名正确、未过期、sid 有行、enabled=1、pv 一致 → ok', d(mk(), stateFor('S')) === 'ok')
+  check('2 空 / 缺失 cookie → no-token', d('', null) === 'no-token' && d(undefined, null) === 'no-token' && d(null, null) === 'no-token')
+  check('3 无 `.` 分隔符 → malformed', d('garbage', null) === 'malformed')
+  check('4 `.` 在开头 → malformed', d('.sig', null) === 'malformed')
+  check('5 `.` 在结尾 → malformed', d(mk().split('.')[0] + '.', null) === 'malformed')
+  check('6 签名被截断（长度不等）→ bad-signature，**不抛异常**', d(mk().split('.')[0] + '.short', null) === 'bad-signature')
+  check('7 签名改一个字符（等长）→ bad-signature', (() => {
+    const t = mk()
+    const cut = t.lastIndexOf('.') + 1
+    const sig = t.slice(cut)
+    const flipped = (sig[0] === 'A' ? 'B' : 'A') + sig.slice(1)
+    return d(t.slice(0, cut) + flipped, null) === 'bad-signature'
+  })())
+  check('8 换了 SESSION_SECRET 后验旧 token → bad-signature', (() => {
+    const other = session.signSession('k'.repeat(32) + '-other', { uid: aliceId, exp: now + TTL, pv, sid: 'S' })
+    return d(other, stateFor('S')) === 'bad-signature'
+  })())
+  check('9 改了载荷但签名没跟着换 → bad-signature', (() => {
+    const t = mk()
+    const cut = t.lastIndexOf('.') + 1
+    const forged = Buffer.from(JSON.stringify({ uid: aliceId, exp: now + TTL, pv, sid: '另一个' })).toString('base64url')
+    return d(forged + '.' + t.slice(cut), stateFor('S')) === 'bad-signature'
+  })())
+  check('10 载荷不是合法 JSON → malformed', d(raw('这不是 JSON'), null) === 'malformed')
+  check('11 载荷缺 exp → malformed', d(raw(JSON.stringify({ uid: aliceId, pv, sid: 'S' })), stateFor('S')) === 'malformed')
+  check('12 exp 是字符串（非数字）→ malformed', d(raw(JSON.stringify({ uid: aliceId, exp: String(now + TTL), pv, sid: 'S' })), stateFor('S')) === 'malformed')
+  check('13 载荷缺 sid（**这正是上线那一刻的既有 cookie**）→ malformed', d(raw(JSON.stringify({ uid: aliceId, exp: now + TTL, pv })), stateFor('S')) === 'malformed')
+  check('14 sid 是空字符串 → malformed', d(raw(JSON.stringify({ uid: aliceId, exp: now + TTL, pv, sid: '' })), stateFor('S')) === 'malformed')
+  check('15 now === exp → expired', d(mk({ exp: now }), stateFor('S'), now) === 'expired')
+  check('16 now === exp - 1 → ok（边界的另一侧）', d(mk({ exp: now + 1 }), stateFor('S'), now) === 'ok')
+  check('17 state === null（会话行与账号行都查不到）→ session-unknown', d(mk(), null) === 'session-unknown')
+  check('18 会话行不存在（已清理 / 手改 sid）→ session-unknown', (() => {
+    const absent = sessionsStore.findSessionState('这个-sid-库里没有')
+    return absent === null && d(mk(), absent) === 'session-unknown'
+  })())
+  check('19 会话行 revoked_at 非空 → revoked', d(mk(), stateFor('S', { revokedAt: now - 1 })) === 'revoked')
+  check('20 会话行 expires_at <= now（载荷窗口内）→ expired', d(mk(), stateFor('S', { expiresAt: now })) === 'expired')
+  check('21 会话行在、账号行不在 → unknown-user', d(mk(), { session: stateFor('S').session, user: null }) === 'unknown-user')
+  check('22 enabled = 0 → disabled', d(mk(), stateFor('S', {}, { enabled: 0 })) === 'disabled')
+  check('23 user.tokenVersion !== session.pv → stale-version', d(mk(), stateFor('S', {}, { tokenVersion: pv + 1 })) === 'stale-version')
+
+  // ── 第 24 行：**这张票存在的理由** ──
+  // 它是「登出 = 真吊销」与「登出 ≠ 踢掉所有设备」的**同时**证明。
+  // 只断言「登出后原 cookie 失效」是不够的 —— 那样把登出实现成 bumpTokenVersion 也能过，
+  // 而用户要的恰恰是**不要**那样（map Notes 第 2 条）。
+  {
+    const a = sessionsStore.createSession(aliceId, pv, TTL, now)
+    const b = sessionsStore.createSession(aliceId, pv, TTL, now)
+    const tokenA = session.signSession(SECRET, { uid: aliceId, exp: now + TTL, pv, sid: a.sid })
+    const tokenB = session.signSession(SECRET, { uid: aliceId, exp: now + TTL, pv, sid: b.sid })
+
+    // 前提先成立：两台设备**此前都是 ok**（否则下面的断言是恒真的）
+    check('24 前提：登出前，A 设备 ok', d(tokenA, sessionsStore.findSessionState(a.sid), now) === 'ok')
+    check('24 前提：登出前，B 设备 ok', d(tokenB, sessionsStore.findSessionState(b.sid), now) === 'ok')
+
+    const revoked = sessionsStore.revokeSession(a.sid, now)
+    check('24 前提：吊销 A 影响 **1** 行', revoked === 1, 'changes=' + revoked)
+    check('24 登出后 A 设备 → revoked', d(tokenA, sessionsStore.findSessionState(a.sid), now) === 'revoked')
+    check('24 **登出后 B 设备仍然 ok**（登出 ≠ 踢掉所有设备）', d(tokenB, sessionsStore.findSessionState(b.sid), now) === 'ok')
+    check('24 重复吊销是幂等的（changes = 0）', sessionsStore.revokeSession(a.sid, now) === 0)
+
+    // 「登出全部设备」才是账号级的
+    check('24 revokeUserSessions 吊销该账号**剩余**的会话（1 行）', sessionsStore.revokeUserSessions(aliceId, now) === 1)
+    check('24 账号级吊销后 B 设备也失效', d(tokenB, sessionsStore.findSessionState(b.sid), now) === 'revoked')
+  }
+
+  // ── 清理：只删死行（§7）──
+  {
+    const live = sessionsStore.createSession(aliceId, pv, TTL, now)
+    const expired = sessionsStore.createSession(aliceId, pv, 1, now - 1000)
+    const removed = sessionsStore.sweepSessions(now)
+    check('sweep：删掉了已过期与已吊销的行（计数 > 0）', removed > 0, 'changes=' + removed)
+    check('sweep：**活着的行一行不动**', sessionsStore.findSessionState(live.sid) !== null)
+    check('sweep：过期的那行真的没了', sessionsStore.findSessionState(expired.sid) === null)
+  }
+}
+
 if (failed === 0) {
   console.log(`✅ 全部通过：${passed} 项`)
 } else {

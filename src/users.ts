@@ -8,6 +8,7 @@
  */
 import bcrypt from 'bcryptjs'
 import { initStore } from './store.js'
+import { initSessionsTable } from './sessions-store.js'
 
 /**
  * bcrypt 代价因子。
@@ -96,6 +97,10 @@ export function initUsers(): void {
     db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`)
     console.log('[users] 已为 users 表补上 token_version 列（既有账号落 1，不会掉线）')
   }
+  // 会话记录表：**入口留在本函数**（它已经是「账号域的迁移入口」——`token_version` 也在这里补），
+  // 而 DDL 留在 `sessions-store.ts` 跟会话代码作伴：入口在一处、知识在一处。
+  initSessionsTable()
+
   initialized = true
 }
 

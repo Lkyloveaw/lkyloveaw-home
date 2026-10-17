@@ -17,14 +17,21 @@ export const SESSION_COOKIE_NAME = 'session'
 /** cookie 默认存活 7 天。与 `exp` 必须一致，否则会出现「浏览器留着但服务端判过期」。 */
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-/** 载荷。注意只有这三个字段——不放 username / role，见 `docs/session-decision.md` §5。 */
+/**
+ * 载荷。**仍然不放 username / role**（见 `docs/session-decision.md` §5）—— 角色在库里查，不进 cookie。
+ *
+ * `sid` 是 #37 加的（`docs/session-revoke-decision.md` §2）：它指向 `sessions` 表的一行，
+ * 让「登出」能变成**真吊销**而不只是清本机 cookie。
+ */
 export interface SessionPayload {
   /** `users.id`。存 id 而不是 username：用户名可改，id 不可改。 */
   uid: number
   /** 绝对过期时刻（epoch ms）。签发时写死，不滑动续期。 */
   exp: number
-  /** 凭据代次，与 `users.token_version` 比对。失配即视为未登录。 */
+  /** 凭据代次快照，与 `sessions.pv` 同值；判定时比的是「`sessions.pv` vs 当前 `users.token_version`」。 */
   pv: number
+  /** 会话记录的主键。**没有它的 token 一律 `malformed`**（那正是升级前的老 cookie）。 */
+  sid: string
 }
 
 /** 校验结果。闸门只需判断 `=== 'ok'`，其余值仅用于日志与排查。 */
@@ -56,9 +63,21 @@ export function signSession(secret: string, payload: SessionPayload): string {
   return `${pb}.${sign(secret, pb)}`
 }
 
-/** 便捷封装：按当前时间 + TTL 造一个载荷并签发。 */
-export function issueSession(secret: string, uid: number, tokenVersion: number, ttlMs = SESSION_TTL_MS): string {
-  return signSession(secret, { uid, exp: Date.now() + ttlMs, pv: tokenVersion })
+/**
+ * 便捷封装：按当前时间 + TTL 造一个载荷并签发。
+ *
+ * ⚠ **`sid` 由调用方先建好**（`sessions-store.createSession()`）再传进来 ——
+ * 签发与建记录不在同一个事务里是有意的：cookie 是**无状态**的，屏幕上那一串必须先于库里的行成立，
+ * 反过来的顺序会在「建了行但签发失败」时留下一条谁也认领不了的会话。
+ */
+export function issueSession(
+  secret: string,
+  uid: number,
+  tokenVersion: number,
+  sid: string,
+  ttlMs = SESSION_TTL_MS,
+): string {
+  return signSession(secret, { uid, exp: Date.now() + ttlMs, pv: tokenVersion, sid })
 }
 
 /** 校验所需的最小用户状态。与 `users.getAuthState()` 的返回形状一致。 */
@@ -202,4 +221,121 @@ export function isSafeNextPath(next: unknown, isKnownPath: (p: string) => boolea
   if (parsed.origin !== 'http://placeholder.invalid') return false
   // 落点必须在已知路由内，否则会把用户送到 404
   return isKnownPath(parsed.pathname)
+}
+
+// ── 会话判定（#37）：闸门每请求的那一次判决 ──────────────────────
+
+/** 一条会话记录（`sessions` 表的一行）。 */
+export interface SessionRecord {
+  sid: string
+  uid: number
+  /** 签发时的凭据代次**快照** —— 判定时比的是它与当前 `users.token_version`。 */
+  pv: number
+  expiresAt: number
+  revokedAt: number | null
+}
+
+/**
+ * 判定所需的最小状态：闸门那**一次** `LEFT JOIN` 查询的全部结果。
+ * `user` 为 `null` = 会话行在、账号行不在 —— 它与「会话行不存在」是两件事，排查方向也不同。
+ */
+export interface SessionState {
+  session: SessionRecord
+  user: { id: number; enabled: number; tokenVersion: number } | null
+}
+
+/** 判决值。闸门只判断 `=== 'ok'`，其余全部进日志。 */
+export type SessionVerdict =
+  | 'ok'
+  | 'no-token'
+  | 'malformed'
+  | 'bad-signature'
+  | 'expired'
+  | 'session-unknown'
+  | 'revoked'
+  | 'unknown-user'
+  | 'disabled'
+  | 'stale-version'
+
+/**
+ * 取出载荷里那个 `sid`，**不验签名** —— 供排查与日志用。
+ * ⚠ 所以**绝不能拿它的结果去授权**：授权只走 `decideSession()`。
+ */
+export function decodeSid(token: string | undefined | null): string | undefined {
+  if (!token) return undefined
+  const dot = token.lastIndexOf('.')
+  if (dot <= 0) return undefined
+  try {
+    const payload = JSON.parse(Buffer.from(token.slice(0, dot), 'base64url').toString('utf8')) as unknown
+    if (!payload || typeof payload !== 'object') return undefined
+    const sid = (payload as { sid?: unknown }).sid
+    return typeof sid === 'string' && sid ? sid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 判定一次请求。**纯函数、不做任何 I/O** —— `state` 由调用方查好后传进来。
+ *
+ * 判定顺序是**有意**的（`docs/session-revoke-decision.md` §5 的注解）：
+ * 1. 无 token → 不查库；
+ * 2. 形状（`.` 的位置）→ 不查库；
+ * 3. 签名 —— **先比长度再 `timingSafeEqual`**：长度不等它会抛，直接用就把畸形 cookie 打成 500；
+ * 4. 载荷形状 —— `exp` 缺失或非数字会让 `now < exp` 恒为 `false`（看起来像「永久有效」，**是个静默的安全洞**）；
+ *    `sid` 缺失或为空若不显式拒绝，会把「老 cookie / 手改载荷」与「记录被清理」混成一类，日志里再难分辨；
+ * 5. 载荷 `exp` → 不查库就挡掉过期 cookie；
+ * 6. 会话行 —— **先看显式吊销，再看记录过期**（「我把它踢了」比「它到期了」更值得进日志）；
+ * 7. 账号行 → `unknown-user` / `disabled` / `stale-version`。
+ *
+ * ⚠ `now` 可注入：判定表里有 `now === exp` 与 `now === exp - 1` 这种**边界行**，
+ * 用 `Date.now()` 直接写的函数没法稳定测那一毫秒。
+ */
+export function decideSession(
+  secret: string,
+  token: string | undefined | null,
+  state: SessionState | null | undefined,
+  now: number = Date.now(),
+): SessionVerdict {
+  if (!token) return 'no-token'
+
+  const dot = token.lastIndexOf('.')
+  if (dot <= 0 || dot === token.length - 1) return 'malformed'
+  const pb = token.slice(0, dot)
+  const sig = token.slice(dot + 1)
+
+  const expected = sign(secret, pb)
+  const a = Buffer.from(sig)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length) return 'bad-signature'
+  if (!crypto.timingSafeEqual(a, b)) return 'bad-signature'
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(Buffer.from(pb, 'base64url').toString('utf8'))
+  } catch {
+    return 'malformed'
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'malformed'
+
+  const p = payload as Partial<SessionPayload>
+  if (typeof p.uid !== 'number' || !Number.isFinite(p.uid)) return 'malformed'
+  if (typeof p.pv !== 'number' || !Number.isFinite(p.pv)) return 'malformed'
+  if (typeof p.exp !== 'number' || !Number.isFinite(p.exp)) return 'malformed'
+  if (typeof p.sid !== 'string' || !p.sid) return 'malformed'
+
+  // 边界取 now < exp：now === exp 判过期（与 verifySession 同一条）。
+  if (!(now < p.exp)) return 'expired'
+
+  if (!state) return 'session-unknown'
+  const s = state.session
+  if (s.revokedAt !== null) return 'revoked'
+  if (s.expiresAt <= now) return 'expired'
+
+  const u = state.user
+  if (!u) return 'unknown-user'
+  if (u.enabled !== 1) return 'disabled'
+  if (u.tokenVersion !== s.pv) return 'stale-version'
+
+  return 'ok'
 }

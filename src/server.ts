@@ -25,6 +25,7 @@ import {
   verifyPassword,
 } from './users.js'
 import { issueSession, isSafeNextPath, sessionCookieHeader } from './session.js'
+import { createSession } from './sessions-store.js'
 import { decideRequest, deny, isKnownPath, logoutHeader } from './auth.js'
 import {
   aboutPage,
@@ -70,7 +71,10 @@ function tokenVersionOf(id: number): number {
 /** 给响应挂上会话 cookie。 */
 function setSession(reply: { header: (k: string, v: string) => unknown }, userId: number, tokenVersion?: number): void {
   const pv = tokenVersion ?? tokenVersionOf(userId)
-  const token = issueSession(config.sessionSecret, userId, pv, config.sessionTtlMs)
+  // 先建会话记录再签发：cookie 是无状态的，屏幕上那串必须先于库里的行成立
+  // （反过来的顺序会在「建了行但签发失败」时留下一条谁也认领不了的会话）。
+  const { sid } = createSession(userId, pv, config.sessionTtlMs)
+  const token = issueSession(config.sessionSecret, userId, pv, sid, config.sessionTtlMs)
   reply.header(
     'set-cookie',
     sessionCookieHeader(token, { secure: config.sessionCookieSecure, ttlMs: config.sessionTtlMs }),
