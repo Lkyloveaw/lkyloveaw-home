@@ -1983,6 +1983,65 @@ try {
     const anonA = await get('/admin/accounts')
     check('未登录 /admin/accounts → 302 且带 next', anonA.status === 302 && anonA.location.includes('next=%2Fadmin%2Faccounts'), `${anonA.status} ${anonA.location}`)
   }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[两套平面（#45）：数据面终端化 / 正文面纸感化 · 站内框架]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admP = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminP = admP.setCookie.split(';')[0]
+    const bodyClassOf = (html) => (html.match(/<body class="([^"]*)"/) ?? [, ''])[1]
+
+    // ⚠ 全部**带 cookie**：不带的话闸门会 302 到登录页，拿到的是空壳 ——
+    // 那样下面每一条都会"失败"，但真正的原因藏在第一行，所以先断言前提。
+    const home = await get('/', { cookie: adminP })
+    const statusPage = await get('/status', { cookie: adminP })
+    const posts = await get('/posts', { cookie: adminP })
+    const about = await get('/about', { cookie: adminP })
+    const login = await get('/login')
+    const adminPage = await get('/admin', { cookie: adminP })
+
+    check(
+      '前提：五个页面在**已登录**时都是 200（不是 302 的空壳）',
+      [home, statusPage, posts, about, adminPage, login].every((r) => r.status === 200),
+      [home, statusPage, posts, about, adminPage, login].map((r) => r.status).join(','),
+    )
+    check('首页 = **正文面**（`plane-prose`）', /plane-prose/.test(bodyClassOf(home.body)), bodyClassOf(home.body))
+    check('分享列表 = 正文面', /plane-prose/.test(bodyClassOf(posts.body)), bodyClassOf(posts.body))
+    check('关于 = 正文面', /plane-prose/.test(bodyClassOf(about.body)), bodyClassOf(about.body))
+    check('面板 = **数据面**（`plane-data`）', /plane-data/.test(bodyClassOf(statusPage.body)), bodyClassOf(statusPage.body))
+    check('管理台 = 数据面', /plane-data/.test(bodyClassOf(adminPage.body)), bodyClassOf(adminPage.body))
+    check(
+      '登录页不走 `layout()`，但自己在 `<body>` 上写了 `plane-data`',
+      /login-body plane-data/.test(bodyClassOf(login.body)),
+      bodyClassOf(login.body),
+    )
+    check(
+      '两套平面**各有一份**（不是全站都变成同一种）',
+      /plane-prose/.test(bodyClassOf(home.body)) && /plane-data/.test(bodyClassOf(statusPage.body)),
+    )
+
+    // 站内框架（nav）：`/` 分隔的条目，分隔符是服务端的 span（不是伪元素）
+    // 分隔符数 = 条目数 − 1（动态算，不写死 3）：只读 4 项、管理员 5 项 —— 两种情况都验。
+    const navItems = (html) => ((html.match(/<nav class="site-nav">([\s\S]*?)<\/nav>/) ?? [, ''])[1].match(/<a /g) ?? []).length
+    const navSeps = (html) => (html.match(/class="nav-sep"/g) ?? []).length
+    const roP = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roHome = await get('/', { cookie: roP.setCookie.split(';')[0] })
+    check(
+      '导航用 `/` 分隔，且**分隔符数 = 条目数 − 1**（管理员：5 项 4 个；只读：4 项 3 个）',
+      navItems(home.body) === 5 && navSeps(home.body) === 4 && navItems(roHome.body) === 4 && navSeps(roHome.body) === 3,
+      `管理员 ${navItems(home.body)}项/${navSeps(home.body)}分隔 · 只读 ${navItems(roHome.body)}项/${navSeps(roHome.body)}分隔`,
+    )
+    check('导航分隔符对读屏隐藏（`aria-hidden`）', /class="nav-sep" aria-hidden="true"/.test(home.body))
+    check('当前项仍带 `aria-current="page"`（结构没被改写坏）', /aria-current="page"/.test(home.body) && /aria-current="page"/.test(adminPage.body))
+    check('管理员在管理台页面看得到「管理」项', /aria-current="page"[^>]*>管理</.test(adminPage.body))
+
+    // 样式表真的被引用、且两套平面的规则在里面（不是只在源码里）
+    const css = await get('/style.css')
+    check('`/style.css` 可取（200 + text/css）', css.status === 200 && css.type.includes('text/css'), `${css.status} ${css.type}`)
+    check('样式表里有两套平面的选择器', /body\.plane-data/.test(css.body) && /body\.plane-prose/.test(css.body))
+    check('样式表里有窄屏断点与打印块', /@media \(max-width: 720px\)/.test(css.body) && /@media print/.test(css.body))
+  }
 } finally {
   child.kill('SIGTERM')
   await sleep(800)

@@ -1,4 +1,14 @@
-/* 个人站样式：单文件、无预处理器。深色为默认（内网运维面板多在暗环境看），浅色走 prefers-color-scheme。 */
+/* 个人站样式：单文件、无预处理器。深色为默认（内网运维面板多在暗环境看），浅色走 prefers-color-scheme。
+ *
+ * 整站风格 = **B+C 混合**（map Notes 第 6 条）：
+ *   · 数据面（面板 / 管理台 / 登录）→ **终端等宽化**：等宽字体、tabular 数字、紧凑行高；
+ *   · 正文面（首页 / 分享 / 文章 / 关于）→ **纸感阅读化**：大字号、宽行距、约 68ch 的窄栏。
+ * 两套平面只换**排版**，颜色仍走下面这一份 token 表（`:root` 暗色 + light 覆盖，**没有第二套变量表**）。
+ * 平面由 `views.ts` 的 `layout()` 落在 `<body class="plane-data|plane-prose">` 上。
+ *
+ * 颜色 token 的对比度是**算出来的**，不是估的：`npm run check:style` 会把每一对实际用到的
+ * 前景/背景的 WCAG 比值打出来并断言 ≥ 4.5:1（见该脚本里的 PAIRS 表）。改色请改这里、不要改脚本去迁就。
+ */
 
 :root {
   --bg: #0f1115;
@@ -7,18 +17,29 @@
   --border: #262c37;
   --fg: #e6e9ef;
   --fg-dim: #9aa4b2;
-  --fg-faint: #6b7480;
+  /* 最弱的一档文字。#6b7480 实测只有 3.49–3.99:1（不过 AA），已按要求调到达标（≥4.5）。 */
+  --fg-faint: #7d8794;
   --accent: #5b9dff;
   --ok: #35c46b;
   --warn: #e8b13a;
   --bad: #f2564d;
   --unknown: #4a5260;
+  /* 主按钮上的文字（accent 作底）。白字在亮蓝上只有 2.72:1，所以用"深字压亮底"。 */
+  --on-accent: #0f1115;
   --radius: 10px;
   --wrap: 900px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
     "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+  /* 两套排版语言（只有排版，没有颜色） */
+  --font-data: var(--mono);
+  --font-prose: var(--font);
+  --fs-data: 15px;
+  --lh-data: 1.6;
+  --fs-prose: 17px;
+  --lh-prose: 1.85;
+  --measure-prose: 68ch;
 }
 
 @media (prefers-color-scheme: light) {
@@ -29,12 +50,17 @@
     --border: #e3e6ec;
     --fg: #1c2027;
     --fg-dim: #5b6472;
-    --fg-faint: #8a929e;
-    --accent: #1f6feb;
-    --ok: #1a9e56;
-    --warn: #b57d0a;
+    /* 原 #8a929e 在浅底上只有 2.96–3.14:1（不过 AA），已调到达标。 */
+    --fg-faint: #656d7a;
+    /* 原 #1f6feb 在 --bg 上 4.36:1（差一点）；#1a66d8 两个底都过。 */
+    --accent: #1a66d8;
+    /* 原 #1a9e56 / #b57d0a 在浅底上只有 3.26–3.56:1（状态文字不过 AA），已调深。 */
+    --ok: #137a43;
+    --warn: #8a5f06;
     --bad: #cf2f26;
     --unknown: #b9bfc9;
+    /* 浅色下 accent 更暗，白字反而够（5.34:1）—— 与暗色相反，但两边都达标。 */
+    --on-accent: #ffffff;
   }
 }
 
@@ -50,6 +76,20 @@ body {
   font-size: 16px;
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
+}
+
+/* 两套平面：只换排版。`layout()` 按导航项决定平面（面板/管理台 = data，其余 = prose），
+   登录页自己写在 `<body class="login-body plane-data">` 上。 */
+body.plane-data {
+  font-family: var(--font-data);
+  font-size: var(--fs-data);
+  line-height: var(--lh-data);
+  font-variant-numeric: tabular-nums;
+}
+body.plane-prose {
+  font-family: var(--font-prose);
+  font-size: var(--fs-prose);
+  line-height: var(--lh-prose);
 }
 
 .wrap { width: 100%; max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
@@ -81,7 +121,7 @@ pre code { background: none; border: 0; padding: 0; }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-/* ---------- 页头 / 页脚 ---------- */
+/* ---------- 页头 / 页脚（站内框架：两套平面共用，所以走"终端化的 chrome"） ---------- */
 
 .site-header {
   border-bottom: 1px solid var(--border);
@@ -93,24 +133,42 @@ pre code { background: none; border: 0; padding: 0; }
   display: flex; align-items: center; justify-content: space-between;
   gap: 16px; min-height: 58px; flex-wrap: wrap;
 }
-.brand { font-weight: 650; color: var(--fg); font-size: 1.02rem; letter-spacing: 0.01em; }
-.brand:hover { text-decoration: none; color: var(--accent); }
-.site-nav { display: flex; gap: 4px; flex-wrap: wrap; }
-.site-nav a {
-  color: var(--fg-dim); padding: 5px 10px; border-radius: 7px; font-size: 0.9rem;
+.brand {
+  font-family: var(--font-data); font-weight: 650; color: var(--fg);
+  font-size: 0.98rem; letter-spacing: 0.02em;
 }
-.site-nav a:hover { background: var(--bg-soft); color: var(--fg); text-decoration: none; }
-.site-nav a[aria-current="page"] { color: var(--fg); background: var(--bg-soft); }
+.brand:hover { text-decoration: none; color: var(--accent); }
+
+/* 导航：**不再是一排药丸**，而是命令行那种 `/` 分隔的条目（分隔符由 `nav()` 输出，
+   不是一个可点的伪元素 —— 点分隔符不该跳转到相邻页面）。 */
+.site-nav {
+  display: flex; align-items: center; flex-wrap: wrap;
+  font-family: var(--font-data); font-size: 0.88rem;
+}
+.site-nav a { color: var(--fg-dim); padding: 5px 0; }
+.site-nav a:hover { color: var(--fg); text-decoration: none; }
+.site-nav a[aria-current="page"] { color: var(--accent); }
+.nav-sep { color: var(--fg-faint); padding: 0 9px; user-select: none; }
 
 .site-footer {
   border-top: 1px solid var(--border);
   margin-top: 56px; padding: 22px 0 30px;
   color: var(--fg-faint); font-size: 0.85rem;
+  font-family: var(--font-data);
 }
 
 main { padding-top: 34px; }
 
 /* ---------- 通用 ---------- */
+
+/* 正文面：纸感阅读化 —— 字号更大、行距更宽、栏宽收窄到约 68ch（长行是阅读的主要敌人）。
+   这些规则挂在 `.plane-prose` 下，所以数据面（面板/管理台）不会被顺手改掉。 */
+.plane-prose .hero h1 { font-size: 2.1rem; margin: 0 0 8px; letter-spacing: -0.015em; }
+.plane-prose .lede { font-size: 1.05rem; }
+.plane-prose .section { margin-bottom: 46px; }
+.plane-prose .section h1 { font-size: 1.7rem; }
+.plane-prose .post-card h2 { font-size: 1.18rem; }
+.plane-prose .summary { font-size: 1rem; }
 
 .hero h1 { font-size: 1.9rem; margin: 0 0 6px; letter-spacing: -0.01em; }
 .lede { color: var(--fg-dim); margin: 0 0 4px; }
@@ -137,7 +195,28 @@ main { padding-top: 34px; }
   padding: 18px 20px;
 }
 
-/* ---------- 文章 ---------- */
+.mini-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incident-name { font-weight: 600; }
+
+/* ---------- 文章（正文面） ---------- */
+
+/* `.prose` 是文章正文的容器：收窄栏宽是"纸感"的核心 —— 900px 的整幅行宽读起来太累。 */
+.prose { font-size: 1rem; max-width: var(--measure-prose); }
+.plane-prose .prose { font-size: 1.02rem; }
+.prose h2 { font-size: 1.3rem; margin: 38px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.prose h3 { font-size: 1.1rem; margin: 28px 0 10px; }
+.prose p { margin: 0 0 17px; }
+.prose ul, .prose ol { padding-left: 22px; margin: 0 0 17px; }
+.prose li { margin-bottom: 7px; }
+.prose img { max-width: 100%; height: auto; border-radius: var(--radius); }
+.prose blockquote {
+  margin: 0 0 17px; padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--border); color: var(--fg-dim);
+}
+.prose table { width: 100%; border-collapse: collapse; margin: 0 0 17px; font-size: 0.92rem; }
+.prose th, .prose td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
+.prose th { background: var(--bg-soft); font-weight: 600; }
+.prose hr { border: 0; border-top: 1px solid var(--border); margin: 30px 0; }
 
 .post-card { margin-bottom: 14px; }
 .post-card h2 { margin: 0 0 4px; font-size: 1.08rem; }
@@ -156,24 +235,11 @@ main { padding-top: 34px; }
 .tag-count { color: var(--fg-faint); }
 .tag-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
 
+/* 文章页整列收窄到与正文同一条栏宽：标题与正文左边缘对齐、右边缘也齐 —— 这是"纸感"的一部分。 */
+.post { max-width: var(--measure-prose); }
 .post-header { margin-bottom: 24px; }
 .post-header h1 { font-size: 1.75rem; margin: 0 0 8px; line-height: 1.35; }
-
-.prose { font-size: 1rem; }
-.prose h2 { font-size: 1.24rem; margin: 34px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
-.prose h3 { font-size: 1.06rem; margin: 26px 0 10px; }
-.prose p { margin: 0 0 16px; }
-.prose ul, .prose ol { padding-left: 22px; margin: 0 0 16px; }
-.prose li { margin-bottom: 6px; }
-.prose img { max-width: 100%; height: auto; border-radius: var(--radius); }
-.prose blockquote {
-  margin: 0 0 16px; padding: 2px 0 2px 16px;
-  border-left: 3px solid var(--border); color: var(--fg-dim);
-}
-.prose table { width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 0.92rem; }
-.prose th, .prose td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
-.prose th { background: var(--bg-soft); font-weight: 600; }
-.prose hr { border: 0; border-top: 1px solid var(--border); margin: 30px 0; }
+.plane-prose .post-header h1 { font-size: 2rem; line-height: 1.3; }
 
 /* ---------- 可用性面板 ---------- */
 
@@ -263,7 +329,8 @@ main { padding-top: 34px; }
 
 .target-error {
   margin: 12px 0 0; padding: 7px 10px; font-size: 0.8rem;
-  color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent);
+  color: var(--bad); background: var(--bg-soft);
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--border));
   border-radius: 6px; word-break: break-word;
 }
 
@@ -333,13 +400,17 @@ main { padding-top: 34px; }
 }
 .login-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .login-form button {
-  background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+  /* `--on-accent`：暗色下 accent 是亮蓝，白字只有 2.72:1 —— 所以按钮文字走这个 token
+     （暗色给深字、浅色给白字，两边都 ≥4.5，见文件头的对比度说明）。 */
+  background: var(--accent); color: var(--on-accent); border: 0; border-radius: 6px;
   padding: 10px 14px; font-size: 0.95rem; font-family: inherit; cursor: pointer; margin-top: 4px;
 }
 .login-form button:hover { filter: brightness(1.08); }
+/* ⚠ 这里原来是硬编码的 rgba(242,86,77,…)（一个 token 以外的颜色）——已改成 token：
+   底色用 `--bg-soft`，边框与文字用 `--bad`，于是"错误文字/底"这一对也在 `check:style` 的表里。 */
 .login-error {
-  background: rgba(242, 86, 77, 0.14);
-  border: 1px solid rgba(242, 86, 77, 0.4);
+  background: var(--bg-soft);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--border));
   color: var(--bad); border-radius: 6px; padding: 9px 11px;
   font-size: 0.85rem; margin: 0 0 16px;
 }
@@ -360,13 +431,6 @@ main { padding-top: 34px; }
 .status-banner { border-left-color: var(--warn); }
 .status-banner a { color: var(--accent); margin-left: 4px; }
 
-@media (max-width: 560px) {
-  .header-inner { min-height: 52px; }
-  .site-nav a { padding: 4px 8px; font-size: 0.85rem; }
-  .hero h1 { font-size: 1.5rem; }
-  .incident-list li { grid-template-columns: 1fr; gap: 2px; }
-  .incident-err { text-align: left; }
-}
 
 /* 登出按钮（#38）：写路径要 L3 token，所以它必须是一个带 csrfField() 的**真实表单**，
    不是一个普通链接 —— 这也是「浏览器里还能登出」这件事的落点。 */
@@ -423,6 +487,10 @@ main { padding-top: 34px; }
 
 /* 管理台目标页（#40）：按分组分标题 + 每条目标一块（行内编辑表单 + 启停/删除） */
 .target-group { margin: 26px 0 8px; font-size: 0.98rem; }
+/* 新增表单与行内编辑表单各是自己的类（e2e 也按这两个类定位）：给它们各自的留白，
+   而不是靠父级的通用间距 —— 新增块要紧一点、行内编辑要贴着行。 */
+.target-new { margin: 0 0 22px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.target-edit { margin: 0; }
 .target-row { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card);
   padding: 12px 14px; margin-bottom: 12px; }
 .target-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -433,3 +501,95 @@ main { padding-top: 34px; }
 /* 管理台站点设置页（#42）：值坏掉时的提示 + 只读 env 清单里的说明 */
 .bad-text { color: var(--bad); }
 .settings-form .stat-sub { margin: 0 0 10px; }
+
+/* ══════════════════════════════════════════════════════════
+   两套平面的排版细则（#45）
+   数据面 = 面板 / 管理台 / 登录：终端等宽化（等宽字体、tabular 数字、紧凑行高、数字对齐）。
+   正文面 = 首页 / 分享 / 文章 / 关于：纸感阅读化（见上面 `.plane-prose` 那几处 + `.prose` 的窄栏）。
+   颜色一律复用同一份 token —— 这两段只碰排版。
+   ══════════════════════════════════════════════════════════ */
+
+/* 数据面：把散在面板/管理台里的"等宽化"收成一处，别再各写一遍 */
+.plane-data h1, .plane-data h2, .plane-data h3 { font-family: var(--font-data); letter-spacing: -0.01em; }
+.plane-data .stat-num { font-size: 1.32rem; }
+.plane-data .admin-hint, .plane-data .form-row label, .plane-data .confirm { font-size: 0.86rem; }
+.plane-data input, .plane-data select, .plane-data textarea, .plane-data button {
+  font-family: var(--font-data); font-size: 0.88rem;
+}
+.plane-data input:not([type="checkbox"]):not([type="file"]),
+.plane-data select, .plane-data textarea {
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--fg);
+  border-radius: 6px; padding: 6px 9px;
+}
+.plane-data input:focus, .plane-data select:focus, .plane-data textarea:focus {
+  outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
+}
+.plane-data button {
+  background: var(--bg-soft); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+.plane-data button:hover { border-color: var(--accent); color: var(--accent); }
+.plane-data .btn-danger { border-color: var(--bad); color: var(--bad); }
+.plane-data .btn-danger:hover { border-color: var(--bad); color: var(--bad); filter: brightness(1.12); }
+.plane-data .admin-table, .plane-data .revision-body, .plane-data .media-snippet { font-family: var(--font-data); }
+
+/* 登录页 = 数据面（但它没有导航栏，所以自己带 plane-data） */
+.login-body.plane-data { font-family: var(--font-data); }
+.login-wrap h1 { font-family: var(--font-data); letter-spacing: -0.01em; }
+
+/* ── 窄屏断点 ──────────────────────────────────────────────
+   两个断点，别再加第三个：720px（版面从多栏退成一栏）与 560px（进一步压缩间距与字号）。
+   ⚠ 断点的**目视观感**未经真机浏览器验证，归票⑩；这里能断言的是"规则确实存在且生效"。 */
+@media (max-width: 720px) {
+  .target-grid { grid-template-columns: 1fr; }
+  .kv { grid-template-columns: 1fr; }
+  .stat-strip { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .admin-table { display: block; overflow-x: auto; }
+  .prose { max-width: none; }
+  .plane-prose .hero h1 { font-size: 1.75rem; }
+  .plane-prose .post-header h1 { font-size: 1.6rem; }
+}
+
+@media (max-width: 560px) {
+  .header-inner { min-height: 52px; }
+  .site-nav { font-size: 0.82rem; }
+  .nav-sep { padding: 0 6px; }
+  .hero h1 { font-size: 1.5rem; }
+  .incident-list li { grid-template-columns: 1fr; gap: 2px; }
+  .incident-err { text-align: left; }
+  .form-row { flex-direction: column; align-items: stretch; }
+  .form-row label { display: flex; flex-direction: column; gap: 4px; }
+  .form-row input:not([type="checkbox"]), .form-row select { width: 100%; }
+  .cell-strip { height: 14px; }
+}
+
+/* ── 打印样式 ──────────────────────────────────────────────
+   打印时**不是暗色**：把 token 就地改成纸面（黑字白底、边框变浅灰），
+   并去掉一切"只在屏幕上成立"的东西（粘性页头、导航、登出表单、按钮、提示语）。
+   改在 `body` 上而不是 `:root` —— 全站只有一份 `:root`，这条纪律连打印也不破。 */
+@media print {
+  body {
+    --bg: #ffffff;
+    --bg-soft: #ffffff;
+    --bg-card: #ffffff;
+    --border: #bbbbbb;
+    --fg: #000000;
+    --fg-dim: #222222;
+    --fg-faint: #333333;
+    --accent: #000000;
+    --on-accent: #ffffff;
+    background: #ffffff; color: #000000;
+    font-size: 11pt; line-height: 1.5;
+  }
+  .site-header, .site-footer, .logout-form, .site-nav, .live-tag,
+  .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis { display: none !important; }
+  main { padding-top: 0; }
+  .wrap { max-width: none; padding: 0; }
+  .prose { max-width: none; }
+  .card, .stat, .target-card, .post-card, .target-row, .cell-strip, .chart { break-inside: avoid; }
+  .post-card, .card, .stat, .target-card { border: 1px solid #bbbbbb; }
+  a { color: #000000; text-decoration: underline; }
+  /* 打印出来的纸上点不开链接，所以把站内地址显式写出来（只对正文里的链接）。 */
+  .prose a[href^="/"]::after { content: " (" attr(href) ")"; font-size: 9pt; color: #333333; }
+  .cell-strip i { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}

@@ -69,6 +69,28 @@ export interface LayoutOptions {
   bodyClass?: string
 }
 
+/**
+ * 两套**排版语言**（map Notes 第 6 条：B+C 混合）。它们只换排版，颜色仍是同一份 token 表。
+ *
+ * - `data`（数据面）：面板 · 管理台 —— **终端等宽化**（等宽字体、tabular 数字、紧凑行高）；
+ * - `prose`（正文面）：首页 · 分享 · 文章 · 关于 —— **纸感阅读化**（大字号、宽行距、68ch 窄栏）。
+ *
+ * 平面由**导航项**推出来而不是每个页面手写：`active` 只有 `status`/`admin` 属于数据面，
+ * 忘写的代价是「那一页排版忽然变成另一种」—— 推出来就不会漏。
+ */
+function planeOf(active: LayoutOptions['active']): 'data' | 'prose' {
+  return active === 'status' || active === 'admin' ? 'data' : 'prose'
+}
+
+/**
+ * 站内导航（最终呈现）：**`/` 分隔的条目**，不是一排药丸。
+ *
+ * 分隔符是**服务端输出的 `<span class="nav-sep" aria-hidden="true">`**，不是 CSS 伪元素 ——
+ * 伪元素挂在 `<a>` 的盒子里，点分隔符会跳到相邻页面，那是个不该有的点击目标。
+ * 「管理」项只对管理员渲染（`docs/admin-console-ia-decision.md` §2）：只读用户看不到入口，
+ * 而不是看到一个点了就 403 的项 —— 那等于每次点都吃一次错。
+ * 角色从请求上下文读（渲染层不该被迫多接一个参数），见 `csrf.ts` 的 `currentIsAdmin()`。
+ */
 function nav(active: LayoutOptions['active']): string {
   const items: Array<[LayoutOptions['active'], string, string]> = [
     ['home', '/', '首页'],
@@ -76,19 +98,18 @@ function nav(active: LayoutOptions['active']): string {
     ['status', '/status', '系统可用性'],
     ['about', '/about', '关于'],
   ]
-  // 「管理」**只对管理员渲染**（`docs/admin-console-ia-decision.md` §2）：
-  // 只读用户看不到入口，而不是看到一个点了就 403 的项 —— 那等于每次点都吃一次错。
-  // 角色从请求上下文读（渲染层不该被迫多接一个参数），见 `csrf.ts` 的 `currentIsAdmin()`。
   if (currentIsAdmin()) items.push(['admin', '/admin', '管理'])
   return items
-    .map(
-      ([key, href, label]) =>
-        `<a href="${href}"${key === active ? ' aria-current="page"' : ''}>${label}</a>`,
-    )
+    .map(([key, href, label], i) => {
+      const sep = i === 0 ? '' : '<span class="nav-sep" aria-hidden="true">/</span>'
+      return `${sep}<a href="${href}"${key === active ? ' aria-current="page"' : ''}>${label}</a>`
+    })
     .join('')
 }
 
 export function layout(opts: LayoutOptions, site: { title: string; description: string }): string {
+  // 平面 + 页面自带的 bodyClass（登录页不走 `layout()`，它自己在 `<body>` 上写 plane-data）。
+  const bodyClass = [`plane-${planeOf(opts.active)}`, opts.bodyClass].filter(Boolean).join(' ')
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -99,7 +120,7 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
 </head>
-<body${opts.bodyClass ? ` class="${escapeHtml(opts.bodyClass)}"` : ''}>
+<body class="${escapeHtml(bodyClass)}">
 <header class="site-header">
   <div class="wrap header-inner">
     <a class="brand" href="/">${escapeHtml(site.title)}</a>
@@ -792,7 +813,7 @@ export function loginPage(opts: LoginPageOptions, site: { title: string; descrip
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
 </head>
-<body class="login-body">
+<body class="login-body plane-data">
 <main class="login-wrap">
   <h1>${escapeHtml(site.title)}</h1>
   <p class="login-lede">${escapeHtml(site.description)}</p>
