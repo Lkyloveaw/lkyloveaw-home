@@ -93,6 +93,25 @@ fs.writeFileSync(path.join(sandbox, 'evil.txt'), 'x')
 const listed = media.listMedia()
 check('**列举只含合法媒体名**（临时文件与杂物不出现）', listed.length === 2 && listed.every((n) => media.isSafeMediaName(n)), listed.map((n) => n.slice(0, 8)).join(','))
 
+
+// ── 引用提取与孤图判定（孤图清理 CLI 的纯逻辑） ──
+console.log(String.fromCharCode(10)+"[引用提取与孤图判定]")
+const doc = { type: "doc", content: [
+  { type: "paragraph", content: [{ type: "text", text: "看这张" }] },
+  { type: "image", attrs: { src: "/media/" + first.name, alt: "图" } },
+  { type: "image", attrs: { src: "https://cdn.example.com/x.png", alt: "外链" } },
+  { type: "image", attrs: { src: "data:image/png;base64,AAAA", alt: "内联" } },
+  { type: "image", attrs: { src: "/media/not-a-hash.png", alt: "形状不合法" } },
+] }
+const refs = media.imageNamesInDoc(doc)
+check("**嵌套的 image 节点被找到**", refs.length === 1 && refs[0] === first.name, refs.join(","))
+check("外链与 data URI **不算引用**（只认站内 /media/）", !refs.some((r) => r.includes("cdn") || r.includes("data")))
+check("形状不合法的 /media/ 名字**不算引用**", !refs.includes("not-a-hash.png"))
+check("空文档 / 非对象 → 空数组（不抛）", media.imageNamesInDoc({}).length === 0 && media.imageNamesInDoc(null).length === 0)
+const orphans = media.orphanMedia(refs)
+check("**孤图 = 目录里有、引用里没有的那些**", orphans.length === 1 && orphans[0] === changed.name, orphans.map((o) => o.slice(0,8)).join(","))
+check("被引用的那个**不是**孤图", !orphans.includes(first.name))
+check("临时文件与杂物本来就不在 listMedia 里，所以也不会被当成孤图", !orphans.some((o) => o.startsWith(".tmp-") || o.endsWith(".txt")))
 fs.rmSync(sandbox, { recursive: true, force: true })
 console.log(`\n${passed}/${passed + failures.length} 通过`)
 if (failures.length) {

@@ -769,6 +769,19 @@ export function revertToRevision(
   return out === 'unchanged' ? 'unchanged' : 'reverted'
 }
 
+/**
+ * 全部文章与**全部修订**的正文（孤图判定要的「引用全集」）。
+ *
+ * ⚠ 修订也算引用：退回旧版时不能断图（规格 user story 38）。
+ * ⚠ 这里**不吞异常** —— 读失败必须让调用方知道（孤图清理最怕把「读失败」当成「没有引用」）。
+ */
+export function allArticleBodies(): string[] {
+  const rows = handle()
+    .prepare(`SELECT body FROM articles UNION ALL SELECT body FROM article_revisions`)
+    .all() as Array<{ body: string }>
+  return rows.map((r) => r.body)
+}
+
 export function closeStore(): void {
   db?.close()
   db = null

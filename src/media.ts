@@ -143,3 +143,37 @@ export function mediaMime(name: string): string | null {
 export function mediaSnippet(name: string, alt: string): string {
   return `![${alt}](/media/${name})`
 }
+/**
+ * 一份文档 JSON 里引用的媒体文件名（规格 #41 的「引用」定义：**当前正文 + 历史修订**都算）。
+ *
+ * 只认 `isSafeMediaName` 过得去的名字 —— 形状不合法的引用**不算引用**，
+ * 因为媒体目录里根本不可能存在那种文件（`listMedia()` 也只列合法名）。
+ */
+export function imageNamesInDoc(doc: unknown): string[] {
+  const out = new Set<string>()
+  const walk = (n: unknown): void => {
+    if (!n || typeof n !== 'object') return
+    const node = n as { type?: string; attrs?: Record<string, unknown>; content?: unknown[] }
+    if (node.type === 'image') {
+      const src = typeof node.attrs?.src === 'string' ? node.attrs.src : ''
+      const m = src.match(/^\/media\/([^/?#]+)/)
+      const name = m?.[1]
+      if (name && isSafeMediaName(name)) out.add(name)
+    }
+    if (Array.isArray(node.content)) for (const c of node.content) walk(c)
+  }
+  walk(doc)
+  return [...out]
+}
+
+/**
+ * 孤图 = 媒体目录里有、但**没有任何文章或修订**引用它的那些。
+ *
+ * ⚠ 调用方必须**先成功读到全部引用**再调这里。规格 user story 50 说得很明白：
+ * 「**「读取失败」和「真的没有文章」必须被区分开**，以便清空全部图片这种灾难不会因为一次读库失败发生」——
+ * 所以「读到 0 条引用」和「读失败了」在 CLI 里走**两条完全不同的路**。
+ */
+export function orphanMedia(referenced: Iterable<string>): string[] {
+  const ref = new Set(referenced)
+  return listMedia().filter((n) => !ref.has(n))
+}
