@@ -223,6 +223,11 @@ export const config = {
    * 刻意不写死 `/app/data`：备份逻辑要**部署方式无关**。
    */
   backupDir: resolveFromRoot(process.env.BACKUP_DIR?.trim() || './data/backups'),
+  /**
+   * 媒体目录（上传的原图）。**默认与数据库同目录**（同一个 volume）—— 与备份目录同一条理由：
+   * 两种部署方式都不需要加挂载点。规格要求「与数据库同卷」。
+   */
+  mediaDir: resolveFromRoot(process.env.MEDIA_DIR?.trim() || './data/media'),
   /** 滚动保留几份。实测产物 ≈ 主库大小，7 份约 1.4 MB，故不压缩。 */
   backupKeep: num('BACKUP_KEEP', 7),
   /** 每几轮探测做一次 checkpoint（约每小时；探测轮次是本进程唯一心跳，不另开定时器）。 */
