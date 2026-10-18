@@ -2,6 +2,7 @@
  * HTTP 层：路由 + 组装页面数据 + 登录闸门。
  * 一台进程同时负责页面渲染和周期探测，Docker 里就只有一个容器、一个 volume。
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static'
@@ -16,21 +17,24 @@ import {
 import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
+import { listBackups } from './backup.js'
 import {
   countEnabledAdmins,
   countUsers,
   ensureFirstUserFromEnv,
   findById,
   initUsers,
+  listUsers,
   setPassword,
   verifyPassword,
 } from './users.js'
 import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCookieHeader } from './session.js'
 import { createSession, revokeSession } from './sessions-store.js'
 import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin } from './auth.js'
-import { checkOrigin, csrfContext, csrfToken, verifyCsrf } from './csrf.js'
+import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, verifyCsrf } from './csrf.js'
 import {
   aboutPage,
+  adminOverviewPage,
   forbiddenPage,
   homePage,
   loginPage,
@@ -38,6 +42,7 @@ import {
   postPage,
   postsPage,
   statusPage,
+  type AdminOverview,
   type StatusSummary,
 } from './views.js'
 
@@ -49,9 +54,53 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const site = { title: config.siteTitle, description: config.siteDescription }
 
+/**
+ * 概览页的四块摘要（`docs/admin-console-ia-decision.md` §6.1）。
+ *
+ * **一律现算**：不落库、不缓存 —— 计数是「一眼的状态」，不是账本，
+ * 与列表在极短窗口内相差一两条可接受。数据来源是本票定的临时来源
+ * （目标读 `config.targets`、账号读 `listUsers()`、备份读 `backup.ts`、设置读 `config`），
+ * ④⑤⑥ 各自换成库时**只改这里**。
+ */
+function buildAdminOverview(): AdminOverview {
+  const users = listUsers()
+  const backups = listBackups()
+  const latest = backups.length ? backups[backups.length - 1]! : null
+  let latestAt: number | null = null
+  if (latest) {
+    try {
+      latestAt = fs.statSync(path.join(config.backupDir, latest)).mtimeMs
+    } catch {
+      latestAt = null // 文件刚被清掉：不是错误，页面显示文件名、不显示时间
+    }
+  }
+  const today = new Date().toISOString().slice(0, 10)
+
+  return {
+    targets: {
+      enabled: config.targets.filter((t) => t.enabled !== false).length,
+      total: config.targets.length,
+      groups: new Set(config.targets.map((t) => t.group ?? '未分组')).size,
+    },
+    accounts: {
+      total: users.length,
+      admins: users.filter((u) => u.role === 'admin').length,
+      disabled: users.filter((u) => u.enabled !== 1).length,
+    },
+    // 「今天是否已备份」看文件名里的日期戳（备份文件就叫 `YYYY-MM-DD.sqlite`）。
+    backup: { latest, latestAt, doneToday: latest === `${today}.sqlite` },
+    settings: {
+      title: config.siteTitle,
+      description: config.siteDescription,
+      intervalSeconds: Math.round(config.probeIntervalMs / 1000),
+    },
+    // 零管理员：**每次渲染现算** —— 启动日志只在重启时看得到，概览页才是它的常驻位置。
+    zeroAdmins: users.length > 0 && countEnabledAdmins() === 0,
+  }
+}
+
 /** 汇总面板需要的数据。每次请求现算：SQLite 聚合在这个数据量下是毫秒级，不值得再加缓存层。 */
-function buildSummary(): StatusSummary {
-  const targets = config.targets
+function buildSummary(): StatusSummary {  const targets = config.targets
     .filter((t) => t.enabled !== false)
     .map((target) => ({
       target,
@@ -230,7 +279,9 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
      * 而这个「相同」**由 e2e 断言证明**（登出表单里的 token 非空、且提交成功），不靠对机制的信任。
      */
     const csrf = csrfToken(config.sessionSecret, readSessionCookie(req.headers.cookie) ?? '') ?? ''
-    csrfContext.enterWith({ token: csrf })
+    // 角色一并进上下文：顶栏据此决定要不要渲染「管理」那一项（IA §2），
+    // 管理台路由也据此判资格 —— **不重复查库**（闸门那次查询已经把角色带出来了）。
+    csrfContext.enterWith({ token: csrf, isAdmin: decision.role === 'admin' })
   })
 
   /**
@@ -254,6 +305,29 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       await reply.send(forbiddenPage('csrf', site, req.url))
     }
   }
+
+  // ── 管理台（只读外壳，#39）────────────────────────────────
+
+  /**
+   * `/admin`：只读的概览页。
+   *
+   * 资格用**闸门刚算出来的那个角色**（在请求上下文里）—— 不重复查库。
+   * 拿不到上下文（没走闸门的路径）→ 非管理员 → **403**，fail-closed。
+   *
+   * **403 而不是 404**：用户该知道这是**权限**问题，不是地址敲错了
+   * （`docs/admin-console-ia-decision.md` §3.1）。
+   */
+  app.get('/admin', async (req, reply) => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      return forbiddenPage('admin', site)
+    }
+    reply.type('text/html; charset=utf-8')
+    // `?notice=<key>` 原样交给视图：**闭集判定在 views 里**（未知 key 什么都不渲染），
+    // 路由不解释它 —— 否则「哪些 key 有效」会长出第二份名单。
+    const query = req.query as { notice?: unknown }
+    return adminOverviewPage(buildAdminOverview(), site, query.notice)
+  })
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────
 

@@ -60,6 +60,7 @@ const postForm = async (path, opts = {}) => {
   return {
     status: res.status,
     setCookie: res.headers.get('set-cookie') || '',
+    location: res.headers.get('location') || '',
     body: await res.text(),
     cacheControl: res.headers.get('cache-control') || '',
   }
@@ -971,6 +972,75 @@ try {
     // 非法角色在参数解析处就挡住（库里的 CHECK 是第二道）
     const bad = runCli('--user', 'roleprobe', '--role', 'admni')
     check('CLI 拒绝非法角色取值', bad.code !== 0 && /只能是 admin 或 readonly/.test(bad.out), bad.out.trim())
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[管理台外壳（#39）：入口 · 403 · 回跳 · notice 闭集]')
+  // ══════════════════════════════════════════════════════════
+  {
+    // 管理员用角色那节刚提权的 roleprobe（它此刻是**唯一**启用中的管理员）。
+    const adm = await postForm('/login', {
+      form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' },
+    })
+    const adminCookie = adm.setCookie.split(';')[0]
+    check('前提：管理员能登录', adminCookie.startsWith('session='), `status=${adm.status}`)
+
+    const overview = await get('/admin', { cookie: adminCookie })
+    check('管理员 GET /admin → 200', overview.status === 200, `got ${overview.status}`)
+    check('管理员顶栏含「管理」', />管理</.test(overview.body))
+    check('「管理」被标成当前页（aria-current）', /aria-current="page"[^>]*>管理</.test(overview.body))
+    check('概览页有四块摘要卡', (overview.body.match(/class="stat"/g) || []).length >= 4)
+    check('概览页**不渲染目标列表**（不造第二份真相）', !/ledger\.internal\.example/.test(overview.body))
+    check('页面上明说这一版是只读的', /<strong>只读<\/strong>/.test(overview.body))
+
+    // ── 只读：**先断言同一响应里另外 4 项在**，再断言「管理」不在 ──
+    // 少了前一条，「没有管理」在「整页都没渲染出来」时也会通过 —— 那是恒真断言。
+    //
+    // ⚠ 自己拿一个**新鲜**的只读会话，不复用模块级 `sessionCookie`：它在前面几节里
+    // 被改密与吊销反复动过（改密会级联吊销该账号的全部会话），到这儿早就是死的了。
+    const roLogin = await postForm('/login', {
+      form: { username: TEST_USER, password: NEW_PASS, next: '/' },
+    })
+    const roCookie = roLogin.setCookie.split(';')[0]
+    const ro = await get('/status', { cookie: roCookie })
+    check('只读前提：这个会话是登录态', ro.status === 200, `got ${ro.status}`)
+    check(
+      '只读前提：同一响应里另外 4 项**都在**',
+      ['首页', '分享', '系统可用性', '关于'].every((t) => ro.body.includes(`>${t}<`)),
+    )
+    check('只读顶栏**没有**「管理」这一项', !/>管理</.test(ro.body))
+    const roAdmin = await get('/admin', { cookie: roCookie })
+    check('只读 GET /admin → **403**（不是 404，也不是只读视图）', roAdmin.status === 403, `got ${roAdmin.status}`)
+    check('403 页明说「需要管理员权限」', /需要管理员权限/.test(roAdmin.body))
+
+    // ── 未登录 → 302 → /login?next=/admin，登录后回跳 ──
+    const anon = await get('/admin')
+    check(
+      '未登录 /admin → 302 到 /login?next=/admin',
+      anon.status === 302 && anon.location.includes('next=%2Fadmin'),
+      `${anon.status} ${anon.location}`,
+    )
+    const back = await postForm('/login', {
+      form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/admin' },
+    })
+    check('登录后回跳到 /admin', back.status === 302 && back.location === '/admin', `${back.status} ${back.location}`)
+
+    // ── notice 闭集：**两个方向都要断言** ──
+    // 只断言「乱编的不渲染」是空的（那时根本没有 notice 消费者）；先证明**有效 key 真的渲染**。
+    const good = await get('/admin?notice=settings-saved', { cookie: adminCookie })
+    check('有效 notice key → 渲染出对应文案', /class="notice"/.test(good.body) && /已保存设置/.test(good.body))
+    const bogus = await get(
+      '/admin?notice=' + encodeURIComponent('<script>alert(1)</script>'),
+      { cookie: adminCookie },
+    )
+    check(
+      '乱编的 notice key → **什么都不渲染**（提示文本不来自 URL）',
+      bogus.status === 200 && !/alert\(1\)/.test(bogus.body) && !/class="notice/.test(bogus.body),
+    )
+    check(
+      '合法但未登记的 key（`nonexistent`）也不渲染',
+      !/class="notice/.test((await get('/admin?notice=nonexistent', { cookie: adminCookie })).body),
+    )
   }
 
 } finally {

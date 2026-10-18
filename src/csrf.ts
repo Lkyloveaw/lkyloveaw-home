@@ -13,22 +13,31 @@ import crypto from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 /**
- * 本次请求的 L3 token —— 渲染层用它，而不是让每个 `*Page()` 多接一个参数（§4.3）。
+ * 本次请求的渲染事实：L3 token + 当前角色。
  *
- * **为什么不给视图函数加参数**：不是为了少改代码，而是**失败方向不同**。
- * 加参数时漏传 = 静默渲染出一个**没有 hidden input** 的表单，用户提交拿到 403，
- * 而原因在渲染侧（要从「为什么这个表单少了一段 HTML」开始查）。
- * ALS 未初始化时（脚本或测试里直接调 `views`）渲染出的是**空 token** → 提交必 403，
- * 同样是显眼失败，但**只有一处**要查。
+ * **为什么不给视图函数加参数**（§4.3）：不是为了少改代码，而是**失败方向不同**。
+ * 加参数时漏传 = 静默渲染出一个**没有 hidden input** 的表单（或漏掉顶栏那一项），
+ * 用户提交拿到 403，而原因在渲染侧（要从「为什么这个表单少了一段 HTML」开始查）。
+ * ALS 未初始化时（脚本或测试里直接调 `views`）拿到的是**空 token / 非管理员** →
+ * 提交必 403、入口不渲染，同样是显眼失败，但**只有一处**要查。
  *
  * ⚠ 放在本模块而不是 `server.ts`：`views.ts` 要读它，而 `views.ts` **不能** import `server.ts`
  * （那是循环依赖）。本模块两边都能 import，且它本来就只依赖 `node:crypto`。
  */
-export const csrfContext = new AsyncLocalStorage<{ token: string }>()
+export const csrfContext = new AsyncLocalStorage<{ token: string; isAdmin: boolean }>()
 
 /** 当前请求的 token；**没有上下文时返回空串**（渲染出的表单会提交失败，而不是悄悄放行）。 */
 export function currentCsrfToken(): string {
   return csrfContext.getStore()?.token ?? ''
+}
+
+/**
+ * 当前请求是不是管理员 —— 顶栏据此决定要不要渲染「管理」那一项
+ * （`docs/admin-console-ia-decision.md` §2：**只读用户看不到入口**，
+ * 而不是看到一个点了就 403 的项 —— 那等于每次点都吃一次错）。
+ */
+export function currentIsAdmin(): boolean {
+  return csrfContext.getStore()?.isAdmin === true
 }
 
 /**

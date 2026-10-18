@@ -7,7 +7,7 @@ import type { Post, PostMeta } from './content.js'
 import type { ProbeTarget } from './config.js'
 import type { TargetStats, TimelinePoint, OverviewPoint, ProbeResult, LatencyPoint } from './store.js'
 import { latencyChart, uptimeChart } from './charts.js'
-import { currentCsrfToken } from './csrf.js'
+import { currentCsrfToken, currentIsAdmin } from './csrf.js'
 
 /**
  * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
@@ -63,7 +63,7 @@ export interface LayoutOptions {
   title: string
   description: string
   /** 高亮哪个导航项。**可省**：403 这类页面不属于任何一个导航项。 */
-  active?: 'home' | 'posts' | 'status' | 'about'
+  active?: 'home' | 'posts' | 'status' | 'about' | 'admin'
   body: string
   bodyClass?: string
 }
@@ -75,6 +75,10 @@ function nav(active: LayoutOptions['active']): string {
     ['status', '/status', '系统可用性'],
     ['about', '/about', '关于'],
   ]
+  // 「管理」**只对管理员渲染**（`docs/admin-console-ia-decision.md` §2）：
+  // 只读用户看不到入口，而不是看到一个点了就 403 的项 —— 那等于每次点都吃一次错。
+  // 角色从请求上下文读（渲染层不该被迫多接一个参数），见 `csrf.ts` 的 `currentIsAdmin()`。
+  if (currentIsAdmin()) items.push(['admin', '/admin', '管理'])
   return items
     .map(
       ([key, href, label]) =>
@@ -112,38 +116,132 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
 </html>`
 }
 
-export type ForbiddenKind = 'origin' | 'csrf'
+export type ForbiddenKind = 'origin' | 'csrf' | 'admin'
 
 /**
- * 写路径的 403 页（`docs/write-path-auth-decision.md` §5.4）。
+ * 写路径与管理台的 403 页（`docs/write-path-auth-decision.md` §5.4 · `docs/admin-console-ia-decision.md` §3）。
  *
  * **不重定向**：重定向会把 POST 变成 GET，用户会以为「提交成功了」（跳到同一页、也没有错误提示）。
  *
  * `csrf` 那条给**回本页**的链接：最常见的真实原因是「开着两个标签页，在另一个标签改了口令」
  * （`token_version` 变了 → 会话重签 → 这个页面的 token 就失效了），刷新即可拿到新 token。
  * 但**文案不解释这个内部原因** —— 那既暴露实现细节，多数人也看不懂。
+ *
+ * `admin` 那条是**只读用户撞上管理台**：明说「需要管理员权限 · 当前账号是只读」。
+ * 是 403 不是 404 —— 用户该知道这是**权限**问题，不是地址敲错了（§3.1）。
  */
 export function forbiddenPage(
   kind: ForbiddenKind,
   site: { title: string; description: string },
   backPath = '/',
 ): string {
-  const origin = kind === 'origin'
-  const body = origin
-    ? `<h1>请求来源不可信</h1>
+  const page = {
+    origin: {
+      title: '请求来源不可信',
+      body: `<h1>请求来源不可信</h1>
 <p>这个请求不是从本站发起的，已拒绝。</p>
-<p><a href="/">回首页</a></p>`
-    : `<h1>页面已过期</h1>
-<p>提交来源异常或页面已过期，请刷新后重试。</p>
-<p><a href="${escapeHtml(backPath)}">回上一页</a></p>`
-  return layout(
-    {
-      title: origin ? '请求来源不可信' : '页面已过期',
-      description: site.description,
-      body,
+<p><a href="/">回首页</a></p>`,
     },
-    site,
-  )
+    csrf: {
+      title: '页面已过期',
+      body: `<h1>页面已过期</h1>
+<p>提交来源异常或页面已过期，请刷新后重试。</p>
+<p><a href="${escapeHtml(backPath)}">回上一页</a></p>`,
+    },
+    admin: {
+      title: '需要管理员权限',
+      body: `<h1>需要管理员权限</h1>
+<p>这个页面需要管理员权限。当前账号是只读。</p>
+<p><a href="/">回首页</a></p>`,
+    },
+  }[kind]
+  return layout({ title: page.title, description: site.description, body: page.body }, site)
+}
+
+/**
+ * `?notice=<key>` 的**闭集**（`docs/admin-console-ia-decision.md` §4.1）。
+ *
+ * 提示文本**不来自 URL**：未知 key → 不渲染任何东西。
+ * 为什么不做「自由文本 + 转义」：转义挡得住 XSS，挡不住**社工** ——
+ * 一条 URL 就能让页面显示「已停用账号 alice」，而这个页面的可信度正来自「它说的就是真的」。
+ * 代价只是新增动作时多写一行文本。
+ */
+export const NOTICE_TEXT: Record<string, string> = {
+  'target-saved': '已保存目标。',
+  'target-enabled': '已启用目标。',
+  'target-disabled': '已停用目标。',
+  'account-created': '已创建账号。',
+  'role-changed': '已修改角色。',
+  'account-disabled': '已停用账号。',
+  'account-enabled': '已启用账号。',
+  'password-reset': '已重置口令。',
+  'backup-started': '已触发备份。',
+  'settings-saved': '已保存设置。',
+}
+
+/**
+ * 渲染一条提示。`tone`：`ok`（成功/中性）· `bad`（校验失败与守卫拒绝）· `warn`（不致命但要知道）。
+ * **未知 key 返回空串** —— 这里是闭集的落点，不是「顺手给个默认」。
+ */
+export function renderNotice(key: unknown, tone: 'ok' | 'bad' | 'warn' = 'ok'): string {
+  const text = typeof key === 'string' ? NOTICE_TEXT[key] : undefined
+  if (!text) return ''
+  // ⚠ 基类 `.notice` **必须一起输出**：`.notice-bad` 只覆盖左边框颜色，
+  // 单用它就丢了背景、内边距与圆角（`status-banner` 那种独立类不适用这里）。
+  const cls = tone === 'ok' ? 'notice' : `notice notice-${tone}`
+  return `<p class="${cls}">${escapeHtml(text)}</p>`
+}
+
+/** 概览页要的四块摘要（**一律现算**：不落库、不缓存 —— 计数是「一眼的状态」，不是账本）。 */
+export interface AdminOverview {
+  targets: { enabled: number; total: number; groups: number }
+  accounts: { total: number; admins: number; disabled: number }
+  backup: { latest: string | null; latestAt: number | null; doneToday: boolean }
+  settings: { title: string; description: string; intervalSeconds: number }
+  /** 零管理员：**每次渲染现算** —— 启动日志只在重启时看得到，这里才是常驻位置（roles §5）。 */
+  zeroAdmins: boolean
+}
+
+/**
+ * `/admin`（概览，`docs/admin-console-ia-decision.md` §6.1）。
+ *
+ * **刻意不渲染目标列表**：那会造出第二份真相（与 `/admin/targets` 各说各话）。
+ * 概览只给「一眼的状态」与进子页的入口。
+ */
+export function adminOverviewPage(
+  d: AdminOverview,
+  site: { title: string; description: string },
+  notice?: unknown,
+): string {
+  const card = (title: string, value: string, detail: string, href: string): string =>
+    `<div class="stat"><div class="stat-label">${escapeHtml(title)}</div>` +
+    `<div class="stat-num">${escapeHtml(value)}</div>` +
+    `<div class="stat-sub">${escapeHtml(detail)}</div>` +
+    `<div class="stat-sub"><a href="${href}">进入 →</a></div></div>`
+
+  const backupValue = d.backup.latest ? (d.backup.doneToday ? '今天已备份' : '今天还没备份') : '还没有备份'
+  const backupDetail = d.backup.latest
+    ? `${d.backup.latest}${d.backup.latestAt ? ` · ${formatAgo(d.backup.latestAt)}` : ''}`
+    : '（备份目录为空）'
+
+  const body =
+    // `?notice=<key>`：**闭集**，未知 key 什么都不渲染（`renderNotice` 的契约）。
+    renderNotice(notice) +
+    // 零管理员告警：一条 warn 档提示 + 修复命令。它是**常驻**的，不靠启动时算好的一次性状态。
+    (d.zeroAdmins
+      ? `<p class="notice notice-warn">库里没有「启用中的管理员」：管理台没人能进（读面不受影响）。
+修复：<code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code></p>`
+      : '') +
+    `<h1>管理台</h1>
+<p class="admin-hint">这一版是<strong>只读</strong>的：五个页面看到真实数据，写动作由各自的票接上。</p>
+<div class="stat-strip">
+${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
+${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
+${card('备份', backupValue, backupDetail, '/admin/backups')}
+${card('站点设置', d.settings.title, `${d.settings.description} · 每 ${d.settings.intervalSeconds}s 探测`, '/admin/settings')}
+</div>`
+
+  return layout({ title: '管理台', description: site.description, active: 'admin', body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */

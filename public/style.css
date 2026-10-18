@@ -381,3 +381,20 @@ main { padding-top: 34px; }
   padding: 0;
 }
 .logout-form button:hover { opacity: 1; text-decoration: underline; }
+
+/* 管理台（#39）：提示的三档 + 表单与确认框的类名。
+   三档含义见 docs/admin-console-ia-decision.md §4.3：
+   .notice 成功/中性 · .notice-bad 校验失败与守卫拒绝 · .notice-warn 不致命但要知道。
+   ⚠ 修饰类只覆盖左边框颜色，基类 .notice 必须一起输出。 */
+.notice-bad { border-left-color: var(--bad); color: var(--bad); }
+.notice-warn { border-left-color: var(--warn); }
+
+/* 摘要卡里的一行小字（概览页用） */
+.stat-sub { color: var(--fg-faint); font-size: 0.8rem; margin-top: 2px; }
+
+/* 表单与破坏性操作 */
+.form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.confirm { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; font-size: 0.86rem; }
+.btn-danger { border-color: var(--bad); color: var(--bad); }
+.admin-hint { color: var(--fg-faint); font-size: 0.86rem; }
