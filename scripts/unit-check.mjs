@@ -7,7 +7,7 @@
  *
  * 需要先构建：`npm run build && node scripts/unit-check.mjs`
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -655,6 +655,265 @@ section('requireAdmin: 资格守卫（一个守卫 + 一处判定）')
   check('**只读 → 不够格**（403，不是 404）', auth.requireAdmin({ allow: true, role: 'readonly' }) === false)
   check('未放行 → 不够格', auth.requireAdmin({ allow: false, role: 'admin' }) === false)
   check('放行但没有角色 → 不够格', auth.requireAdmin({ allow: true }) === false)
+}
+
+// ════════════════════════════════════════════════════
+section('targets: 首次导入 / id 不可变 / 删除两岔 / enabled_at')
+// ════════════════════════════════════════════════════
+/*
+ * 目标真源是 SQLite（`docs/targets-source-decision.md`），而本文件**顶层已经用 sandbox 的库**
+ * 把 `config.databasePath` 冻结了 —— 所以这一节全部在**子进程**里跑：
+ * 每个场景自带 `DATABASE_PATH` / `TARGETS_JSON`，互不污染，也正好验「启动时真的没崩」。
+ */
+{
+  const tdir = fs.mkdtempSync(path.join(root, '.unit-targets-'))
+  const scenarioFile = path.join(tdir, 'scenario.mjs')
+  const fileUrl = (rel) => 'file://' + path.join(root, rel).replace(/\\/g, '/')
+
+  // 场景脚本：只做动作、打成 JSON 交回来。断言全在下面（脚本越笨越好排错）。
+  fs.writeFileSync(
+    scenarioFile,
+    `
+import path from 'node:path'
+import Database from 'better-sqlite3'
+const T = await import(${JSON.stringify(fileUrl('dist/targets-store.js'))})
+const S = await import(${JSON.stringify(fileUrl('dist/store.js'))})
+const { config } = await import(${JSON.stringify(fileUrl('dist/config.js'))})
+const scenario = process.argv[2]
+const out = {}
+const rowIds = () => T.rawTargets().map((r) => r.id)
+const probeCount = () =>
+  new Database(process.env.DATABASE_PATH, { readonly: true }).prepare('SELECT COUNT(*) AS n FROM probes').get().n
+const DAY = 24 * 60 * 60 * 1000
+
+if (scenario === 'import') {
+  T.initTargets()
+  // 与启动顺序一致（server.ts 的 buildServer）：导入之后再打那行「文件不再是输入」的警告。
+  T.warnTargetsFileIsNoLongerInput()
+  out.rows = T.rawTargets()
+  out.enabledCount = T.countEnabledTargets()
+  out.allCount = T.countAllTargets()
+  out.probeList = T.listEnabledTargets().map((t) => t.id)
+  out.source = config.targets.map((t) => t.id)
+}
+
+if (scenario === 'list') {
+  out.all = T.listAllTargets().map((r) => ({ id: r.id, group: r.group, enabled: r.enabled, hasHistory: r.hasHistory }))
+  out.getTarget = T.getTarget('ok') ? T.getTarget('ok').id : null
+  out.missing = T.getTarget('nope') === undefined
+}
+
+if (scenario === 'write') {
+  const now = Date.now()
+  const base = { name: '新目标', url: 'https://example.com/', enabled: true }
+  out.create = T.createTarget({ id: 'fresh', ...base })
+  out.duplicate = T.createTarget({ id: 'fresh', ...base })
+  // 更新时混进一个 id 字段：**不该被采纳**（updateTarget 的签名里根本没有它）
+  out.updateChanges = T.updateTarget('fresh', { name: '改过名', url: 'https://example.com/x', id: 'hijack' })
+  const afterUpdate = T.getTarget('fresh')
+  out.afterUpdate = { id: afterUpdate.id, name: afterUpdate.name, url: afterUpdate.url }
+
+  // 删除两岔之一：**没有历史** → 物理删行，id 可以再用
+  out.deleteNoHistory = T.removeOrDisableTarget('fresh')
+  out.afterDelete = rowIds()
+  out.reCreate = T.createTarget({ id: 'fresh', name: '再来一次', url: 'https://example.com/', enabled: true })
+
+  // 删除两岔之二：**有历史** → 只停用，probes 行数一行不变
+  S.initStore()
+  out.probesBefore = probeCount()
+  S.recordResults([{ targetId: 'fresh', at: now, roundAt: now, status: 'up', latencyMs: 3, statusCode: 200, error: null }])
+  out.probesAfterInsert = probeCount()
+  out.deleteWithHistory = T.removeOrDisableTarget('fresh')
+  out.probesAfterDelete = probeCount()
+  const row = T.getTarget('fresh')
+  out.rowAfter = { exists: !!row, enabled: row ? row.enabled : null, hasHistory: row ? row.hasHistory : null }
+  // 停用后的目标不再进探测清单
+  out.probeListAfterDisable = T.listEnabledTargets().map((t) => t.id).includes('fresh')
+}
+
+if (scenario === 'streak') {
+  const now = Date.now()
+  // 100 天前的一次 up：老算法会把它当成「连续可用 100 天」的起点
+  S.initStore()
+  S.recordResults([{ targetId: 'ok', at: now - 100 * DAY, roundAt: now - 100 * DAY, status: 'up', latencyMs: 5, statusCode: 200, error: null }])
+  // 停用再启用（enabled_at 刷新到现在），然后**重新启用后的第一轮探测**是 up
+  T.setTargetEnabled('ok', false)
+  T.setTargetEnabled('ok', true)
+  S.recordResults([{ targetId: 'ok', at: now, roundAt: now, status: 'up', latencyMs: 5, statusCode: 200, error: null }])
+  const enabledAt = T.getTarget('ok').enabledAt
+  out.enabledAtRecent = now - enabledAt < 5000
+  // 同一批数据、两个答案：不带下界 = 老行为（会说「连续可用 100 天」，而它停了 100 天）
+  out.withoutFloor = S.getStats('ok', 365 * DAY).upStreakMs
+  out.floored = S.getStats('ok', 365 * DAY, enabledAt).upStreakMs
+}
+
+if (scenario === 'uptime') {
+  const now = Date.now()
+  S.initStore()
+  const rows = []
+  for (const round of [now - 2000, now - 1000]) {
+    for (const id of ['ok', 'bad', 'dead']) {
+      rows.push({ targetId: id, at: round, roundAt: round, status: id === 'ok' ? 'up' : 'down', latencyMs: 4, statusCode: 200, error: null })
+    }
+  }
+  S.recordResults(rows)
+  out.pointsWith3 = S.getUptimeRaw(60 * 60 * 1000, 3).length
+  out.pointsWith4 = S.getUptimeRaw(60 * 60 * 1000, 4).length
+  out.totalsWith3 = S.getUptimeRaw(60 * 60 * 1000, 3).map((p) => p.total)
+}
+
+console.log(JSON.stringify(out))
+`,
+    'utf8',
+  )
+
+  /** 跑一个场景：env 覆盖 DATABASE_PATH / TARGETS_JSON / TARGETS_PATH，返回 {status,stdout,stderr}。 */
+  const run = (scenario, db, env = {}, extraArgs = []) =>
+    spawnSync(process.execPath, [scenarioFile, scenario, ...extraArgs], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DATABASE_PATH: db,
+        TARGETS_JSON: '',
+        TARGETS_PATH: '',
+        SESSION_SECRET: 'unit-targets-secret',
+        ...env,
+      },
+    })
+  const json = (r) => {
+    try {
+      return JSON.parse(String(r.stdout).trim().split('\n').pop())
+    } catch {
+      return { __parseError: String(r.stdout).slice(-300) + String(r.stderr).slice(-300) }
+    }
+  }
+
+  const FILE3 = [
+    { id: 'ok', name: '可用', url: 'https://example.com/', group: 'G1', expectStatus: [200] },
+    { id: 'bad', name: '状态码不符', url: 'https://example.com/', group: 'G1', expectStatus: [999] },
+    { id: 'dead', name: '不可达', url: 'http://10.255.255.1/', group: 'G2', timeoutMs: 1500 },
+  ]
+
+  // ── ① 空库 + 3 条合法目标 → 3 行且字段一致 ──
+  const db1 = path.join(tdir, 't1.sqlite')
+  const first = run('import', db1, { TARGETS_JSON: JSON.stringify(FILE3) })
+  const firstOut = json(first)
+  check('首次导入：空库 + 3 条 → 3 行', firstOut.allCount === 3, JSON.stringify(firstOut.rows?.map?.((r) => r.id)))
+  const byId = Object.fromEntries((firstOut.rows ?? []).map((r) => [r.id, r]))
+  check(
+    '首次导入：字段逐个落对（group/expect_status/timeout_ms/enabled）',
+    byId.ok?.grp === 'G1' &&
+      byId.ok?.expect_status === '[200]' &&
+      byId.dead?.timeout_ms === 1500 &&
+      byId.dead?.grp === 'G2' &&
+      byId.bad?.expect_status === '[999]' &&
+      byId.ok?.enabled === 1,
+    JSON.stringify(firstOut.rows),
+  )
+  check('首次导入：探测清单只含启用中的', String(firstOut.probeList) === 'bad,dead,ok', String(firstOut.probeList))
+  check('首次导入：日志一行说清来源与「此后真源是 SQLite」', /首次导入 3 个目标/.test(first.stdout) && /此后真源是 SQLite/.test(first.stdout), first.stdout.trim().split('\n').pop())
+  check('首次导入：导入时**不打**「文件不再是输入」的警告', !/不再是输入/.test(first.stderr), first.stderr.trim())
+
+  // ── ② 再启动一次 → 仍 3 行、没有第二次导入日志 ──
+  const second = run('import', db1, { TARGETS_JSON: JSON.stringify(FILE3) })
+  const secondOut = json(second)
+  check('幂等：再启动一次仍 3 行', secondOut.allCount === 3, String(secondOut.allCount))
+  check('幂等：**没有**第二份导入日志', !/首次导入/.test(second.stdout), second.stdout.trim())
+  check('幂等：这次打出了「文件不再是输入」的警告（真源是库）', /不再是输入/.test(second.stderr) && /管理台/.test(second.stderr), second.stderr.trim().slice(0, 200))
+
+  // ── ③ 库非空 + 文件另 3 条 → 库里不动 ──
+  const OTHER3 = FILE3.map((t) => ({ ...t, id: t.id + '-other' }))
+  const third = run('import', db1, { TARGETS_JSON: JSON.stringify(OTHER3) })
+  const thirdOut = json(third)
+  check('库非空：文件里的新条目**一条都不进来**', thirdOut.allCount === 3 && !String(thirdOut.rows.map((r) => r.id)).includes('other'), String(thirdOut.rows.map((r) => r.id)))
+  check('库非空：忽略文件时打警告', /不再是输入/.test(third.stderr), third.stderr.trim().slice(0, 160))
+
+  // ── ④ 带凭证的 URL：该条不入库，其余照常 ──
+  const credFile = [
+    { id: 'ok2', name: '好的', url: 'https://example.com/' },
+    { id: 'creds', name: '带凭证', url: 'http://ops:hunter2@ledger.internal.example/' },
+    { id: 'bad2', name: '也好', url: 'https://example.com/' },
+  ]
+  const cred = json(run('import', path.join(tdir, 't2.sqlite'), { TARGETS_JSON: JSON.stringify(credFile) }))
+  check('带凭证的 URL **不入库**，其余两条照常入库', String(cred.rows.map((r) => r.id)) === 'bad2,ok2', String(cred.rows.map((r) => r.id)))
+  check('带凭证的那条有 `console.warn`（复用 validateTargetUrl）', cred.rows.length === 2)
+
+  // ── ⑤ 文件里两条同 id → 只入第一条 ──
+  const dupFile = [
+    { id: 'same', name: '第一条', url: 'https://example.com/1' },
+    { id: 'same', name: '第二条', url: 'https://example.com/2' },
+  ]
+  const dup = json(run('import', path.join(tdir, 't3.sqlite'), { TARGETS_JSON: JSON.stringify(dupFile) }))
+  check('同 id 只入第一条（重复条目被跳过）', dup.rows.length === 1 && dup.rows[0].name === '第一条', JSON.stringify(dup.rows.map((r) => r.name)))
+
+  // ── ⑥ 文件不是数组 / 不存在 → 0 行、有警告、**服务照常启动** ──
+  const notArray = path.join(tdir, 'not-array.json')
+  fs.writeFileSync(notArray, '{"id":"x"}', 'utf8')
+  const na = run('import', path.join(tdir, 't4.sqlite'), { TARGETS_PATH: notArray })
+  check('文件不是数组 → 0 行，但**进程正常退出**（不抛）', na.status === 0 && json(na).allCount === 0, `status=${na.status}`)
+  check('文件不是数组 → 打出了警告', /必须是数组/.test(na.stderr), na.stderr.trim().slice(0, 160))
+  const missingFile = run('import', path.join(tdir, 't5.sqlite'), { TARGETS_PATH: path.join(tdir, 'nope.json') })
+  check('文件不存在 → 0 行、不报错、照常启动', missingFile.status === 0 && json(missingFile).allCount === 0, `status=${missingFile.status}`)
+
+  // ── ⑦⑧⑨ 删除两岔 / id 不可变 / 重复 id ──
+  const w = json(run('write', db1, { TARGETS_JSON: JSON.stringify(FILE3) }))
+  check('新增 → `created`', w.create === 'created', String(w.create))
+  check('同 id 再新增 → `duplicate`（靠主键约束，不是先查再插）', w.duplicate === 'duplicate', String(w.duplicate))
+  check('编辑只改传入的字段，`changes=1`', w.updateChanges === 1, String(w.updateChanges))
+  check('**提交里混进的 `id` 被忽略**（id 不可变）', w.afterUpdate.id === 'fresh' && w.afterUpdate.name === '改过名', JSON.stringify(w.afterUpdate))
+  check('无历史 → **物理删行**', w.deleteNoHistory === 'deleted' && !String(w.afterDelete).includes('fresh'), `${w.deleteNoHistory} · ${JSON.stringify(w.afterDelete)}`)
+  check('删掉之后同一个 id 可以再新增', w.reCreate === 'created', String(w.reCreate))
+  check('有历史 → **只停用**，probes 行数一行不变', w.deleteWithHistory === 'disabled' && w.probesAfterDelete === w.probesBefore + 1, `${w.deleteWithHistory} · ${w.probesBefore}→${w.probesAfterInsert}→${w.probesAfterDelete}`)
+  check('停用后该行还在（enabled=0、hasHistory=true）', w.rowAfter.exists && w.rowAfter.enabled === false && w.rowAfter.hasHistory === true, JSON.stringify(w.rowAfter))
+  check('停用后不再进探测清单', w.probeListAfterDisable === false, String(w.probeListAfterDisable))
+
+  // ── ⑩ getUptimeRaw 的口径回归（期望目标数由调用方给）──
+  const up = json(run('uptime', db1, { TARGETS_JSON: JSON.stringify(FILE3) }))
+  check('getUptimeRaw：期望 3 → 两轮都留下、每轮 total=3', up.pointsWith3 === 2 && String(up.totalsWith3) === '3,3', JSON.stringify(up))
+  check('getUptimeRaw：期望 4 → 同一批数据被 `HAVING total >= ?` 滤掉（口径真的跟着参数走）', up.pointsWith4 === 0, String(up.pointsWith4))
+
+  // ── ⑪ enabled_at 下界：停用再启用后连续可用从**重新启用**起算 ──
+  const st = json(run('streak', db1, { TARGETS_JSON: JSON.stringify(FILE3) }))
+  check('前提：**同一批数据**不带下界时会说「连续可用约 100 天」（这就是要修的谎）', st.withoutFloor > 90 * 24 * 3600 * 1000, String(st.withoutFloor))
+  check('设了 enabled_at 之后，连续可用从重新启用那一刻起算（< 5 秒）', st.enabledAtRecent === true && st.floored < 5000, JSON.stringify(st))
+
+  // ── ⑫ 双进程同时首次启动 → 无重复 id、不抛异常 ──
+  const db2 = path.join(tdir, 't6.sqlite')
+  const p1 = spawnSync(process.execPath, [scenarioFile, 'import'], { cwd: root, encoding: 'utf8', env: { ...process.env, DATABASE_PATH: db2, TARGETS_JSON: JSON.stringify(FILE3) } })
+  // spawnSync 是串行的，所以这里用两次「真并发」的子进程：先起一个，不等它结束再起第二个
+  const { spawn } = await import('node:child_process')
+  const raceDb = path.join(tdir, 't7.sqlite')
+  const raceEnv = { ...process.env, DATABASE_PATH: raceDb, TARGETS_JSON: JSON.stringify(FILE3) }
+  const both = await Promise.all(
+    [0, 1].map(
+      () =>
+        new Promise((resolve) => {
+          const c = spawn(process.execPath, [scenarioFile, 'import'], { cwd: root, env: raceEnv })
+          let out = ''
+          c.stdout.on('data', (d) => (out += d))
+          c.on('close', (code) => resolve({ code, out }))
+        }),
+    ),
+  )
+  check('双进程同启：两个都正常退出（不抛异常）', both.every((r) => r.code === 0), JSON.stringify(both.map((r) => r.code)))
+  const raced = json(run('import', raceDb, { TARGETS_JSON: JSON.stringify(FILE3) }))
+  check('双进程同启：库里恰好 3 行、无重复 id', raced.allCount === 3 && new Set(raced.rows.map((r) => r.id)).size === 3, JSON.stringify(raced.rows.map((r) => r.id)))
+  check('（前置）单进程那份数据也建好了，说明场景本身可复现', p1.status === 0)
+
+  // ── hasHistory 与 listAllTargets（页面按它决定按钮文案）──
+  const l = json(run('list', db1, { TARGETS_JSON: JSON.stringify(FILE3) }))
+  check(
+    'listAllTargets：带 group 与 hasHistory，且未分组的排最后',
+    l.all.length === 4 &&
+      l.all.some((r) => r.id === 'fresh' && r.hasHistory === true && r.enabled === false) &&
+      l.all[l.all.length - 1].id === 'fresh' &&
+      l.all[0].group === 'G1',
+    JSON.stringify(l.all),
+  )
+  check('getTarget：存在拿到、不存在给 undefined', l.getTarget === 'ok' && l.missing === true, JSON.stringify(l))
+
+  fs.rmSync(tdir, { recursive: true, force: true })
 }
 
 if (failed === 0) {
