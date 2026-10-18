@@ -615,6 +615,75 @@ export function listArticlesForAdmin(): Array<
   }))
 }
 
+/** 回收站里的一行（与 `listArticlesForAdmin` 同形，便于视图复用）。 */
+export type TrashedArticleRow = Pick<ArticleRow, 'slug' | 'title' | 'date' | 'draft' | 'deletedAt' | 'tags'>
+
+/**
+ * 回收站里的文章（`deleted_at` 非空），**按删除时间倒序**（最近删的在最上面）。
+ *
+ * 规格 #48 的出口表把它单列成一个具名出口：**回收站是给管理员看的第三个读者面**，
+ * 与读面、管理台都不共用名字。
+ */
+export function listTrashedArticles(): TrashedArticleRow[] {
+  const rows = handle()
+    .prepare(
+      `SELECT slug, title, date, draft, deleted_at, tags FROM articles
+        WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC`,
+    )
+    .all() as Array<Record<string, unknown>>
+  return rows.map((r) => ({
+    slug: String(r.slug),
+    title: String(r.title),
+    date: String(r.date),
+    draft: Number(r.draft),
+    deletedAt: Number(r.deleted_at),
+    tags: String(r.tags ?? '[]'),
+  }))
+}
+
+/**
+ * 移进回收站（**软删除**）。返回 `changes`（重复移入得到 0，那是幂等性的证据）。
+ *
+ * `deleted_at` **正交**于 `draft`：它不覆盖「原来是草稿还是已发布」，
+ * 所以还原时**自动回到删除前那个状态** —— 不需要 WordPress 那种 `_wp_trash_meta_status` 旁路。
+ */
+export function trashArticle(slug: string, now: number = Date.now()): number {
+  return handle()
+    .prepare(`UPDATE articles SET deleted_at = ? WHERE slug = ? AND deleted_at IS NULL`)
+    .run(now, slug).changes
+}
+
+/** 从回收站还原。**只清 `deleted_at`，不碰 `draft`** —— 这就是「回到删除前那个状态」。 */
+export function restoreArticle(slug: string): number {
+  return handle()
+    .prepare(`UPDATE articles SET deleted_at = NULL WHERE slug = ? AND deleted_at IS NOT NULL`)
+    .run(slug).changes
+}
+
+/**
+ * **彻底删除**：文章行 + 它的**全部修订行**，同一事务（规格 #48 的两个单元缝之一）。
+ *
+ * ⚠ 只对**回收站里**的文章生效（`deleted_at IS NOT NULL` 是硬条件）。
+ * 不在回收站时**什么都不删**并返回 `article: 0` —— 调用方看计数，而不是靠一个会抛的异常。
+ * 这个顺序是刻意的：**先确认删到了文章行，才去删修订** —— 否则一次误调用会把一篇活文章的
+ * 历史全部抹掉，而文章还在。
+ */
+export function purgeArticle(slug: string): { article: number; revisions: number } {
+  const db = handle()
+  return db.transaction(() => {
+    const article = db.prepare(`DELETE FROM articles WHERE slug = ? AND deleted_at IS NOT NULL`).run(slug).changes
+    if (article !== 1) return { article, revisions: 0 }
+    const revisions = db.prepare(`DELETE FROM article_revisions WHERE slug = ?`).run(slug).changes
+    return { article, revisions }
+  })()
+}
+
+/** 某篇文章的修订条数（「彻底删除」把它一起带走 —— 断言要用）。 */
+export function countArticleRevisions(slug: string): number {
+  const row = handle().prepare(`SELECT COUNT(*) AS n FROM article_revisions WHERE slug = ?`).get(slug) as { n: number }
+  return row.n
+}
+
 export function closeStore(): void {
   db?.close()
   db = null

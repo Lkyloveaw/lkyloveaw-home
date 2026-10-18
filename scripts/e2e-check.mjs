@@ -1166,7 +1166,78 @@ try {
     })
     check('⑪ 只读写 → **403**（且不是重定向）', roWrite.status === 403, `got ${roWrite.status}`)
 
-    // 收尾：把探针文章发回去再删掉？—— 没有删除动作（归 #51），留着不影响别的断言
+
+    // ── 回收站（#51 前半）：软删除 · 还原回原状态 · slug 仍占位 · 彻底删除 ──
+    // 先发布，好验证「还原回**已发布**」这一侧
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-publish', orig_slug: SLUG } })
+    check('回收站前提：文章此刻是已发布（直链 200）', (await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })).status === 200)
+
+    const trashed = await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-trash', orig_slug: SLUG } })
+    check('⑫ 移进回收站 → 302 + notice', trashed.status === 302 && /notice=article-trashed/.test(trashed.location), trashed.location)
+    check('⑫ 读者立刻看不到（直链 404）', (await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })).status === 404)
+    check('⑫ 列表里也没有它', !(await get('/posts', { cookie: admin })).body.includes(TITLE))
+    const withTrash = await get('/admin/articles', { cookie: admin })
+    check('⑫ 管理台里能看到它在回收站（带「删除前状态」）', /回收站（1）/.test(withTrash.body) && withTrash.body.includes(TITLE))
+    check(
+      '⑫ 回收站里**不给编辑表单**（想改就先还原）',
+      /这篇在<strong>回收站<\/strong>里/.test(
+        (await get('/admin/articles?edit=' + encodeURIComponent(SLUG), { cookie: admin })).body,
+      ),
+    )
+
+    // ⑬ slug 仍被占着 —— 免得旧链接被别人捡去用
+    const dupTrashed = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-create', slug: SLUG, title: '想抢这个 slug', date: '2026-03-04', tags: '', summary: '', body_md: '正文' },
+    })
+    check('⑬ 回收站里的 slug **仍被占用**（撞名 400）', dupTrashed.status === 400, `got ${dupTrashed.status}`)
+    check('⑬ 文案**明说它在回收站里**', /回收站/.test(dupTrashed.body))
+
+    // ⑭ 回收站里的文章**不能改** —— 保存会悄悄还原它，那是坑
+    const editTrashed = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-save', orig_slug: SLUG, slug: SLUG, title: '偷改回收站里的文章', date: '2026-03-01', tags: '', summary: '', body_md: '不该写进去' },
+    })
+    check('⑭ 对回收站里的文章「保存」→ **400**（不许悄悄还原）', editTrashed.status === 400, `got ${editTrashed.status}`)
+    check('⑭ 文案告诉用户先还原', /先还原/.test(editTrashed.body))
+
+    // ⑮ 还原 → **回到删除前那个状态**（`deleted_at` 正交于 `draft` 的证明）
+    const restored = await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-restore', orig_slug: SLUG } })
+    check('⑮ 还原 → 302 + notice', restored.status === 302 && /notice=article-restored/.test(restored.location), restored.location)
+    check('⑮ **还原回「已发布」**（不用重新判断一遍）', (await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })).status === 200)
+    check('⑮ 回收站空了', !/回收站（/.test((await get('/admin/articles', { cookie: admin })).body))
+
+    // ⑯ 正交的另一侧：草稿进回收站、还原后**仍是草稿**
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-unpublish', orig_slug: SLUG } })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-trash', orig_slug: SLUG } })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-restore', orig_slug: SLUG } })
+    check('⑯ 草稿进回收站、还原后**仍是草稿**（直链 404）', (await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })).status === 404)
+
+    // ⑰ 彻底删除：**不勾确认框 → 400**（判据在服务端 —— 禁用 JS 也要拦得住）
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-trash', orig_slug: SLUG } })
+    const noConfirm = await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-purge', orig_slug: SLUG } })
+    check('⑰ 彻底删除**不勾确认框 → 400**', noConfirm.status === 400, `got ${noConfirm.status}`)
+    check('⑰ 文章还在（没被删掉）', (await get('/admin/articles?edit=' + encodeURIComponent(SLUG), { cookie: admin })).status === 200)
+
+    // ⑱ 勾了 → 真的删掉，**连同它的全部修订**（规格 #48 的单元缝之一）
+    const { default: Database } = await import('better-sqlite3')
+    const countRevs = () => {
+      const db = new Database(TEST_DB, { readonly: true })
+      const n = db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE slug = ?').get(SLUG).n
+      db.close()
+      return n
+    }
+    check('⑱ 前提：它确实有修订行（保存/发布各留过）', countRevs() > 0, `n=${countRevs()}`)
+    const purged = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-purge', orig_slug: SLUG, confirm: 'yes' },
+    })
+    check('⑱ 彻底删除 → 302 + notice', purged.status === 302 && /notice=article-purged/.test(purged.location), purged.location)
+    check('⑱ 管理台里也打不开了（真的没了）', !(await get('/admin/articles')).body.includes(TITLE))
+    check('⑱ **修订也一起被带走**', countRevs() === 0, `n=${countRevs()}`)
   }
 } finally {
   child.kill('SIGTERM')

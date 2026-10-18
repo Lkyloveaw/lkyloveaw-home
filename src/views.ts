@@ -181,6 +181,9 @@ export const NOTICE_TEXT: Record<string, string> = {
   'article-saved': '已保存。',
   'article-published': '已发布，读者现在能看到它。',
   'article-unpublished': '已撤下，改回草稿。',
+  'article-trashed': '已移进回收站。它不再出现在任何读者看得到的地方。',
+  'article-restored': '已还原。',
+  'article-purged': '已彻底删除（连同它的全部修订）。',
 }
 
 /**
@@ -639,6 +642,8 @@ export interface AdminArticleForm {
   draft: boolean
   /** 新建时 slug 可填；已有文章**只读**（发布后不可改，`article-rules.ts` 的规矩）。 */
   isNew: boolean
+  /** 在回收站里。此时**不给编辑表单**，只给「还原」—— 想改就先还原，别在看不见影响的地方编辑。 */
+  trashed: boolean
 }
 
 export interface AdminArticlesOptions {
@@ -662,6 +667,7 @@ export interface AdminArticlesOptions {
  */
 export function adminArticlesPage(
   list: AdminArticleListItem[],
+  trash: AdminArticleListItem[],
   edit: AdminArticleForm | null,
   opts: AdminArticlesOptions,
   site: { title: string; description: string },
@@ -689,7 +695,17 @@ export function adminArticlesPage(
     : '<tr><td colspan="4" class="empty">还没有文章。</td></tr>'
 
   const editForm = edit
-    ? `<h2>${edit.isNew ? '新建文章' : '编辑：' + escapeHtml(edit.title)}</h2>
+    ? edit.trashed
+      ? `<h2>${escapeHtml(edit.title)}</h2>
+<p class="notice notice-warn">这篇在<strong>回收站</strong>里。回收站里只做「还原 / 彻底删除」两件事 ——
+想改就先还原，这样你不会在看不见影响的地方编辑。</p>
+<form method="post" action="/admin/articles" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="article-restore">
+<input type="hidden" name="orig_slug" value="${escapeHtml(edit.slug)}">
+<button type="submit">还原到「${edit.draft ? '草稿' : '已发布'}」</button>
+<span class="stat-sub">还原后它回到<strong>删除前那个状态</strong>（不需要你重新判断一遍）。</span>
+</form>`
+      : `<h2>${edit.isNew ? '新建文章' : '编辑：' + escapeHtml(edit.title)}</h2>
 <form method="post" action="/admin/articles" class="article-form">${csrfField()}
 <input type="hidden" name="action" value="${edit.isNew ? 'article-create' : 'article-save'}">
 <input type="hidden" name="orig_slug" value="${escapeHtml(edit.slug)}">
@@ -716,6 +732,12 @@ ${
 <input type="hidden" name="orig_slug" value="${escapeHtml(edit.slug)}">
 <button type="submit"${edit.draft ? '' : ' class="btn-danger"'}>${edit.draft ? '发布' : '撤下（改回草稿）'}</button>
 <span class="stat-sub">${edit.draft ? '发布后它会出现在「分享」里，slug 从此不可改。' : '撤下后读者看不到它，但它还在，随时可以再发。'}</span>
+</form>
+<form method="post" action="/admin/articles" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="article-trash">
+<input type="hidden" name="orig_slug" value="${escapeHtml(edit.slug)}">
+<button type="submit">移进回收站</button>
+<span class="stat-sub">它不再出现在任何读者看得到的地方，但<strong>随时能还原</strong> —— 回收站不自动清空。</span>
 </form>`
 }
 ${
@@ -723,6 +745,32 @@ ${
     ? `<h2>预览（草稿在管理台内渲染，读者看不到）</h2><div class="card article-preview">${opts.preview}</div>`
     : ''
 }`
+    : ''
+
+  const trashSection = trash.length
+    ? `<h2>回收站（${trash.length}）</h2>
+<p class="admin-hint">这里的文章<strong>读者看不到</strong>，但它们的 slug 仍然被占着 —— 免得旧链接被别人捡去用。</p>
+<table class="admin-table"><thead><tr><th>删除前状态</th><th>标题 / slug</th><th>日期</th><th>操作</th></tr></thead><tbody>
+${trash
+  .map(
+    (a) => `<tr>
+<td><span class="tag">${a.draft ? '草稿' : '已发布'}</span></td>
+<td><a href="/admin/articles?edit=${encodeURIComponent(a.slug)}">${escapeHtml(a.title)}</a><div class="stat-sub">${escapeHtml(a.slug)}</div></td>
+<td>${escapeHtml(a.date)}</td>
+<td>
+<form method="post" action="/admin/articles" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="article-restore">
+<input type="hidden" name="orig_slug" value="${escapeHtml(a.slug)}">
+<button type="submit">还原</button></form>
+<form method="post" action="/admin/articles" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="article-purge">
+<input type="hidden" name="orig_slug" value="${escapeHtml(a.slug)}">
+<label class="confirm"><input type="checkbox" name="confirm" value="yes" required> 我确认彻底删除，<strong>不可恢复</strong></label>
+<button type="submit" class="btn-danger">彻底删除</button></form>
+</td></tr>`,
+  )
+  .join('')}
+</tbody></table>`
     : ''
 
   const body =
@@ -733,6 +781,7 @@ ${
 <p class="form-actions"><a href="/admin/articles?edit=">＋ 新建一篇</a></p>
 <table class="admin-table"><thead><tr><th>状态</th><th>标题 / slug</th><th>日期</th><th>标签</th></tr></thead>
 <tbody>${rows}</tbody></table>
+${trashSection}
 ${editForm}`
 
   return layout({ title: '文章 · 管理台', description: site.description, active: 'admin', body }, site)

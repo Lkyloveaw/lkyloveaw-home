@@ -16,6 +16,7 @@ import {
 } from './content.js'
 import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
 import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
+import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackups } from './backup.js'
@@ -347,7 +348,16 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   // ── 管理台 · 文章（#50）──────────────────────────────────
 
   /** 文章的 `action` **闭集**（`docs/article-write-api-decision.md` §3.2）。未知值 → 400，**不拼进 SQL**。 */
-  const ARTICLE_ACTIONS = new Set(['article-create', 'article-save', 'article-publish', 'article-unpublish'])
+  const ARTICLE_ACTIONS = new Set([
+    'article-create',
+    'article-save',
+    'article-publish',
+    'article-unpublish',
+    // 回收站（#51）：**只做「还原 / 彻底删除」两件事** —— 想改就先还原
+    'article-trash',
+    'article-restore',
+    'article-purge',
+  ])
 
   /** `tags` 列是 JSON 数组字符串。解析失败就当作没有标签 —— **不抛**（一篇脏数据不该让整页 500）。 */
   const parseTagList = (json: string): string[] => {
@@ -381,6 +391,15 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       tags: parseTagList(r.tags),
     }))
 
+    const trash: AdminArticleListItem[] = listTrashedArticles().map((r) => ({
+      slug: r.slug,
+      title: r.title,
+      date: r.date,
+      draft: r.draft === 1,
+      trashed: true,
+      tags: parseTagList(r.tags),
+    }))
+
     let edit: AdminArticleForm | null = null
     let preview: string | null = null
     if (editSlug !== undefined) {
@@ -397,6 +416,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
           markdown: sub?.body_md ?? docToMarkdown(docFromJson(JSON.parse(row.body))),
           draft: row.draft === 1,
           isNew: false,
+          trashed: row.deletedAt !== null,
         }
         // 草稿预览：**同一页面、同一鉴权**（不在 `/posts/*` 下开任何预览入口）
         if (row.draft === 1 && !sub) {
@@ -416,10 +436,11 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
           markdown: sub?.body_md ?? '',
           draft: true,
           isNew: true,
+          trashed: false,
         }
       }
     }
-    return adminArticlesPage(list, edit, { notice: opts.notice, bad: opts.bad ?? null, preview }, site)
+    return adminArticlesPage(list, trash, edit, { notice: opts.notice, bad: opts.bad ?? null, preview }, site)
   }
 
   /**
@@ -456,6 +477,42 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     }
 
     if (!ARTICLE_ACTIONS.has(action)) return back('未知的动作，已拒绝。')
+
+    // ── 回收站的三个动作（#51）──
+    if (action === 'article-trash' || action === 'article-restore' || action === 'article-purge') {
+      const row = getArticleForAdmin(origSlug)
+      if (!row) return back('找不到这篇文章：' + origSlug)
+
+      if (action === 'article-trash') {
+        // 幂等：已经在回收站里时 changes = 0，仍然回跳成功（用户的意图已经达成）
+        const n = trashArticle(origSlug)
+        console.log('[articles] 移进回收站 ' + origSlug + '（changes=' + n + '）')
+        return reply.redirect('/admin/articles?notice=article-trashed', 302)
+      }
+
+      if (action === 'article-restore') {
+        const n = restoreArticle(origSlug)
+        console.log('[articles] 从回收站还原 ' + origSlug + '（changes=' + n + '）')
+        return reply.redirect('/admin/articles?edit=' + encodeURIComponent(origSlug) + '&notice=article-restored', 302)
+      }
+
+      // **彻底删除**：必勾确认框（`docs/admin-console-ia-decision.md` §5.1：不用 JS confirm()，
+      // 禁用 JS 也要拦得住 —— 所以判据在**服务端**）
+      if (String(form.confirm ?? '') !== 'yes') {
+        return back('彻底删除需要勾选确认框。', undefined)
+      }
+      const out = purgeArticle(origSlug)
+      if (out.article !== 1) return back('它不在回收站里，已拒绝彻底删除。', undefined)
+      console.log('[articles] 彻底删除 ' + origSlug + '（连带 ' + out.revisions + ' 条修订）')
+      return reply.redirect('/admin/articles?notice=article-purged', 302)
+    }
+
+    // ⚠ **回收站里的文章不能改**：`upsertArticleWithRevision` 的 ON CONFLICT 会清掉 `deleted_at`
+    //（那是给导入逃生口留的），所以这里必须先拦住 —— 否则「保存」会**悄悄把它还原**，
+    // 而用户在回收站里看到的应该是「只做还原/彻底删除两件事」。
+    if (getArticleForAdmin(origSlug)?.deletedAt !== null && action !== 'article-create') {
+      return back('这篇在回收站里：先还原，再改。', origSlug)
+    }
 
     // 发布 / 撤下：只改状态，**不碰正文**（正文要改先「保存」）
     if (action === 'article-publish' || action === 'article-unpublish') {
