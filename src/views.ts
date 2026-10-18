@@ -184,6 +184,7 @@ export const NOTICE_TEXT: Record<string, string> = {
   'article-trashed': '已移进回收站。它不再出现在任何读者看得到的地方。',
   'article-restored': '已还原。',
   'article-purged': '已彻底删除（连同它的全部修订）。',
+  'article-reverted': '已退回那一版（退回本身也留了一条修订）。',
 }
 
 /**
@@ -652,6 +653,18 @@ export interface AdminArticlesOptions {
   bad?: string | null
   /** 草稿的渲染预览（HTML，已由 `docToHtml` 产出）。**只在管理台内**。 */
   preview?: string | null
+  /** 修订历史（最近的在最上面）。**只在编辑已有文章时给**。 */
+  revisions?: AdminRevisionItem[]
+}
+
+/** 修订列表里的一条。`markdown` 是那一版正文还原出来的 Markdown（给人看全文用）。 */
+export interface AdminRevisionItem {
+  id: number
+  savedAt: number
+  title: string
+  markdown: string
+  /** 那一版**当时**是草稿还是已发布 —— 只是给人看的信息，**退回时不用它**。 */
+  draft: boolean
 }
 
 /**
@@ -747,6 +760,31 @@ ${
 }`
     : ''
 
+  const revisions = opts.revisions?.length
+    ? `<h2>修订历史（${opts.revisions.length}）</h2>
+<p class="admin-hint">每次保存留一版<strong>全文快照</strong>，永久保留（不自动清理）。
+退回<strong>不会删掉任何版本</strong> —— 退回本身也是一次保存。</p>
+<ol class="revision-list">
+${opts.revisions
+  .map(
+    (r) => `<li>
+<div class="form-actions">
+<strong>${escapeHtml(formatTime(r.savedAt))}</strong>
+<span class="tag">${r.draft ? '当时是草稿' : '当时是已发布'}</span>
+<span class="stat-sub">${escapeHtml(r.title)}</span>
+<form method="post" action="/admin/articles" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="article-revert">
+<input type="hidden" name="orig_slug" value="${escapeHtml(edit?.slug ?? '')}">
+<input type="hidden" name="revision" value="${r.id}">
+<button type="submit">退回这一版</button></form>
+</div>
+<details><summary>看这一版的正文</summary><pre class="revision-body">${escapeHtml(r.markdown)}</pre></details>
+</li>`,
+  )
+  .join('')}
+</ol>`
+    : ''
+
   const trashSection = trash.length
     ? `<h2>回收站（${trash.length}）</h2>
 <p class="admin-hint">这里的文章<strong>读者看不到</strong>，但它们的 slug 仍然被占着 —— 免得旧链接被别人捡去用。</p>
@@ -782,7 +820,8 @@ ${trash
 <table class="admin-table"><thead><tr><th>状态</th><th>标题 / slug</th><th>日期</th><th>标签</th></tr></thead>
 <tbody>${rows}</tbody></table>
 ${trashSection}
-${editForm}`
+${editForm}
+${revisions}`
 
   return layout({ title: '文章 · 管理台', description: site.description, active: 'admin', body }, site)
 }

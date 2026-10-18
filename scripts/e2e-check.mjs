@@ -1238,6 +1238,74 @@ try {
     check('⑱ 彻底删除 → 302 + notice', purged.status === 302 && /notice=article-purged/.test(purged.location), purged.location)
     check('⑱ 管理台里也打不开了（真的没了）', !(await get('/admin/articles')).body.includes(TITLE))
     check('⑱ **修订也一起被带走**', countRevs() === 0, `n=${countRevs()}`)
+
+    // ── 修订历史（#51 后半）：每版全文 · 退回 · 退回本身也留痕 ──
+    const RSLUG = 'e2e-修订探针'
+    const revCount = () => {
+      const db = new Database(TEST_DB, { readonly: true })
+      const n = db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE slug = ?').get(RSLUG).n
+      db.close()
+      return n
+    }
+    const revForm = (action, extra) => ({ action, orig_slug: RSLUG, slug: RSLUG, date: '2026-03-05', tags: '', summary: '', ...extra })
+
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-create', { title: '第一版标题', body_md: '第一版正文' }) })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-save', { title: '第二版标题', body_md: '第二版正文' }) })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-save', { title: '第三版标题', body_md: '第三版正文' }) })
+    check('⑲ 保存三次 → 三条修订（**新建那次也留了**）', revCount() === 3, `n=${revCount()}`)
+
+    const revPage = await get('/admin/articles?edit=' + encodeURIComponent(RSLUG), { cookie: admin })
+    check('⑲ 编辑面列出修订历史', /修订历史（3）/.test(revPage.body))
+    check('⑲ 每一版都能看全文', revPage.body.includes('第三版正文') && revPage.body.includes('第一版正文'))
+    const order = ['第三版标题', '第二版标题', '第一版标题'].map((t) => revPage.body.indexOf(t))
+    check('⑳ **最近的在最上面**（倒序）', order[0] < order[1] && order[1] < order[2], JSON.stringify(order))
+
+    // 从页面上取「最早那版」的修订号（倒序列表 → 最后一个），不猜
+    const revIds = [...revPage.body.matchAll(/name="revision" value="(\d+)"/g)].map((x) => Number(x[1]))
+    const firstRevId = revIds[revIds.length - 1]
+    check('⑳ 从页面上拿到了最早那版的修订号', Number.isInteger(firstRevId) && firstRevId > 0, `id=${firstRevId}`)
+
+    // ㉑ 退回那一版
+    const beforeRevert = revCount()
+    const reverted = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-revert', orig_slug: RSLUG, revision: String(firstRevId) },
+    })
+    check('㉑ 退回 → 302 + notice', reverted.status === 302 && /notice=article-reverted/.test(reverted.location), reverted.location)
+    const afterRevert = await get('/admin/articles?edit=' + encodeURIComponent(RSLUG), { cookie: admin })
+    const textarea = (afterRevert.body.match(/name="body_md"[^>]*>([\s\S]*?)<\/textarea>/) || [])[1] ?? ''
+    check('㉑ **当前正文等于那一版**', textarea.includes('第一版正文') && !textarea.includes('第三版正文'), textarea.slice(0, 40))
+    check('㉒ **退回本身也留了一条修订**（条数 +1）', revCount() === beforeRevert + 1, `${beforeRevert} → ${revCount()}`)
+    check('㉓ **退回不删任何版本**（第三版仍在列表里）', /第三版标题/.test(afterRevert.body))
+
+    // ㉔ 退回**保留当前的 draft 状态** —— 退回的是内容，不是「当时是草稿还是已发布」
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-publish', orig_slug: RSLUG } })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-revert', orig_slug: RSLUG, revision: String(firstRevId) } })
+    check(
+      '㉔ 退回**不把已发布的文章撤下来**（退回的是内容，不是状态）',
+      (await get('/posts/' + encodeURIComponent(RSLUG), { cookie: admin })).status === 200,
+    )
+
+    // ㉕ 编号不合法 / 不属于这篇 → 400
+    check(
+      '㉕ 修订编号不合法 → 400',
+      (await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-revert', orig_slug: RSLUG, revision: 'not-a-number' } })).status === 400,
+    )
+    check(
+      '㉕ 不存在 / 不属于这篇的修订 → 400',
+      (await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-revert', orig_slug: RSLUG, revision: '999999' } })).status === 400,
+    )
+
+    // ㉖ 回收站里的文章不能退回（想改就先还原）
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-trash', orig_slug: RSLUG } })
+    const revTrashed = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-revert', orig_slug: RSLUG, revision: String(firstRevId) },
+    })
+    check('㉖ 回收站里的文章退回 → **400**（先还原）', revTrashed.status === 400 && /先还原/.test(revTrashed.body), `got ${revTrashed.status}`)
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-restore', orig_slug: RSLUG } })
   }
 } finally {
   child.kill('SIGTERM')

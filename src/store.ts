@@ -684,6 +684,91 @@ export function countArticleRevisions(slug: string): number {
   return row.n
 }
 
+/** 一条修订的**完整内容**（「逐版全文」要给用户看的就是这些）。 */
+export interface ArticleRevisionRow {
+  id: number
+  slug: string
+  title: string
+  body: string
+  summary: string | null
+  date: string
+  tags: string
+  draft: number
+  savedAt: number
+}
+
+function toRevisionRow(r: Record<string, unknown>): ArticleRevisionRow {
+  return {
+    id: Number(r.id),
+    slug: String(r.slug),
+    title: String(r.title),
+    body: String(r.body),
+    summary: r.summary === null || r.summary === undefined ? null : String(r.summary),
+    date: String(r.date),
+    tags: String(r.tags),
+    draft: Number(r.draft),
+    savedAt: Number(r.saved_at),
+  }
+}
+
+/**
+ * 某篇文章的全部修订，**最近的在最上面**。
+ *
+ * 修订**永久保留、永不清理**（#32 明确拒绝了 WordPress 那种 30 天自动清空）——
+ * 所以这里没有 limit，也没有清理任务。代价是库会慢慢长，而那是被明确接受的代价。
+ */
+export function listRevisions(slug: string): ArticleRevisionRow[] {
+  const rows = handle()
+    .prepare(
+      `SELECT id, slug, title, body, summary, date, tags, draft, saved_at
+         FROM article_revisions WHERE slug = ? ORDER BY saved_at DESC, id DESC`,
+    )
+    .all(slug) as Array<Record<string, unknown>>
+  return rows.map(toRevisionRow)
+}
+
+/** 取一条修订。**带上 `slug` 让调用方能核对它属不属于这篇文章**（退回时的第一道检查）。 */
+export function getRevision(id: number): ArticleRevisionRow | undefined {
+  const row = handle()
+    .prepare(
+      `SELECT id, slug, title, body, summary, date, tags, draft, saved_at FROM article_revisions WHERE id = ?`,
+    )
+    .get(id) as Record<string, unknown> | undefined
+  return row ? toRevisionRow(row) : undefined
+}
+
+/**
+ * 退回某一版：把那一版的**内容**复制回当前文章。
+ *
+ * ⚠ **不移指针、不删任何修订** —— 退回本身就是一次保存，所以它**自己也留一条修订**。
+ * 否则「退回」会成为一个**不留痕迹**的动作，而它恰恰是最需要留痕的那个。
+ *
+ * ⚠ **保留当前的 `draft` 状态**：退回的是**内容**，不是「当时是草稿还是已发布」。
+ * 把一篇已发布的文章退回某个草稿时期的版本，不该顺手把它撤下来 ——
+ * 那会是一次没人要求的、读者可见的变化。
+ */
+export function revertToRevision(
+  slug: string,
+  revisionId: number,
+  now: number = Date.now(),
+): 'reverted' | 'unchanged' | 'missing' {
+  const rev = getRevision(revisionId)
+  if (!rev || rev.slug !== slug) return 'missing'
+  const current = getArticleForAdmin(slug)
+  if (!current) return 'missing'
+  const out = upsertArticleWithRevision({
+    slug,
+    title: rev.title,
+    body: rev.body,
+    summary: rev.summary,
+    date: rev.date,
+    tags: rev.tags,
+    draft: current.draft,
+    now,
+  })
+  return out === 'unchanged' ? 'unchanged' : 'reverted'
+}
+
 export function closeStore(): void {
   db?.close()
   db = null

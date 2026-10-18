@@ -17,6 +17,7 @@ import {
 import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
 import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
 import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
+import { listRevisions, revertToRevision } from './store.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackups } from './backup.js'
@@ -59,6 +60,7 @@ import {
   type AdminArticleForm,
   type AdminArticleListItem,
   type AdminOverview,
+  type AdminRevisionItem,
   type StatusSummary,
 } from './views.js'
 
@@ -357,6 +359,8 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     'article-trash',
     'article-restore',
     'article-purge',
+    // 修订（#51 后半）：退回某一版
+    'article-revert',
   ])
 
   /** `tags` 列是 JSON 数组字符串。解析失败就当作没有标签 —— **不抛**（一篇脏数据不该让整页 500）。 */
@@ -401,6 +405,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     }))
 
     let edit: AdminArticleForm | null = null
+    let revisions: AdminRevisionItem[] = []
     let preview: string | null = null
     if (editSlug !== undefined) {
       const row = editSlug ? getArticleForAdmin(editSlug) : undefined
@@ -426,6 +431,17 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
             console.error('[articles] 草稿预览渲染失败：', (err as Error).message)
           }
         }
+        // 修订历史：最近的在最上面。**每一版的正文也还原成 Markdown**，放在 `<details>` 里给人看全文。
+        // ⚠ 只在「没提交内容」时算（失败重渲染时以用户刚填的为准，不必把 N 版正文都转一遍）。
+        if (!sub) {
+          revisions = listRevisions(row.slug).map((rev) => ({
+            id: rev.id,
+            savedAt: rev.savedAt,
+            title: rev.title,
+            markdown: docToMarkdown(docFromJson(JSON.parse(rev.body))),
+            draft: rev.draft === 1,
+          }))
+        }
       } else if (sub || editSlug === '') {
         edit = {
           slug: sub?.slug ?? '',
@@ -440,7 +456,13 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
         }
       }
     }
-    return adminArticlesPage(list, trash, edit, { notice: opts.notice, bad: opts.bad ?? null, preview }, site)
+    return adminArticlesPage(
+      list,
+      trash,
+      edit,
+      { notice: opts.notice, bad: opts.bad ?? null, preview, revisions },
+      site,
+    )
   }
 
   /**
@@ -512,6 +534,17 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     // 而用户在回收站里看到的应该是「只做还原/彻底删除两件事」。
     if (getArticleForAdmin(origSlug)?.deletedAt !== null && action !== 'article-create') {
       return back('这篇在回收站里：先还原，再改。', origSlug)
+    }
+
+    // ── 退回某一版（#51 后半）──
+    // **不移指针、不删任何修订**：退回本身走 `upsertArticleWithRevision()`，所以它自己也留一条。
+    if (action === 'article-revert') {
+      const revId = Number(form.revision)
+      if (!Number.isInteger(revId) || revId <= 0) return back('修订编号不合法。', origSlug)
+      const out = revertToRevision(origSlug, revId)
+      if (out === 'missing') return back('找不到这一版修订（或者它不属于这篇文章）。', origSlug)
+      console.log('[articles] 退回修订 ' + origSlug + ' → #' + revId + '（' + out + '）')
+      return reply.redirect('/admin/articles?edit=' + encodeURIComponent(origSlug) + '&notice=article-reverted', 302)
     }
 
     // 发布 / 撤下：只改状态，**不碰正文**（正文要改先「保存」）
