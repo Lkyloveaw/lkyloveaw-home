@@ -1108,6 +1108,82 @@ console.log(JSON.stringify(out))
   fs.rmSync(sdir, { recursive: true, force: true })
 }
 
+// ════════════════════════════════════════════════════
+section('backups: 目录三态与产物清单（#43）')
+// ════════════════════════════════════════════════════
+/*
+ * `config.backupDir` 在 import 时冻结，所以每个情形都在**子进程**里跑，`BACKUP_DIR` 由父进程给。
+ * 三种状态必须分得开 —— 一个「空数组」既可能是「还没备份过」，也可能是「目录配错了」，
+ * 而后者正是备份页最该帮人看出来的事。
+ */
+{
+  const bdir = fs.mkdtempSync(path.join(root, '.unit-backups-'))
+  const bfile = path.join(bdir, 'scenario.mjs')
+  const fileUrl = (rel) => 'file://' + path.join(root, rel).replace(/\\/g, '/')
+
+  fs.writeFileSync(
+    bfile,
+    `
+const B = await import(${JSON.stringify(fileUrl('dist/backup.js'))})
+const l = B.listBackupFiles()
+console.log(JSON.stringify({
+  dir: l.dir,
+  missing: l.missing,
+  unreadable: l.unreadable,
+  note: l.note ?? null,
+  files: l.files.map((f) => ({ name: f.name, bytes: f.bytes })),
+  ascending: B.listBackups(),
+}))
+`,
+    'utf8',
+  )
+  const brun = (dir) =>
+    spawnSync(process.execPath, [bfile], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, BACKUP_DIR: dir, SESSION_SECRET: 'unit-backup-secret' },
+    })
+  const bjson = (r) => {
+    try {
+      return JSON.parse(String(r.stdout).trim().split('\n').pop())
+    } catch {
+      return { __parseError: String(r.stdout).slice(-200) + String(r.stderr).slice(-300) }
+    }
+  }
+
+  // ① 目录还不存在（正常初始状态，不是错误）
+  const missing = bjson(brun(path.join(bdir, 'nope')))
+  check('目录不存在 → `missing:true`（这是正常初始态，不是故障）', missing.missing === true && missing.unreadable === false && missing.files.length === 0, JSON.stringify(missing))
+
+  // ② 目录存在但空
+  const emptyDir = path.join(bdir, 'empty')
+  fs.mkdirSync(emptyDir, { recursive: true })
+  const empty = bjson(brun(emptyDir))
+  check('空目录 → 三态里「在、可读、没有产物」', empty.missing === false && empty.unreadable === false && empty.files.length === 0, JSON.stringify(empty))
+
+  // ③ 路径不是目录（父级是个文件）：**这是要显眼说出来的故障**，不是「还没有备份」
+  const asFile = path.join(bdir, 'blocker')
+  fs.writeFileSync(asFile, 'not a dir')
+  const broken = bjson(brun(path.join(asFile, 'sub')))
+  check('父级是文件 → `unreadable:true` 且带原因（**不**伪装成「还没有备份」）', broken.unreadable === true && broken.missing === false && typeof broken.note === 'string' && broken.note.length > 0, JSON.stringify(broken))
+
+  // ④ 三份产物 + 一个杂项文件：只列产物、**最新在前**、带大小
+  const fullDir = path.join(bdir, 'full')
+  fs.mkdirSync(fullDir, { recursive: true })
+  for (const [name, size] of [['2026-01-01.sqlite', 10], ['2026-03-01.sqlite', 20], ['2026-02-01.sqlite', 30]]) {
+    fs.writeFileSync(path.join(fullDir, name), Buffer.alloc(size, 7))
+  }
+  fs.writeFileSync(path.join(fullDir, 'README.txt'), 'x')
+  fs.writeFileSync(path.join(fullDir, '2026-04-01.sqlite.tmp'), 'x')
+  const full = bjson(brun(fullDir))
+  check('只列 `YYYY-MM-DD.sqlite`（杂项与 `.tmp` 残留都不算产物）', full.files.length === 3 && !full.files.some((f) => /tmp|txt/.test(f.name)), JSON.stringify(full.files.map((f) => f.name)))
+  check('**最新在前**（页面就按这个顺序渲染）', String(full.files.map((f) => f.name)) === '2026-03-01.sqlite,2026-02-01.sqlite,2026-01-01.sqlite', JSON.stringify(full.files.map((f) => f.name)))
+  check('带真实大小（页面上要显示）', full.files.find((f) => f.name === '2026-02-01.sqlite').bytes === 30, JSON.stringify(full.files))
+  check('`listBackups()` 仍是**升序**（`pruneBackups()` 靠它删最旧的）', String(full.ascending) === '2026-01-01.sqlite,2026-02-01.sqlite,2026-03-01.sqlite', JSON.stringify(full.ascending))
+
+  fs.rmSync(bdir, { recursive: true, force: true })
+}
+
 if (failed === 0) {
   console.log(`✅ 全部通过：${passed} 项`)
 } else {

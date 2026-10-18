@@ -35,7 +35,7 @@ import { listRevisions, revertToRevision } from './store.js'
 import { isSafeMediaName, MEDIA_MAX_BYTES, mediaMime, mediaPath, mediaSnippet, saveMedia } from './media.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
-import { listBackups } from './backup.js'
+import { listBackupFiles, listBackups, runBackup } from './backup.js'
 import {
   getProbeIntervalSeconds,
   getSiteDescription,
@@ -76,6 +76,7 @@ import {
 import {
   aboutPage,
   adminArticlesPage,
+  adminBackupsPage,
   adminOverviewPage,
   adminSettingsPage,
   adminTargetsPage,
@@ -1052,6 +1053,98 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
         `（探测间隔下一轮生效）`,
     )
     return reply.redirect('/admin/settings?notice=settings-saved', 302)
+  })
+
+  // ── 管理台 · 备份（#43）────────────────────────────────
+
+  /**
+   * 手动备份的 `action` 闭集（只有一个动作：这张页面上没有别的写操作）。
+   */
+  const BACKUP_ACTIONS = new Set(['backup-now'])
+
+  /**
+   * **进程内的重入守卫**（`docs/settings-source-decision.md` §5）。
+   *
+   * 为什么不引真正的锁：`runBackup()` 先写 `.tmp` 再改名，同时跑两次的结果是
+   * 「一个成功、另一个搬同一个库」—— **不会损坏已有产物**。加文件锁/行锁换来的正确性提升，
+   * 抵不过它引入的失败模式（锁没释放 = 备份永久停摆）。
+   */
+  let backupRunning = false
+
+  /**
+   * 最近一次手动备份的失败原因（**进程内记忆，重启即清空**）。
+   *
+   * 它不是审计、也不落库：只是让「失败」在屏幕上留一行**真正的原因**，
+   * 而不是让用户对着「备份失败」四个字去猜（失败要显眼，是本仓的既有取舍）。
+   */
+  let lastBackupError: string | null = null
+
+  const buildBackupsPage = (opts: {
+    notice?: unknown
+    bad?: string | null
+  }): string => {
+    const listing = listBackupFiles()
+    return adminBackupsPage(
+      listing.files,
+      {
+        ...opts,
+        missing: listing.missing,
+        unreadable: listing.unreadable,
+        listingNote: listing.note,
+        lastError: lastBackupError,
+        backupDir: config.backupDir,
+        backupKeep: config.backupKeep,
+      },
+      siteOf(),
+    )
+  }
+
+  app.get('/admin/backups', async (req, reply) => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      return forbiddenPage('admin', siteOf())
+    }
+    const query = req.query as { notice?: unknown }
+    reply.type('text/html; charset=utf-8')
+    return buildBackupsPage({ notice: query.notice })
+  })
+
+  app.post('/admin/backups', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const form = parseFormBody(req.body)
+    const action = String(form.action ?? '')
+    if (!BACKUP_ACTIONS.has(action)) {
+      reply.code(400).type('text/html; charset=utf-8')
+      return buildBackupsPage({ bad: '未知的动作，已拒绝。' })
+    }
+    if (backupRunning) {
+      return reply.redirect('/admin/backups?notice=backup-running', 302)
+    }
+
+    backupRunning = true
+    try {
+      const r = await runBackup()
+      /*
+       * ⚠ **看 `ok`，不是看 `note` 有没有内容**（票面点名的坑）：
+       * 「今天已备份过，跳过」在 `runBackup()` 里是 **`ok: true` + note**，
+       * 而成功时的 note 也常有内容（「清理了 N 份旧备份」）。
+       * 所以判据是 `ok` 决定成败、`note` 只用来**分型**（跳过 / 真产出）。
+       */
+      if (!r.ok) {
+        lastBackupError = r.note ?? '未知原因'
+        console.error(`[backup] 手动备份失败：${lastBackupError}`)
+        // 用 200 而不是 400：请求本身没问题，是**这台机器上的操作失败**了（400 会说成用户的错）。
+        reply.type('text/html; charset=utf-8')
+        return buildBackupsPage({ notice: 'backup-failed' })
+      }
+      lastBackupError = null
+      const skipped = /跳过/.test(r.note ?? '')
+      console.log(
+        `[backup] 手动备份：${skipped ? '今天已有可用产物，跳过' : `产出 ${r.file}（${r.bytes} B，${r.rows} 行）`}`,
+      )
+      return reply.redirect(`/admin/backups?notice=${skipped ? 'backup-skipped' : 'backup-started'}`, 302)
+    } finally {
+      backupRunning = false
+    }
   })
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────

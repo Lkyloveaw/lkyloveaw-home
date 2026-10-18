@@ -34,13 +34,118 @@ function dayStamp(d = new Date()): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/** 列出已有的滚动备份，按文件名（即日期）升序。 */
+/** 备份目录里的一份产物（管理台要显示名 / 大小 / 时间）。 */
+export interface BackupFile {
+  name: string
+  bytes: number
+  mtimeMs: number
+}
+
+/**
+ * 备份目录的**三种状态**，页面必须分开说（`docs/settings-source-decision.md` §5）：
+ * - `missing`：目录还不存在 —— **不是错误**，第一次备份时会创建；
+ * - `unreadable`：路径不是目录 / 没权限 / 父级是个文件 —— 这是**要显眼说出来的故障**；
+ * - 两者都 false：目录在，`files` 可能是空的（那就是「还没有备份」）。
+ *
+ * 为什么不用一个「空数组」把三种情形糊在一起：它们对用户的意义完全不同 ——
+ * 一个「空列表」既可能是「还没备份过」，也可能是「备份目录配错了」，
+ * 而后者正是这个页面最该帮人看出来的事。
+ */
+export interface BackupListing {
+  dir: string
+  missing: boolean
+  unreadable: boolean
+  /** `unreadable` 时的原因（人话 + 原始 message）。 */
+  note?: string
+  /** 按文件名（即日期）**倒序**：最新在前 —— 页面就按这个顺序渲染。 */
+  files: BackupFile[]
+}
+
+/** 产物文件名的形状：`YYYY-MM-DD.sqlite`。 */
+const BACKUP_NAME_RE = /^\d{4}-\d{2}-\d{2}\.sqlite$/
+
+/**
+ * 祖先链里有没有「已存在但不是目录」的那一级。
+ *
+ * 用来把「目录还没建」（ENOENT，正常）与「上一级是个文件」（也是 ENOENT，配置坏了）分开。
+ * 读不到某一级（本身 ENOENT）就继续往上；出现别的错误（EACCES 等）算坏 —— 它同样会让 mkdir 失败。
+ */
+function ancestorIsNotDirectory(dir: string): boolean {
+  let p = path.dirname(path.resolve(dir))
+  for (;;) {
+    try {
+      if (!fs.statSync(p).isDirectory()) return true
+      return false // 最近的一个存在的祖先就是目录 → 这条链没问题
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return true
+    }
+    const up = path.dirname(p)
+    if (up === p) return false // 到了根，整条链都不存在 → 正常
+    p = up
+  }
+}
+
+/**
+ * 列出备份产物，带大小与时间，**最新在前**。
+ *
+ * ⚠ 与 `listBackups()` 的**顺序相反**，两者各有各的用途，别互相当替身：
+ * 本函数给页面用（人先看最新的），`listBackups()` 给 `pruneBackups()` 用（**旧的在前**，
+ * 它靠 `slice(0, len - keep)` 删最旧的）。
+ */
+export function listBackupFiles(): BackupListing {
+  const dir = config.backupDir
+  let names: string[]
+  try {
+    const st = fs.statSync(dir)
+    if (!st.isDirectory()) {
+      return { dir, missing: false, unreadable: true, note: '这个路径不是一个目录', files: [] }
+    }
+    names = fs.readdirSync(dir)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? ''
+    /*
+     * 目录不存在是**正常**的初始状态（`runBackup()` 会 mkdir），其余都不是。
+     *
+     * ⚠ 但「ENOENT」有两种：**目录还没建**（正常）与**上一级根本不是目录**（配置写错了）。
+     * 实测 Windows 上后者也报 ENOENT（不是 ENOTDIR），于是页面会把一个真故障
+     * 说成「第一次备份时会创建」—— 先点备份、再看到失败，等于白绕一圈。
+     * 所以这里往上走一遍祖先链：途中任何一个已存在的祖先不是目录，就是配置坏了。
+     */
+    if (code === 'ENOENT' && !ancestorIsNotDirectory(dir)) {
+      return { dir, missing: true, unreadable: false, files: [] }
+    }
+    return {
+      dir,
+      missing: false,
+      unreadable: true,
+      note: code === 'ENOENT' ? '路径的上一级不是一个目录（配置写错了）' : (err as Error).message,
+      files: [],
+    }
+  }
+
+  const files: BackupFile[] = []
+  for (const name of names) {
+    if (!BACKUP_NAME_RE.test(name)) continue
+    try {
+      const st = fs.statSync(path.join(dir, name))
+      files.push({ name, bytes: st.size, mtimeMs: st.mtimeMs })
+    } catch {
+      /* 刚被删掉 / 读不到 stat 的那一份就不列它 —— 一个文件不该让整页渲染失败 */
+    }
+  }
+  files.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0))
+  return { dir, missing: false, unreadable: false, files }
+}
+
+/**
+ * 列出已有的滚动备份，按文件名（即日期）**升序**。
+ * ⚠ 顺序是**契约**：`pruneBackups()` 依赖「旧的在前」来删最旧的几份。
+ * 页面要的是倒序，用 `listBackupFiles()`。
+ */
 export function listBackups(): string[] {
-  if (!fs.existsSync(config.backupDir)) return []
-  return fs
-    .readdirSync(config.backupDir)
-    .filter((f) => /^\d{4}-\d{2}-\d{2}\.sqlite$/.test(f))
-    .sort()
+  return listBackupFiles()
+    .files.map((f) => f.name)
+    .reverse()
 }
 
 /**

@@ -118,6 +118,9 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     SITE_ORIGIN: BASE,
     // 媒体目录（#52）：指向临时目录，验收不污染真实数据（规格 user story 45）
     MEDIA_DIR: path.join(tmpData, 'media'),
+    // 备份目录（#43）：**必须**指向临时目录 —— 否则手动备份那几条断言会把产物写进仓库的 ./data/backups。
+    BACKUP_DIR: path.join(tmpData, 'backups'),
+    BACKUP_KEEP: '3',
     // 保持默认关，顺便回归「HTTP 下 Secure 必须是关的」。
     SESSION_COOKIE_SECURE: '0',
   },
@@ -1009,8 +1012,8 @@ try {
     check(
       '概览页明说哪些页能写、哪些还只读（不许笼统说「只读」）',
       // 每接通一页就来改这一行 —— 它保证概览页那句自述**永远是真的**。
-      /目标<\/strong>与<strong>站点设置<\/strong>两页已经能改/.test(overview.body) &&
-        /账号<\/strong>与<strong>备份<\/strong>两页仍然是只读的/.test(overview.body),
+      /目标<\/strong> \/ <strong>站点设置<\/strong> \/ <strong>备份<\/strong>/.test(overview.body) &&
+        /账号<\/strong>页仍然是只读的/.test(overview.body),
       overview.body.match(/这一版的写动作[^<]*/)?.[0] ?? '(没找到那句话)',
     )
 
@@ -1732,6 +1735,88 @@ try {
         readers.join(', '),
       )
     }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[备份页与手动备份一次（#43）：写后读 · 跳过要说清 · 只读参数 · 会话后果]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admB = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminB = admB.setCookie.split(';')[0]
+    const csrfB = () => csrfFor(adminB)
+    const BACKUP_DIR = path.join(tmpData, 'backups')
+    /** 磁盘上的产物（不是页面说的话 —— 两边都要看）。 */
+    const onDisk = () => (fs.existsSync(BACKUP_DIR) ? fs.readdirSync(BACKUP_DIR).filter((f) => /^\d{4}-\d{2}-\d{2}\.sqlite$/.test(f)) : [])
+
+    // ── 前提：页能打开、参数只读、列表是空的（**先证明「此前没有产物」**）──
+    const page0 = await get('/admin/backups', { cookie: adminB })
+    check('前提：管理员 GET /admin/backups → 200', page0.status === 200, `got ${page0.status}`)
+    check('前提：这次验收用的是临时备份目录（不污染仓库的 ./data/backups）', page0.body.includes(BACKUP_DIR), BACKUP_DIR)
+    check('前提：`BACKUP_KEEP` 以**只读文本**出现（不是输入框）', /保留份数<\/dt><dd>3<\/dd>/.test(page0.body), (page0.body.match(/保留份数<\/dt><dd>[^<]*/) ?? ['(无)'])[0])
+    check('前提：此刻磁盘上**没有**任何产物', onDisk().length === 0, onDisk().join(','))
+    check('前提：页面在空目录时也说得出「还是空的 / 还不存在」', /备份目录还是空的|备份目录还不存在/.test(page0.body))
+
+    // ── 与其它写路由**同一张鉴权面** ──
+    const roB = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookieB = roB.setCookie.split(';')[0]
+    check('只读 GET /admin/backups → **403**', (await get('/admin/backups', { cookie: roCookieB })).status === 403)
+    check(
+      '只读 POST /admin/backups → **403**（不写、不重定向、不产出文件）',
+      (await postForm('/admin/backups', { cookie: roCookieB, csrf: csrfFor(roCookieB), form: { action: 'backup-now' } })).status === 403 && onDisk().length === 0,
+    )
+    check('缺 csrf → **403**（L3）', (await postForm('/admin/backups', { cookie: adminB, form: { action: 'backup-now' } })).status === 403)
+    check(
+      '跨站来源 → **403**（L2）',
+      (await postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), origin: 'http://evil.example.com', form: { action: 'backup-now' } })).status === 403,
+    )
+    check('未知 action → **400**（闭集）', (await postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), form: { action: 'backup-restore' } })).status === 400)
+
+    // ── ⑬ 第一次：真的产出产物（写后读：磁盘 + 页面）──
+    const firstBackup = await postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), form: { action: 'backup-now' } })
+    check('⑬ 点一次 → **302** + notice=backup-started', firstBackup.status === 302 && /notice=backup-started/.test(firstBackup.location), `${firstBackup.status} ${firstBackup.location}`)
+    const created = onDisk()
+    check('⑬ 磁盘上真的多了一个产物（不是只在页面上说成功）', created.length === 1, created.join(','))
+    check('⑬ 产物非空（大小 > 0）', created.length === 1 && fs.statSync(path.join(BACKUP_DIR, created[0])).size > 0)
+    const page1 = await get('/admin/backups?notice=backup-started', { cookie: adminB })
+    check('⑬ 页面列表里出现它，且带大小与时间', page1.body.includes(created[0] ?? '(无)') && /(KB|MB|B)</.test(page1.body), (page1.body.match(/(\d+\.\d+ (KB|MB))/) ?? ['(无大小)'])[0])
+    check('⑬ 页面上「今天已备份」的说法与磁盘一致（列表 1 行）', (page1.body.match(/<code>\d{4}-\d{2}-\d{2}\.sqlite<\/code>/g) ?? []).length === 1)
+
+    // ── ⑭ 再点一次：**跳过**，且不新增产物（这两条必须按 note 分型，否则会互斥）──
+    const again = await postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), form: { action: 'backup-now' } })
+    check('⑭ 再点一次 → **302** + notice=backup-skipped（不是失败，也不是「又备份了一次」）', again.status === 302 && /notice=backup-skipped/.test(again.location), `${again.status} ${again.location}`)
+    check('⑭ 产物**没有**增加', onDisk().length === 1, onDisk().join(','))
+    const pageSkip = await get('/admin/backups?notice=backup-skipped', { cookie: adminB })
+    check('⑭ 页面明说「跳过、没有新增文件」', /今天已经有一份可用的备份，本次跳过（没有新增文件）/.test(pageSkip.body))
+
+    // ── 并发点两次：进程内守卫兜住，产物仍然只多一个 ──
+    await postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), form: { action: 'backup-now' } })
+    const before = onDisk().length
+    const racers = await Promise.all(
+      [0, 1, 2].map(() => postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), form: { action: 'backup-now' } })),
+    )
+    check('并发三次点击：全部 302（没有一个变 500）', racers.every((r) => r.status === 302), racers.map((r) => r.status).join(','))
+    check(
+      '并发三次点击：产物**没有**多出一个（重复提交不留下第二个东西）',
+      onDisk().length === before,
+      `${before} → ${onDisk().length}`,
+    )
+    check(
+      '并发里至少有一次说的是 `backup-running` 或 `backup-skipped`（守卫/跳过真的生效）',
+      racers.some((r) => /notice=backup-(running|skipped)/.test(r.location)),
+      racers.map((r) => r.location).join(' | '),
+    )
+
+    // ── 会话后果：这条债（session-revoke §10.1-2）现在**看得见** ──
+    check(
+      '页面写明「恢复旧备份会让当时的会话重新有效」（`sessions` 表跟着库一起搬）',
+      /恢复一份旧备份会让/.test(page1.body) && /会话/.test(page1.body) && /sessions/.test(page1.body),
+      (page1.body.match(/恢复一份旧备份[^<]*/) ?? ['(没找到)'])[0],
+    )
+    check('页面也写明下载 / 恢复**不在网页上**（属 SSH）', /下载/.test(page1.body) && /SSH/.test(page1.body))
+
+    // ── 未登录：回跳目标认得这个页面 ──
+    const anonB = await get('/admin/backups')
+    check('未登录 /admin/backups → 302 且带 next', anonB.status === 302 && anonB.location.includes('next=%2Fadmin%2Fbackups'), `${anonB.status} ${anonB.location}`)
   }
 } finally {
   child.kill('SIGTERM')

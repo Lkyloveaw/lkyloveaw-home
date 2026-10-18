@@ -53,6 +53,7 @@ export const KNOWN_PAGES: ReadonlySet<string> = new Set([
   // 账号页与备份页由各自的票（#44 / #43）在自己落地时补上。
   '/admin/targets',
   '/admin/settings',
+  '/admin/backups',
 ])
 
 /** 已知路由判定，供 `next` 校验使用（前缀匹配 `:slug` / `:tag` 这类动态段）。 */

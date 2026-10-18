@@ -178,7 +178,14 @@ export const NOTICE_TEXT: Record<string, string> = {
   'account-disabled': '已停用账号。',
   'account-enabled': '已启用账号。',
   'password-reset': '已重置口令。',
-  'backup-started': '已触发备份。',
+  'backup-started': '已备份：产物出现在下面的列表里。',
+  // 「今天已备份过就跳过」在代码里是 `ok:true` + note（`backup.ts`）——
+  // 所以它不是失败，但**必须说清楚「没有新增文件」**，否则用户会以为白点了一次。
+  'backup-skipped': '今天已经有一份可用的备份，本次跳过（没有新增文件）。',
+  // 进程内的重入守卫说的那句话（第二次点击不该再跑一遍）。
+  'backup-running': '上一次备份还在跑，本次没有重复执行。',
+  // 失败的原因每次都不一样，所以文案只指路；原文由页面上的 `notice-bad` 显示。
+  'backup-failed': '备份失败 —— 原因显示在下面（服务日志里也有同一行）。',
   'settings-saved': '已保存设置。',
   'article-created': '已新建文章（草稿）。',
   'article-saved': '已保存。',
@@ -249,8 +256,8 @@ export function adminOverviewPage(
 修复：<code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code></p>`
       : '') +
     `<h1>管理台</h1>
-<p class="admin-hint">这一版的写动作<strong>按页逐张接上</strong>：<strong>目标</strong>与<strong>站点设置</strong>两页已经能改
-（真源都是数据库）；<strong>账号</strong>与<strong>备份</strong>两页仍然是只读的，各自的票接上时会在这里说明。</p>
+<p class="admin-hint">这一版的写动作<strong>按页逐张接上</strong>：<strong>目标</strong> / <strong>站点设置</strong> / <strong>备份</strong>
+三页已经能改（真源都是数据库）；<strong>账号</strong>页仍然是只读的，它那张票接上时会在这里说明。</p>
 <div class="stat-strip">
 ${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
 ${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
@@ -515,6 +522,104 @@ ${fields}
 <dl class="kv">${envRows}</dl>`
 
   return layout({ title: '站点设置 · 管理台', description: site.description, active: 'admin', body }, site)
+}
+
+/** 备份页的一行（`docs/admin-console-ia-decision.md` §6.4 · `docs/settings-source-decision.md` §5）。 */
+export interface AdminBackupRow {
+  name: string
+  bytes: number
+  mtimeMs: number
+}
+
+export interface AdminBackupsOptions {
+  notice?: unknown
+  /** 动作失败的就地说明（400 或操作失败时显示）。 */
+  bad?: string | null
+  /** 备份目录的三种状态（见 `backup.ts` 的 `BackupListing`）。 */
+  missing: boolean
+  unreadable: boolean
+  /** `unreadable` 时的原因。 */
+  listingNote?: string
+  /** 最近一次手动备份的失败原因（进程内记忆，重启即清空）。 */
+  lastError?: string | null
+  /** 只读展示的两个运维参数。 */
+  backupDir: string
+  backupKeep: number
+}
+
+/** 字节数给人看。产物的量级是 KB–MB，所以三档就够。 */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
+}
+
+/**
+ * `/admin/backups`（`docs/admin-console-ia-decision.md` §6.4 · `docs/settings-source-decision.md` §5）。
+ *
+ * 这一页只做三件事：**列出现有产物**（名 / 大小 / 时间，最新在前）、**立即要一份**、
+ * 把两个**只读**的运维参数与那条**会话后果**写在明面上。
+ *
+ * 刻意没有的按钮（§5 的表里给了各自理由）：下载 / 恢复 / 删除单份。
+ * 整库含 `password_hash`，站点还是 HTTP；而「恢复」是最危险的动作，属 SSH。
+ */
+export function adminBackupsPage(
+  files: AdminBackupRow[],
+  opts: AdminBackupsOptions,
+  site: { title: string; description: string },
+): string {
+  const rows = files
+    .map(
+      (f) => `<tr>
+<td><code>${escapeHtml(f.name)}</code></td>
+<td>${escapeHtml(formatBytes(f.bytes))}</td>
+<td>${escapeHtml(formatTime(f.mtimeMs))}<div class="stat-sub">${escapeHtml(formatAgo(f.mtimeMs))}</div></td>
+</tr>`,
+    )
+    .join('')
+
+  const listing = opts.unreadable
+    ? `<p class="notice notice-bad">备份目录<strong>读不了</strong>：${escapeHtml(opts.listingNote ?? '未知原因')}
+<br>这一页仍然打得开（不然你连坏在哪都看不到），但下面的列表不可能是准的 —— 先去主机上看一眼这个路径。</p>`
+    : opts.missing
+      ? `<p class="empty">备份目录还不存在（第一次备份时会创建）。</p>`
+      : files.length
+        ? `<table class="admin-table"><thead><tr><th>产物</th><th>大小</th><th>时间</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<p class="stat-sub">只保留最近 <strong>${opts.backupKeep}</strong> 份，更旧的会被自动删掉（按日期命名，同一天只留一份）。</p>`
+        : `<p class="empty">备份目录还是空的 —— 点上面的按钮要一份，或者等探测轮次里的自动备份。</p>`
+
+  const body =
+    renderNotice(opts.notice) +
+    (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
+    (opts.lastError
+      ? `<p class="notice notice-bad">最近一次手动备份<strong>失败</strong>：${escapeHtml(opts.lastError)}
+<br>服务日志里有同一行；改完（常见是目录不可写 / 磁盘满）再点一次即可。</p>`
+      : '') +
+    `<h1>备份</h1>
+<p class="admin-hint">服务在探测轮次里<strong>降频自动备份</strong>（默认每 <code>CHECKPOINT_EVERY_ROUNDS</code> 轮 ≈ 1 小时一次；
+今天已有一份可用的就跳过）。这里可以<strong>手动多要一份</strong>：先做一次 checkpoint、再复制整库、校验产物、滚动清理。</p>
+<form method="post" action="/admin/backups" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="backup-now">
+<button type="submit">立即备份一次</button>
+<span class="stat-sub">产物是一个<strong>新增文件</strong>，不会覆盖已有的任何一份；
+今天已经备份过时这一次会<strong>跳过</strong>（不新增文件），页面会告诉你它跳过了。</span>
+</form>
+<h2>现有产物</h2>
+${listing}
+<h2>参数（只读）</h2>
+<dl class="kv">
+<div><dt>备份目录</dt><dd><code>${escapeHtml(opts.backupDir)}</code></div>
+<div><dt>保留份数</dt><dd>${opts.backupKeep}</dd></div>
+</dl>
+<p class="admin-hint">这两项决定<strong>文件写在哪、删几份</strong>，改错会丢东西 —— 所以留在 <code>.env</code> 里，页面上只读。</p>
+<h2>恢复与下载不在这个页面上</h2>
+<p class="admin-hint">产物里是<strong>整库</strong>（含账号口令散列与全部历史），而站点还是 HTTP —— 所以这里不提供下载。
+恢复更危险（覆盖线上库、且流程要停服），属 SSH 上的操作。</p>
+<p class="notice notice-warn">⚠ <strong>恢复一份旧备份会让那份备份里「当时还活着」的会话重新有效</strong>：
+<code>sessions</code> 表跟着库一起被搬回去了。恢复属于 SSH 操作，做之前想清楚这一点。</p>`
+
+  return layout({ title: '备份 · 管理台', description: site.description, active: 'admin', body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
