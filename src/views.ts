@@ -185,6 +185,11 @@ export const NOTICE_TEXT: Record<string, string> = {
   'article-restored': '已还原。',
   'article-purged': '已彻底删除（连同它的全部修订）。',
   'article-reverted': '已退回那一版（退回本身也留了一条修订）。',
+  'media-uploaded': '图片已上传。把下面那段 Markdown 粘进正文即可。',
+  'media-duplicate': '这张图之前传过，用的是同一个 URL（没有产生第二个文件）。',
+  'media-rejected': '这个文件不是支持的图片（只收 png / jpeg / webp / gif；SVG 一律拒绝）。',
+  'media-too-big': '图片超过 8 MiB，先压缩再传。',
+  'media-no-file': '没有收到文件，请重新选择。',
 }
 
 /**
@@ -655,6 +660,11 @@ export interface AdminArticlesOptions {
   preview?: string | null
   /** 修订历史（最近的在最上面）。**只在编辑已有文章时给**。 */
   revisions?: AdminRevisionItem[]
+  /**
+   * 刚上传成功的图片：`name` 已由调用方用 `isSafeMediaName` 校验过（**不是 URL 里的自由文本**）。
+   * 片段里的 alt 用通用的「图片」—— 原文件名不在回跳里传（那会变成「URL 让页面显示任意文本」）。
+   */
+  uploaded?: { name: string; snippet: string } | null
 }
 
 /** 修订列表里的一条。`markdown` 是那一版正文还原出来的 Markdown（给人看全文用）。 */
@@ -811,11 +821,29 @@ ${trash
 </tbody></table>`
     : ''
 
+  const uploadBox =
+    // 上传后立刻能拿到可粘贴的片段（规格 user story 2/12）—— **alt 用通用的「图片」**，
+    // 提示用户自己改；原文件名不进 URL（见 `AdminArticlesOptions.uploaded` 的注释）。
+    (opts.uploaded
+      ? `<div class="card">
+<p><img src="/media/${escapeHtml(opts.uploaded.name)}" alt="" class="upload-preview"></p>
+<p class="stat-sub">把这段粘进正文（alt 可以改成你想要的说明）：</p>
+<pre class="media-snippet">${escapeHtml(opts.uploaded.snippet)}</pre>
+</div>`
+      : '') +
+    // 上传表单：**原生表单**，所以禁用 JS 也能传（规格 user story 3）。
+    `<form method="post" action="/admin/articles/media" enctype="multipart/form-data" class="form-actions">${csrfField()}
+<input type="file" name="file" accept="image/png,image/jpeg,image/webp,image/gif" required>
+<button type="submit">上传图片</button>
+<span class="stat-sub">一次一张 · png/jpeg/webp/gif · 最大 8 MiB · 同一张图重复上传不会产生第二个文件</span>
+</form>`
+
   const body =
     renderNotice(opts.notice) +
     (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
     `<h1>文章</h1>
 <p class="admin-hint">这一版能写、能改、能发。回收站与修订历史在下一票。</p>
+${uploadBox}
 <p class="form-actions"><a href="/admin/articles?edit=">＋ 新建一篇</a></p>
 <table class="admin-table"><thead><tr><th>状态</th><th>标题 / slug</th><th>日期</th><th>标签</th></tr></thead>
 <tbody>${rows}</tbody></table>

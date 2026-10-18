@@ -27,6 +27,7 @@
     "articles": "node dist/cli/articles.js"
   },
   "dependencies": {
+    "@fastify/multipart": "^10.1.4",
     "@fastify/static": "^10.1.6",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",

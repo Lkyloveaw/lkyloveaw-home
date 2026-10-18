@@ -1363,6 +1363,75 @@ try {
     const missingBody = await missing.text()
     check('404 响应**不含内部信息**（不是 Fastify 默认 JSON）', !/not found.*Route|ENOENT/i.test(missingBody), missingBody.slice(0, 60))
   }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[上传通道（#52）：一次一张 · 幂等 · 类型与大小都挡 · 同一鉴权面]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admUp = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminUp = admUp.setCookie.split(';')[0]
+    const token = csrfFor(adminUp)
+
+    // 造一张真 PNG 与一个假 PNG（HTML 改名）
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(128, 3)])
+    const fake = Buffer.from('<html><body>not an image</body></html>')
+
+    /** 手搓 multipart —— 一次一个文件（规格契约），所以不需要通用解析器。 */
+    const upload = async ({ cookie, csrf, bytes, filename = 'x.png', origin = BASE, omitCsrf = false }) => {
+      const B = '----e2eboundary' + Math.random().toString(16).slice(2)
+      const parts = []
+      if (!omitCsrf) parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="csrf"\r\n\r\n${csrf}\r\n`))
+      parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+      parts.push(bytes)
+      parts.push(Buffer.from(`\r\n--${B}--\r\n`))
+      const headers = { 'content-type': `multipart/form-data; boundary=${B}` }
+      if (cookie) headers.cookie = cookie
+      if (origin !== null) headers.origin = origin
+      const res = await fetch(BASE + '/admin/articles/media', { method: 'POST', redirect: 'manual', headers, body: Buffer.concat(parts) })
+      return { status: res.status, location: res.headers.get('location') || '' }
+    }
+
+    // ① 上传一张真图
+    const first = await upload({ cookie: adminUp, csrf: token, bytes: png })
+    check('① 上传 → 302 + notice=media-uploaded', first.status === 302 && /notice=media-uploaded/.test(first.location), `${first.status} ${first.location}`)
+    const upName = decodeURIComponent((first.location.match(/uploaded=([^&]+)/) || [])[1] ?? '')
+    check('① 回跳带上了文件名（形状合法）', /^[0-9a-f]{64}\.png$/.test(upName), upName.slice(0, 20))
+
+    // ② 页面上给了可粘贴的片段 + 预览
+    const page = await get('/admin/articles?uploaded=' + encodeURIComponent(upName), { cookie: adminUp })
+    check('② 页面上有可粘贴的 Markdown 片段', page.body.includes('![图片](/media/' + upName + ')'), '没看到片段')
+    check('② 也有预览图（上传后立刻能确认真实效果）', page.body.includes('src="/media/' + upName + '"'))
+
+    // ③ 图真的能取到（走服务路由）
+    const fetched = await fetch(BASE + '/media/' + upName, { headers: { cookie: adminUp } })
+    check('③ 服务路由能取到它（200 + image/png）', fetched.status === 200 && fetched.headers.get('content-type') === 'image/png', `got ${fetched.status}`)
+    check('③ 字节一致', Buffer.from(await fetched.arrayBuffer()).equals(png))
+
+    // ④ 同一张图再传 → 幂等（同一个 URL，不产生第二个文件）
+    const again = await upload({ cookie: adminUp, csrf: token, bytes: png })
+    check('④ 重复上传 → notice=media-duplicate（同一个 URL）', /notice=media-duplicate/.test(again.location), again.location)
+    check('④ 文件名与第一次相同', again.location.includes(encodeURIComponent(upName)))
+
+    // ⑤ 类型与大小都挡得住
+    const fakeUp = await upload({ cookie: adminUp, csrf: token, bytes: fake, filename: 'evil.png' })
+    check('⑤ **HTML 改名成 .png → 拒绝**（只看内容不看文件名）', /notice=media-rejected/.test(fakeUp.location), fakeUp.location)
+    const svgUp = await upload({ cookie: adminUp, csrf: token, bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), filename: 'x.svg' })
+    check('⑤ **SVG → 拒绝**', /notice=media-rejected/.test(svgUp.location), svgUp.location)
+    const bigUp = await upload({ cookie: adminUp, csrf: token, bytes: Buffer.concat([png, Buffer.alloc(8 * 1024 * 1024)]) })
+    check('⑤ 超过 8 MiB → 拒绝（且**不截断**）', /notice=media-too-big/.test(bigUp.location), bigUp.location)
+
+    // ⑥ 同一鉴权面：只读 → 403；跨站来源 → 403（L2）；缺 token → 403
+    const roUp = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookieUp = roUp.setCookie.split(';')[0]
+    check('⑥ 只读上传 → **403**', (await upload({ cookie: roCookieUp, csrf: csrfFor(roCookieUp), bytes: png })).status === 403)
+    check('⑥ 跨站来源 → **403**（L2 与其它写路由同一条）', (await upload({ cookie: adminUp, csrf: token, bytes: png, origin: 'http://evil.example.com' })).status === 403)
+    check('⑥ 缺 csrf → **403**（L3）', (await upload({ cookie: adminUp, bytes: png, omitCsrf: true })).status === 403)
+
+    // ⑦ 失败时磁盘上没多出东西（规格 user story 25）
+    const before = fs.readdirSync(path.join(tmpData, 'media')).length
+    await upload({ cookie: adminUp, csrf: token, bytes: fake, filename: 'again.png' })
+    check('⑦ **失败不落盘**（被拒的上传没有留下任何文件）', fs.readdirSync(path.join(tmpData, 'media')).length === before, `${before} → ${fs.readdirSync(path.join(tmpData, 'media')).length}`)
+  }
 } finally {
   child.kill('SIGTERM')
   await sleep(800)

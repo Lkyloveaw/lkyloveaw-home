@@ -138,3 +138,8 @@ export function mediaMime(name: string): string | null {
   const ext = name.slice(name.lastIndexOf('.') + 1)
   return MAGIC.find((m) => m.ext === ext)?.mime ?? null
 }
+
+/** 可直接粘贴进正文的 Markdown 片段（规格 user story 2）。 */
+export function mediaSnippet(name: string, alt: string): string {
+  return `![${alt}](/media/${name})`
+}

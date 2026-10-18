@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static'
+import fastifyMultipart from '@fastify/multipart'
 import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config } from './config.js'
 import {
   getPublishedPost,
@@ -18,7 +19,7 @@ import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw,
 import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
 import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
 import { listRevisions, revertToRevision } from './store.js'
-import { mediaMime, mediaPath } from './media.js'
+import { isSafeMediaName, MEDIA_MAX_BYTES, mediaMime, mediaPath, mediaSnippet, saveMedia } from './media.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackups } from './backup.js'
@@ -221,6 +222,19 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   const app = Fastify({
     logger: false,
     trustProxy: config.trustProxy,
+    // 第一层上限（#52 规格要求两层）：Fastify 的表单体上限 9 MiB。
+    // 第二层是 multipart 插件的 `limits.fileSize` 8 MiB（见下面的注册）。
+    bodyLimit: 9 * 1024 * 1024,
+  })
+
+
+  // 上传通道（#52）：规格指定用**官方插件**，不手写解析器（解析不可信请求体是安全面）。
+  // 两层上限都要设：插件这边 8 MiB，且 `throwFileSizeLimit` 为真 —— **禁止截断**
+  // （截断的 PNG 头部仍是合法魔数，会被误收成半张图）。另一层在 Fastify 的 bodyLimit。
+  await app.register(fastifyMultipart, {
+    limits: { fileSize: MEDIA_MAX_BYTES, files: 1, fields: 8 },
+    throwFileSizeLimit: true,
+    attachFieldsToBody: true,
   })
 
   /**
@@ -385,7 +399,12 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
    */
   const buildArticlesPage = (
     editSlug: string | undefined,
-    opts: { notice?: unknown; bad?: string | null; submitted?: Record<string, string> },
+    opts: {
+      notice?: unknown
+      bad?: string | null
+      submitted?: Record<string, string>
+      uploaded?: { name: string; snippet: string } | null
+    },
   ): string => {
     const list: AdminArticleListItem[] = listArticlesForAdmin().map((r) => ({
       slug: r.slug,
@@ -461,7 +480,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       list,
       trash,
       edit,
-      { notice: opts.notice, bad: opts.bad ?? null, preview, revisions },
+      { notice: opts.notice, bad: opts.bad ?? null, preview, revisions, uploaded: opts.uploaded ?? null },
       site,
     )
   }
@@ -480,14 +499,38 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     await csrfGuard(req, reply)
   }
 
+  /**
+   * 上传超限的兜底（#52）。
+   *
+   * ⚠ **它必须在错误处理器里兜**：`throwFileSizeLimit: true` 时插件在**它自己的解析阶段**就抛，
+   * 那时**还没进路由 handler** —— 我原来那句「捕获后回跳 media-too-big」根本走不到。
+   * 失败要显眼，但不是 500：转成一句人话 + PRG 回跳。
+   *
+   * 只兜这一类错误；**其它错误照旧 500**（不吞、不假装成功）。
+   */
+  app.setErrorHandler(async (err: Error & { code?: string }, _req, reply) => {
+    const code = err.code ?? ''
+    if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT' || /file size limit|too large/i.test(err.message)) {
+      console.warn('[media] 上传被拒（超过上限）：' + err.message)
+      return reply.redirect('/admin/articles?notice=media-too-big', 302)
+    }
+    console.error('[server] 未处理的请求错误：', err.message)
+    reply.code(500).type('text/plain; charset=utf-8')
+    return '服务器内部错误'
+  })
+
   app.get('/admin/articles', async (req, reply) => {
     if (!currentIsAdmin()) {
       reply.code(403).type('text/html; charset=utf-8')
       return forbiddenPage('admin', site)
     }
-    const q = req.query as { notice?: unknown; edit?: unknown }
+    const q = req.query as { notice?: unknown; edit?: unknown; uploaded?: unknown }
     reply.type('text/html; charset=utf-8')
-    return buildArticlesPage(typeof q.edit === 'string' ? q.edit : undefined, { notice: q.notice })
+    // ⚠ 回跳里的文件名**必须过 `isSafeMediaName`**：URL 是用户可控的，
+    // 形状校验是它进页面的唯一入口（否则就是「URL 让页面显示任意文本」）。
+    const upName = typeof q.uploaded === 'string' && isSafeMediaName(q.uploaded) ? q.uploaded : null
+    const uploaded = upName ? { name: upName, snippet: mediaSnippet(upName, '图片') } : null
+    return buildArticlesPage(typeof q.edit === 'string' ? q.edit : undefined, { notice: q.notice, uploaded })
   })
 
   app.post('/admin/articles', { preValidation: adminWriteGuard }, async (req, reply) => {
@@ -649,6 +692,67 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       .header('X-Content-Type-Options', 'nosniff')
       .header('Cache-Control', 'public, max-age=31536000, immutable')
     return reply.send(buf)
+  })
+
+  /**
+   * 上传路由的守卫：**资格 → L3**（与其它写路由同一个顺序）。
+   *
+   * ⚠ multipart 的 `csrf` 在**字段对象**里（`attachFieldsToBody` 的形状：`{ value: '…' }`），
+   * 与 urlencoded 那条路的 `parseFormBody` 不同 —— 所以这里单独读一次。
+   * 这也正是规格说的「**L3 必须在任何写之前读到 token**，解析模式决定钩子位置」。
+   */
+  const uploadGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      await reply.send(forbiddenPage('admin', site))
+      return
+    }
+    const raw = (req.body as Record<string, unknown> | undefined)?.csrf
+    const submitted = typeof raw === 'string' ? raw : (raw as { value?: string } | undefined)?.value
+    if (!verifyCsrf(config.sessionSecret, readSessionCookie(req.headers.cookie), submitted)) {
+      console.warn('[media] L3 拒绝上传：token 缺失或不匹配')
+      reply.code(403).type('text/html; charset=utf-8')
+      await reply.send(forbiddenPage('csrf', site, '/admin/articles'))
+    }
+  }
+
+  /**
+   * `POST /admin/articles/media` —— 上传一张图（规格 [#41](https://github.com/Lkyloveaw/lkyloveaw-home/issues/41)）。
+   *
+   * 契约：`multipart/form-data`、**一次一个文件**、字段名 `file`、CSRF 字段名 `csrf`。
+   * 落在**同一鉴权面**内（`uploadGuard`：资格 + L3）—— 不新开第二个鉴权面。
+   *
+   * **失败一律显眼**：全部走 PRG 回跳 + `notice` 闭集键，**不静默插一个坏链接**。
+   */
+  app.post('/admin/articles/media', { preValidation: uploadGuard }, async (req, reply) => {
+    const file = (req.body as Record<string, unknown> | undefined)?.file as
+      | { toBuffer?: () => Promise<Buffer>; filename?: string }
+      | undefined
+    if (!file || typeof file.toBuffer !== 'function') {
+      console.warn('[media] 上传请求里没有文件字段')
+      return reply.redirect('/admin/articles?notice=media-no-file', 302)
+    }
+
+    let buf: Buffer
+    try {
+      // 超过 `limits.fileSize` 且 `throwFileSizeLimit` 为真时，这里会抛（**不截断**）。
+      buf = await file.toBuffer()
+    } catch (err) {
+      console.warn('[media] 读取上传内容失败：' + (err as Error).message)
+      return reply.redirect('/admin/articles?notice=media-too-big', 302)
+    }
+
+    try {
+      const saved = saveMedia(buf)
+      console.log('[media] ' + (saved.created ? '已保存' : '已存在') + ' ' + saved.name)
+      // 回跳带上文件名 —— 它的形状**受 `isSafeMediaName` 校验**，所以它不是「URL 里的自由文本」。
+      const notice = saved.created ? 'media-uploaded' : 'media-duplicate'
+      return reply.redirect('/admin/articles?notice=' + notice + '&uploaded=' + encodeURIComponent(saved.name), 302)
+    } catch (err) {
+      // 类型不对 / 空文件 / 超限 —— 全都在 `saveMedia` 里判掉，这里只负责**显眼地**说出去。
+      console.warn('[media] 拒绝：' + (err as Error).message)
+      return reply.redirect('/admin/articles?notice=media-rejected', 302)
+    }
   })
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────

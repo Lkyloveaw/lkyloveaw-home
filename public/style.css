@@ -415,3 +415,8 @@ main { padding-top: 34px; }
 .revision-list summary { cursor: pointer; color: var(--fg-faint); font-size: 0.84rem; }
 .revision-body { white-space: pre-wrap; font-size: 0.84rem; line-height: 1.55; color: var(--fg);
   background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0 0; }
+
+/* 上传与媒体（#52） */
+.upload-preview { max-width: 320px; border: 1px solid var(--border); border-radius: 6px; }
+.media-snippet { white-space: pre-wrap; word-break: break-all; font-size: 0.84rem;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; }
