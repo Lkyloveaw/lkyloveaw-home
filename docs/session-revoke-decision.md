@@ -446,6 +446,9 @@ export function decodeSid(token: string): string | undefined              // 不
 2. **`sessions` 表是新的运维面**：备份/恢复数据库会连同会话记录一起搬走，
    所以「恢复一份旧备份」会让当时的会话**继续有效**——这是 `db.backup()` 语义的自然外延，
    与目标清单搬进 DB 后的同类风险一起，归 [站点设置与备份的真源边界](https://github.com/Lkyloveaw/lkyloveaw-home/issues/22) 与批次票考虑。
+   ✅ **落点已补**（2026-10-18，[实现⑥备份页与手动备份一次](https://github.com/Lkyloveaw/lkyloveaw-home/issues/43)）：
+   这句话现在**写在管理台的备份页上**（`/admin/backups` 的 warn 段，与「下载 / 恢复不在网页上、属 SSH」并列），
+   不再只留在文档里。
 3. **`sessions` 表不区分设备**（没有 UA/IP 列）：第一版只按 `sid` 认行。
    要「看设备」就得加列，属会话管理 UI 的迷雾，不在本票。
 4. **`sid` 明文入库**（§1）已写明取舍。
