@@ -10,7 +10,7 @@
  * 主键冲突会**静默覆盖**那一篇 —— 而规格 #48 明确要求「撞名 → 400，且原文章仍在列表（没被静默覆盖）」。
  * 所以调用方**必须先问 `checkSlugAvailable()`**，冲突就 400，而不是把脏活留给主键。
  */
-import { getAnyArticleRow } from './store.js'
+import { getArticleForAdmin } from './store.js'
 
 /** 规格 #48：slug 长度 ≤ 64。 */
 export const SLUG_MAX_LENGTH = 64
@@ -54,7 +54,7 @@ export type SlugAvailability =
  * 而还原之所以不需要旁路，是因为 `deleted_at` **正交于** `draft`、不覆盖它。
  */
 export function checkSlugAvailable(rawSlug: string): SlugAvailability {
-  const row = getAnyArticleRow(rawSlug.trim())
+  const row = getArticleForAdmin(rawSlug.trim())
   if (!row) return { available: true }
   return { available: false, title: row.title, inTrash: row.deletedAt !== null }
 }

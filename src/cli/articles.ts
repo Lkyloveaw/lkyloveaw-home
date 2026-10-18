@@ -11,7 +11,7 @@
  *   node dist/cli/articles.js --list      列出库里的文章（含草稿与回收站）
  *   node dist/cli/articles.js --reimport  按 content/*.md 重导（没改动的不会写库、也不会堆修订）
  */
-import { closeStore, initStore, listAllArticlesForAdmin } from '../store.js'
+import { closeStore, initStore, listArticlesForAdmin } from '../store.js'
 import { reimportArticlesFromDisk } from '../content.js'
 import { config } from '../config.js'
 
@@ -38,7 +38,7 @@ function main(): void {
   initStore()
 
   if (has('--list')) {
-    const rows = listAllArticlesForAdmin()
+    const rows = listArticlesForAdmin()
     if (!rows.length) {
       console.log('库里的文章：0 篇')
     } else {

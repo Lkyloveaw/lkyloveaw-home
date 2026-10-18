@@ -508,7 +508,7 @@ export function hasAnyArticle(): boolean {
 }
 
 /** 不做读者过滤的取行 —— 只给导入路径用（它要判断「有没有变化」）。 */
-export function getAnyArticleRow(slug: string): ArticleRow | undefined {
+export function getArticleForAdmin(slug: string): ArticleRow | undefined {
   const row = handle().prepare(`SELECT * FROM articles WHERE slug = ?`).get(slug) as
     | Record<string, unknown>
     | undefined
@@ -547,7 +547,7 @@ export function getArticleForReaders(slug: string): ArticleRow | undefined {
  */
 export function upsertArticleWithRevision(input: ArticleInput): 'inserted' | 'updated' | 'unchanged' {
   const db = handle()
-  const existing = getAnyArticleRow(input.slug)
+  const existing = getArticleForAdmin(input.slug)
 
   if (
     existing &&
@@ -599,7 +599,7 @@ export function upsertArticleWithRevision(input: ArticleInput): 'inserted' | 'up
 }
 
 /** 库里全部文章的概览（CLI 的 `--list` 用；不做读者过滤，因为它就是给管理员看的）。 */
-export function listAllArticlesForAdmin(): Array<Pick<ArticleRow, 'slug' | 'title' | 'date' | 'draft' | 'deletedAt'>> {
+export function listArticlesForAdmin(): Array<Pick<ArticleRow, 'slug' | 'title' | 'date' | 'draft' | 'deletedAt'>> {
   const rows = handle()
     .prepare(`SELECT slug, title, date, draft, deleted_at FROM articles ORDER BY date DESC, slug ASC`)
     .all() as Array<Record<string, unknown>>

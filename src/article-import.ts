@@ -337,3 +337,147 @@ export function markdownToDoc(markdown: string): ImportResult {
   // doc 的内容模型是 `block+`，所以上面那一行不是「兜底」，是必需的。
   return { doc: articleSchema.nodes.doc!.create(null, blocks), warnings }
 }
+
+/**
+ * 文档 JSON → Markdown。**`markdownToDoc()` 的逆**。
+ *
+ * 为什么需要它：写路径的编辑区是**一个 Markdown 文本框**（#50 选定的过渡形态），
+ * 打开一篇已存在的文章时，要把库里的**文档 JSON** 还原成 Markdown 填进文本框。
+ *
+ * ⚠ **往返必须稳定**：`doc → md → doc` 要回到同一个文档。否则「打开、保存、什么都没改」
+ * 看起来就变了 → `upsertArticleWithRevision()` 会**每次都堆一条修订**。
+ * 这条由 `scripts/article-pipeline-check.mjs` 的断言钉住，不靠「应该没问题」。
+ *
+ * ⚠ **已知损失（写在明面上）**：Markdown 表达不了**合并单元格与列宽**（`colspan` / `rowspan` / `colwidth`）。
+ * 用文本框编辑一篇含这两者的文章会**丢掉它们**。今天库里的两篇都是导入的普通 GFM 表格
+ * （无合并、无列宽），所以实际风险为零；富文本编辑器（#57）落地后这条路就没了。
+ * 表格对齐（`:---:`）同样不表达 —— 导入侧本来也不建模它。
+ */
+
+/** Markdown 里有语法含义的字符，逐字转义（CommonMark 的反斜杠转义，`markdownToDoc` 认得）。 */
+function escapeMd(text: string): string {
+  return text.replace(/([\\`*_[\]<>])/g, '\\$1')
+}
+
+/** 一个节点的全部行内内容。 */
+function inlineAll(node: PMNode): string {
+  let out = ''
+  node.forEach((child) => {
+    out += inlineOne(child)
+  })
+  return out
+}
+
+/**
+ * 单个行内节点。
+ * marks **由内到外**包裹：`code` → `italic` → `bold` → `link` —— 与 `article-html.ts` 的发射顺序一致。
+ */
+function inlineOne(node: PMNode): string {
+  const name = node.type.name
+  if (name === 'text') {
+    let out = escapeMd(node.text ?? '')
+    const has = (m: string): boolean => node.marks.some((x) => x.type.name === m)
+    if (has('code')) out = '`' + out + '`'
+    if (has('italic')) out = '*' + out + '*'
+    if (has('bold')) out = '**' + out + '**'
+    const link = node.marks.find((x) => x.type.name === 'link')
+    if (link) out = '[' + out + '](' + String(link.attrs.href) + ')'
+    return out
+  }
+  if (name === 'hardBreak') return '  \n'
+  if (name === 'image') {
+    const a = node.attrs as { src: string; alt?: string | null; title?: string | null }
+    const title = a.title ? ' "' + String(a.title) + '"' : ''
+    return '![' + String(a.alt ?? '') + '](' + String(a.src) + title + ')'
+  }
+  // schema 是闭集，走到这里说明有新节点没被照顾到 —— 退回纯文本，**不静默丢内容**。
+  return node.textContent
+}
+
+/** 块级节点 → Markdown（带缩进，供嵌套列表用）。 */
+function blockOne(node: PMNode, indent: string): string {
+  const name = node.type.name
+  switch (name) {
+    case 'paragraph':
+      return indent + inlineAll(node) + '\n\n'
+    case 'heading': {
+      const level = Math.min(Math.max(Number(node.attrs.level) || 1, 1), 6)
+      return indent + '#'.repeat(level) + ' ' + inlineAll(node) + '\n\n'
+    }
+    case 'blockquote':
+      return (
+        children(node)
+          .split('\n')
+          .filter((l) => l.trim() !== '')
+          .map((l) => indent + '> ' + l)
+          .join('\n') + '\n\n'
+      )
+    case 'bulletList':
+      return listItems(node, indent, () => '- ')
+    case 'orderedList':
+      return listItems(node, indent, (i) => String(i + 1) + '. ')
+    case 'codeBlock': {
+      const lang = node.attrs.language ? String(node.attrs.language) : ''
+      // ⚠ 代码块内容**不转义**（它就是原文），这也是往返最容易坏的地方 —— 断言里专门覆盖。
+      return indent + '```' + lang + '\n' + node.textContent + '\n```\n\n'
+    }
+    case 'horizontalRule':
+      return indent + '---\n\n'
+    case 'table':
+      return tableMd(node) + '\n\n'
+    default:
+      return indent + node.textContent + '\n\n'
+  }
+}
+
+/** 容器的子节点依次转块。 */
+function children(node: PMNode): string {
+  let out = ''
+  node.forEach((child) => {
+    out += blockOne(child, '')
+  })
+  return out
+}
+
+/** 列表项：`listItem` 里通常是若干 `paragraph`（第二段起要缩进对齐）。 */
+function listItems(list: PMNode, indent: string, marker: (i: number) => string): string {
+  let out = ''
+  let i = 0
+  list.forEach((item) => {
+    const m = marker(i++)
+    const inner = children(item).trimEnd()
+    const lines = inner.split('\n')
+    const pad = ' '.repeat(m.length)
+    out += indent + m + (lines[0] ?? '') + '\n'
+    for (const line of lines.slice(1)) out += indent + pad + line + '\n'
+    if (i === 1) out += ''
+  })
+  return out + '\n'
+}
+
+/**
+ * 表格 → GFM 表格（第一行当表头）。
+ * 合并单元格与列宽在这里**表达不出来**（见文件头的「已知损失」）。
+ */
+function tableMd(table: PMNode): string {
+  const rows: string[] = []
+  const widths: number[] = []
+  table.forEach((row) => {
+    const cells: string[] = []
+    row.forEach((cell) => {
+      cells.push(inlineAll(cell).replace(/\n/g, ' ').replace(/\|/g, '\\|'))
+    })
+    rows.push('| ' + cells.join(' | ') + ' |')
+    cells.forEach((c, idx) => {
+      widths[idx] = Math.max(widths[idx] ?? 3, c.length)
+    })
+  })
+  if (rows.length === 0) return ''
+  const sep = '| ' + widths.map((w) => '-'.repeat(Math.max(w, 3))).join(' | ') + ' |'
+  return [rows[0]!, sep, ...rows.slice(1)].join('\n')
+}
+
+/** 入口：文档 JSON → Markdown。 */
+export function docToMarkdown(doc: PMNode): string {
+  return children(doc).replace(/\n{3,}/g, '\n\n').trim() + '\n'
+}

@@ -19,7 +19,7 @@ import matter from 'gray-matter'
 import MarkdownIt from 'markdown-it'
 import { articleSchema, docFromJson, docToJson, isSafeUrl } from '../dist/article-doc.js'
 import { docToHtml } from '../dist/article-html.js'
-import { markdownToDoc } from '../dist/article-import.js'
+import { docToMarkdown, markdownToDoc } from '../dist/article-import.js'
 
 const root = path.resolve(import.meta.dirname, '..')
 
@@ -280,6 +280,73 @@ store.closeStore()
 fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 
 // ─────────────────────────────────────────────────────────────
+
+// ════════════════════════════════════════════════════════════
+console.log('\n[八、docToMarkdown 往返稳定（#50 的 Markdown 编辑区前提）]')
+// ════════════════════════════════════════════════════════════
+// 为什么这条值得单独一节：编辑区是 **Markdown 文本框**，打开一篇已有文章要把库里的
+// **文档 JSON** 还原成 Markdown。若往返有损，「打开 → 保存 → 什么都没改」看起来就变了，
+// 于是 upsertArticleWithRevision() 会**每次都堆一条修订** —— 历史被无声地灌水。
+{
+  for (const file of fs.readdirSync(path.join(root, 'content')).filter((f) => f.endsWith('.md'))) {
+    const raw = fs.readFileSync(path.join(root, 'content', file), 'utf8')
+    const md = matter(raw).content
+    const doc1 = markdownToDoc(md).doc
+    const md2 = docToMarkdown(doc1)
+    const doc2 = markdownToDoc(md2).doc
+    const same = JSON.stringify(doc1.toJSON()) === JSON.stringify(doc2.toJSON())
+    check('往返稳定：' + file, same)
+    if (!same) {
+      // 差异定位到第一处，报错时不用自己找
+      const a = JSON.stringify(doc1.toJSON())
+      const b = JSON.stringify(doc2.toJSON())
+      let i = 0
+      while (i < a.length && i < b.length && a[i] === b[i]) i++
+      console.log('     第一处差异 @' + i)
+      console.log('     doc1: ' + a.slice(Math.max(0, i - 60), i + 80))
+      console.log('     doc2: ' + b.slice(Math.max(0, i - 60), i + 80))
+    }
+  }
+
+  // 二次往返幂等（从第二趟起必须一动不动 —— 这才是「保存两次」真正走的路）
+  const sample = markdownToDoc('# 标题\n\n正文**加粗**与 `代码`。\n\n- 甲\n- 乙\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n').doc
+  const once = markdownToDoc(docToMarkdown(sample)).doc
+  const twice = markdownToDoc(docToMarkdown(once)).doc
+  check('二次往返幂等（第二趟起一动不动）', JSON.stringify(once.toJSON()) === JSON.stringify(twice.toJSON()))
+
+  // 代码块内容**不转义** —— 往返里最容易坏的地方
+  const code = markdownToDoc('```js\nconst a = `x` * 2 // 反引号与星号\n```\n').doc
+  const codeBack = markdownToDoc(docToMarkdown(code)).doc
+  check('代码块往返：内容一字不差（含反引号与星号）', codeBack.textContent.includes('const a = `x` * 2 // 反引号与星号'))
+
+  // 合并单元格与列宽**表达不出来** —— 断言这个已知损失是**真的**（而不是「也许没事」）
+  const merged = docFromJson({
+    type: 'doc',
+    content: [
+      {
+        type: 'table',
+        content: [
+          {
+            type: 'tableRow',
+            content: [
+              { type: 'tableHeader', attrs: { colspan: 2, rowspan: 1, colwidth: [120, 80] }, content: [{ type: 'paragraph', content: [{ type: 'text', text: '合并' }] }] },
+            ],
+          },
+        ],
+      },
+    ],
+  })
+  const mergedBack = markdownToDoc(docToMarkdown(merged)).doc
+  const backJson = JSON.stringify(mergedBack.toJSON())
+  // ⚠ 判据要盯**合并本身**（`colspan:2` / `colwidth`），不是「键还在不在」——
+  //    `colspan` 这个键名一直会在（默认值 1），第一版断言就是这么写错的：测出个假失败。
+  check(
+    '已知损失：合并单元格**过一趟 Markdown 就没了**（这是 A 方案的代价，写进断言里）',
+    !backJson.includes('"colspan":2') && !backJson.includes('"colwidth":[120'),
+  )
+  check('已知损失的边界：**内容没丢**（丢的是合并，不是字）', mergedBack.textContent.includes('合并'))
+}
+
 console.log(`\n${'─'.repeat(60)}`)
 if (failed === 0) {
   console.log(`✅ 全部通过：${passed} 项`)
