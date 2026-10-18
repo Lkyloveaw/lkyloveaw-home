@@ -79,6 +79,7 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     PROBE_INTERVAL_SECONDS: '2',
     PROBE_TIMEOUT_MS: '1200',
     SESSION_SECRET: 'leak-test-secret',
+    SITE_ORIGIN: BASE,
     SITE_TITLE: '泄漏验收站',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -99,7 +100,8 @@ try {
   {
     const res = await fetch(BASE + '/login', {
       method: 'POST', redirect: 'manual',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      // L2 对所有非安全方法 fail-closed：不带来源头的 POST 会被 403（**故意的**）。
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
       body: new URLSearchParams({ username: TEST_USER, password: TEST_PASS, next: '/' }),
     })
     cookie = (res.headers.get('set-cookie') || '').split(';')[0]

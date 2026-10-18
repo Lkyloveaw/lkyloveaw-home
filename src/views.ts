@@ -7,6 +7,18 @@ import type { Post, PostMeta } from './content.js'
 import type { ProbeTarget } from './config.js'
 import type { TargetStats, TimelinePoint, OverviewPoint, ProbeResult, LatencyPoint } from './store.js'
 import { latencyChart, uptimeChart } from './charts.js'
+import { currentCsrfToken } from './csrf.js'
+
+/**
+ * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
+ *
+ * **读请求级上下文**（`csrf.ts` 的 ALS），所以**视图函数签名不变** —— 每个表单不需要多接一个参数。
+ * 上下文没被初始化时（脚本或测试里直接调 `views`）拿到的是**空串**：
+ * 渲染出的表单会提交失败（403），而不是悄悄放行。**显眼失败**，而且只有一处要查。
+ */
+export function csrfField(): string {
+  return `<input type="hidden" name="csrf" value="${escapeHtml(currentCsrfToken())}">`
+}
 
 /** 所有动态文本都必须过这里。内容 Markdown 已由 markdown-it 处理（html:false），此处覆盖标题/名称/错误等。 */
 export function escapeHtml(input: unknown): string {
@@ -50,7 +62,8 @@ export function formatUptime(uptime: number | null): string {
 export interface LayoutOptions {
   title: string
   description: string
-  active: 'home' | 'posts' | 'status' | 'about'
+  /** 高亮哪个导航项。**可省**：403 这类页面不属于任何一个导航项。 */
+  active?: 'home' | 'posts' | 'status' | 'about'
   body: string
   bodyClass?: string
 }
@@ -86,6 +99,7 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
   <div class="wrap header-inner">
     <a class="brand" href="/">${escapeHtml(site.title)}</a>
     <nav class="site-nav">${nav(opts.active)}</nav>
+    <form class="logout-form" method="post" action="/logout">${csrfField()}<button type="submit">登出</button></form>
   </div>
 </header>
 <main class="wrap">${opts.body}</main>
@@ -98,8 +112,41 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
 </html>`
 }
 
-export interface LoginPageOptions {
-  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
+export type ForbiddenKind = 'origin' | 'csrf'
+
+/**
+ * 写路径的 403 页（`docs/write-path-auth-decision.md` §5.4）。
+ *
+ * **不重定向**：重定向会把 POST 变成 GET，用户会以为「提交成功了」（跳到同一页、也没有错误提示）。
+ *
+ * `csrf` 那条给**回本页**的链接：最常见的真实原因是「开着两个标签页，在另一个标签改了口令」
+ * （`token_version` 变了 → 会话重签 → 这个页面的 token 就失效了），刷新即可拿到新 token。
+ * 但**文案不解释这个内部原因** —— 那既暴露实现细节，多数人也看不懂。
+ */
+export function forbiddenPage(
+  kind: ForbiddenKind,
+  site: { title: string; description: string },
+  backPath = '/',
+): string {
+  const origin = kind === 'origin'
+  const body = origin
+    ? `<h1>请求来源不可信</h1>
+<p>这个请求不是从本站发起的，已拒绝。</p>
+<p><a href="/">回首页</a></p>`
+    : `<h1>页面已过期</h1>
+<p>提交来源异常或页面已过期，请刷新后重试。</p>
+<p><a href="${escapeHtml(backPath)}">回上一页</a></p>`
+  return layout(
+    {
+      title: origin ? '请求来源不可信' : '页面已过期',
+      description: site.description,
+      body,
+    },
+    site,
+  )
+}
+
+export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
   error?: string
   /** 登录成功后的回跳目标（只接受站内路径，调用方已校验）。 */
   next: string

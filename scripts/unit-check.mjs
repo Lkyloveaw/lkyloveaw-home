@@ -561,6 +561,102 @@ section('roles: 默认只读 · CHECK · 守卫（docs/roles-decision.md §2 §3
   )
 }
 
+// ════════════════════════════════════════════════════
+section('csrf: L2 来源判定 + L3 令牌（docs/write-path-auth-decision.md §9.1）')
+// ════════════════════════════════════════════════════
+{
+  const csrf = await import(mod('dist/csrf.js'))
+  const SECRET2 = 'k'.repeat(32)
+  const SESSION = 'cGF5bG9hZA.c2lnbmF0dXJl' // 形状正确：最后一个 '.' 之前是载荷
+  const ALLOWED = new Set(['http://10.0.0.226:3000', 'https://wiki.example.com'])
+
+  // ── L3 令牌 ──
+  const t1 = csrf.csrfToken(SECRET2, SESSION)
+  check('token 确定性：同样输入两次得到同一个值', t1 === csrf.csrfToken(SECRET2, SESSION))
+  check('token 非空且是 base64url（43 字符 = 32 字节）', typeof t1 === 'string' && t1.length === 43, `len=${t1?.length}`)
+  check('换会话即变', csrf.csrfToken(SECRET2, 'b3RoZXI.c2ln') !== t1)
+  check('换密钥即变', csrf.csrfToken('x'.repeat(32), SESSION) !== t1)
+  check('无 `.` → null（不是空串）', csrf.csrfToken(SECRET2, 'noseparator') === null)
+  check('`.` 在开头 → null', csrf.csrfToken(SECRET2, '.sig') === null)
+
+  check('verifyCsrf：正确 token → true', csrf.verifyCsrf(SECRET2, SESSION, t1) === true)
+  check('verifyCsrf：长度不对 → false（**不抛**）', csrf.verifyCsrf(SECRET2, SESSION, 'short') === false)
+  check(
+    'verifyCsrf：等长但改一个字符 → false',
+    csrf.verifyCsrf(SECRET2, SESSION, (t1[0] === 'A' ? 'B' : 'A') + t1.slice(1)) === false,
+  )
+  check(
+    'verifyCsrf：非字符串不抛（数组 / 数字 / undefined / null）',
+    [['a', 'b'], 42, undefined, null, {}].every((v) => csrf.verifyCsrf(SECRET2, SESSION, v) === false),
+  )
+  check('verifyCsrf：没有会话 token → false', csrf.verifyCsrf(SECRET2, undefined, t1) === false)
+  check('verifyCsrf：会话 token 畸形（无 `.`）→ false', csrf.verifyCsrf(SECRET2, 'nosep', t1) === false)
+
+  // ── L2 来源判定 ──
+  const o = (headers) => csrf.checkOrigin(headers, ALLOWED)
+  check('Origin 精确相等 → 通过', o({ origin: 'http://10.0.0.226:3000' }) === true)
+  check('**端口属于 origin**：少了端口 → 拒绝', o({ origin: 'http://10.0.0.226' }) === false)
+  check('多值集合里的另一个也通过', o({ origin: 'https://wiki.example.com' }) === true)
+  check('**`example.com.evil.com` 型后缀伪造 → 拒绝**', o({ origin: 'https://wiki.example.com.evil.com' }) === false)
+  check('前缀型伪造 → 拒绝', o({ origin: 'https://evil.com#https://wiki.example.com' }) === false)
+  check('`Origin: null` → 拒绝（来源不可知，不是没有来源）', o({ origin: 'null' }) === false)
+  check('`Origin` 与 `Referer` 都没有 → 拒绝', o({}) === false)
+  check('空字符串按「头不存在」处理 → 拒绝', o({ origin: '' }) === false)
+  check('`Referer` 回退：同源（带路径与查询）→ 通过', o({ referer: 'http://10.0.0.226:3000/password?x=1' }) === true)
+  check('`Referer` 回退：站外 → 拒绝', o({ referer: 'http://evil.example.com/x' }) === false)
+  check('`Referer` 回退：不是合法 URL → 拒绝（不抛）', o({ referer: 'not a url' }) === false)
+  check('`Origin` 在时**不看** `Referer`', o({ origin: 'http://evil.example.com', referer: 'http://10.0.0.226:3000/' }) === false)
+
+  // ── 配置解析与「非法条目拒绝启动」（用子进程换 env）──
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-csrf-'))
+  const probe = path.join(tmp, 'probe-config.mjs')
+  const runConfig = (env) => {
+    fs.writeFileSync(
+      probe,
+      `const { config, assertSiteOrigins, assertTrustProxy } = await import(${JSON.stringify('file://' + path.join(root, 'dist/config.js'))});
+       assertTrustProxy(); assertSiteOrigins();
+       console.log(JSON.stringify([...config.siteOrigins]));`,
+      'utf8',
+    )
+    try {
+      const out = execFileSync(process.execPath, [probe], {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, SITE_ORIGIN: '', TRUST_PROXY: '', ...env },
+      })
+      return { ok: true, origins: JSON.parse(out.trim().split('\n').pop()) }
+    } catch (err) {
+      return { ok: false, out: String(err.stdout ?? '') + String(err.stderr ?? '') }
+    }
+  }
+
+  const parsed = runConfig({ SITE_ORIGIN: ' http://a.example.com:3000/ , https://b.example.com ' })
+  check('配置解析：去空白、去结尾 `/`、按逗号分多值', parsed.ok && parsed.origins.join(',') === 'http://a.example.com:3000,https://b.example.com', JSON.stringify(parsed))
+  const withPath = runConfig({ SITE_ORIGIN: 'http://a.example.com/wiki' })
+  check('配置校验：带路径的条目**拒绝启动**', withPath.ok === false)
+  check('报错里**指出是哪一条**', /http:\/\/a\.example\.com\/wiki/.test(withPath.out), withPath.out.slice(0, 120))
+  const missing = runConfig({})
+  check('`SITE_ORIGIN` 缺失 → **拒绝启动**', missing.ok === false)
+  check('报错里给出示例行', /SITE_ORIGIN=http:\/\//.test(missing.out), missing.out.slice(0, 120))
+  const badProxy = runConfig({ SITE_ORIGIN: 'http://a.example.com', TRUST_PROXY: 'true' })
+  check('`TRUST_PROXY=true` → **拒绝启动**', badProxy.ok === false)
+  check('报错里给出 CIDR 的写法', /CIDR/.test(badProxy.out), badProxy.out.slice(0, 120))
+  const cidrProxy = runConfig({ SITE_ORIGIN: 'http://a.example.com', TRUST_PROXY: '127.0.0.1,10.0.0.0/8' })
+  check('`TRUST_PROXY` 填 CIDR → 允许', cidrProxy.ok === true)
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
+// ════════════════════════════════════════════════════
+section('requireAdmin: 资格守卫（一个守卫 + 一处判定）')
+// ════════════════════════════════════════════════════
+{
+  const auth = await import(mod('dist/auth.js'))
+  check('管理员 → 够格', auth.requireAdmin({ allow: true, role: 'admin' }) === true)
+  check('**只读 → 不够格**（403，不是 404）', auth.requireAdmin({ allow: true, role: 'readonly' }) === false)
+  check('未放行 → 不够格', auth.requireAdmin({ allow: false, role: 'admin' }) === false)
+  check('放行但没有角色 → 不够格', auth.requireAdmin({ allow: true }) === false)
+}
+
 if (failed === 0) {
   console.log(`✅ 全部通过：${passed} 项`)
 } else {

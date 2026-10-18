@@ -3,9 +3,9 @@
  * 一台进程同时负责页面渲染和周期探测，Docker 里就只有一个容器、一个 volume。
  */
 import path from 'node:path'
-import Fastify from 'fastify'
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static'
-import { assertSessionSecret, config } from './config.js'
+import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config } from './config.js'
 import {
   getPublishedPost,
   importArticlesIfEmpty,
@@ -27,9 +27,11 @@ import {
 } from './users.js'
 import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCookieHeader } from './session.js'
 import { createSession, revokeSession } from './sessions-store.js'
-import { decideRequest, deny, isKnownPath, logoutHeader } from './auth.js'
+import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin } from './auth.js'
+import { checkOrigin, csrfContext, csrfToken, verifyCsrf } from './csrf.js'
 import {
   aboutPage,
+  forbiddenPage,
   homePage,
   loginPage,
   notFoundPage,
@@ -41,6 +43,9 @@ import {
 
 const WINDOW_MS = 24 * 60 * 60 * 1000
 const WINDOW_LABEL = '最近 24 小时'
+
+/** 安全方法不进 L2：它们不改状态（`GET` 全只读是本仓的**设计约束**，不是巧合）。 */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 const site = { title: config.siteTitle, description: config.siteDescription }
 
@@ -94,6 +99,11 @@ function parseFormBody(body: unknown): Record<string, string> {
 export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   // 先查密钥：没配就拒绝启动（不会因重启自愈的配置错误，必须显眼地停）。
   assertSessionSecret()
+  // 写路径的 L2 判据来源。与密钥同一条判据：**不会因重启自愈**，所以拒绝启动。
+  // ⚠ 这是**部署契约的一部分**：升级时 .env 里没有 SITE_ORIGIN，服务起不来（已同步进 .env.example / README）。
+  assertSiteOrigins()
+  // TRUST_PROXY=true 被拒（§3.3）：它会让人能伪造 X-Forwarded-*，而本仓的判定根本不用那两个值。
+  assertTrustProxy()
 
   initStore()
   initUsers()
@@ -142,7 +152,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   const app = Fastify({
     logger: false,
-    trustProxy: true,
+    trustProxy: config.trustProxy,
   })
 
   /**
@@ -181,9 +191,69 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
    */
   app.addHook('onRequest', async (req, reply) => {
     const decision = decideRequest(req)
-    if (decision.allow) return
-    return deny(reply, req, decision.deny ?? 'redirect')
+    if (!decision.allow) return deny(reply, req, decision.deny ?? 'redirect')
+
+    /*
+     * L2：所有**非安全方法**的来源校验，fail-closed（`docs/write-path-auth-decision.md` §2）。
+     *
+     * 位置是**有意的**：紧接闸门之后、且在**任何资格判定之前**（§5.3）。
+     * 它说的不是「你不够格」，而是「这个请求不可能来自本站」—— 与身份无关。
+     * 放到资格之后，攻击者就能从 403 的差异里读出「这个路由存在、且需要一个管理员会话」。
+     *
+     * 判据只看 `Origin` / `Referer` 与 `SITE_ORIGIN` **精确**比较，
+     * **不碰 `req.hostname` / `req.protocol`**（`trustProxy` 打开时它们可被任意直连客户端伪造）。
+     */
+    if (!SAFE_METHODS.has(req.method)) {
+      const ok = checkOrigin({ origin: req.headers.origin, referer: req.headers.referer }, config.siteOrigins)
+      if (!ok) {
+        // 记 method / path / origin / referer / host —— **不记 token、不记表单体**。
+        console.warn(
+          `[auth] L2 拒绝来源不可信的写请求：method=${req.method} path=${req.url} ` +
+            `origin=${req.headers.origin ?? '-'} referer=${req.headers.referer ?? '-'} host=${req.headers.host ?? '-'}`,
+        )
+        reply.code(403).type('text/html; charset=utf-8')
+        return reply.send(forbiddenPage('origin', site))
+      }
+    }
+
+    // 带 token 的响应**不进共享缓存**（§4.3）。今天是动态 SSR、本来没有共享缓存，
+    // 但「已登录页面不进共享缓存」本身就该是响应的属性 —— 一行头的事。
+    if (!req.url.startsWith('/static/')) reply.header('Cache-Control', 'no-store')
+
+    /*
+     * L3 的 token 从**会话 token 派生**：零新 cookie、不加载荷字段、旧 cookie 不迁移。
+     * `POST /login` 没有会话可派生 → 空串（它按 §5.2 只受 L2）。
+     *
+     * ⚠ **与文档措辞的一处偏差**：文档写 `als.run({ csrf }, () => handler())`，
+     * 但在 Fastify 里 `onRequest` 钩子**无法把后续 handler 包进回调**（钩子返回后由框架继续调用）。
+     * 这里用 `enterWith()`：它让**本请求后续的异步链**都看得到这个 store，效果相同。
+     * 而这个「相同」**由 e2e 断言证明**（登出表单里的 token 非空、且提交成功），不靠对机制的信任。
+     */
+    const csrf = csrfToken(config.sessionSecret, readSessionCookie(req.headers.cookie) ?? '') ?? ''
+    csrfContext.enterWith({ token: csrf })
   })
+
+  /**
+   * L3 的接线：**写在写路由自己的 `preValidation` 里**，不是全局（§4.2）。
+   *
+   * 为什么必须是 `preValidation`：`onRequest` 时表单体**还没解析**，读不到 `csrf` 字段；
+   * 本仓自写的 urlencoded 解析器在 `Parsing` 阶段生效，`preValidation` 在它之后。
+   * 为什么不做成全局：L3 需要**会话 token**（闸门刚算出来的那枚），
+   * 放进全局就得把所有 `GET` 也过一遍，而 `GET` 没有表单体、也没有必要。
+   *
+   * 失败给**回本页**的链接：最常见的真实原因是「开着两个标签页，在另一个标签改了口令」
+   * （`token_version` 变了 → 会话重签 → 这个页面的 token 失效），给一条刷新路径比只给 403 少一次困惑。
+   * 但文案**不解释**这个内部原因。
+   */
+  const csrfGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const submitted = parseFormBody(req.body).csrf
+    if (!verifyCsrf(config.sessionSecret, readSessionCookie(req.headers.cookie), submitted)) {
+      // 记 path 与失败原因，**不记 token 值**（OWASP 明文要求 token 不进日志）。
+      console.warn(`[auth] L3 拒绝：path=${req.url}（token 缺失或不匹配）`)
+      reply.code(403).type('text/html; charset=utf-8')
+      await reply.send(forbiddenPage('csrf', site, req.url))
+    }
+  }
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────
 
@@ -209,7 +279,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     return reply.redirect(next, 302)
   })
 
-  app.post('/logout', async (req, reply) => {
+  app.post('/logout', { preValidation: csrfGuard }, async (req, reply) => {
     /*
      * **真吊销**（#55）：把这一条会话行标成已吊销，而不只是清掉本机 cookie。
      * 只清 cookie 的话，已经泄漏出去的那串签名 token 在过期前照样能用 —— 那正是「登出」这个词
@@ -233,7 +303,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
    * 改密：验证旧口令 → 写新口令（递增 token_version）→ **重新签发当前浏览器**。
    * 若不重签，用户会把自己也踢下线（改密后 token_version 变了）。
    */
-  app.post('/password', async (req, reply) => {
+  app.post('/password', { preValidation: csrfGuard }, async (req, reply) => {
     const decision = decideRequest(req)
     const userId = decision.userId
     if (userId === undefined) return reply.code(401).send({ error: 'unauthorized' })

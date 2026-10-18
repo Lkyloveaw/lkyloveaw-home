@@ -41,6 +41,7 @@ const baseEnv = {
   TARGETS_JSON: JSON.stringify(targets),
   DATABASE_PATH: DB,
   SESSION_SECRET: SECRET,
+  SITE_ORIGIN: BASE,
   PROBE_INTERVAL_SECONDS: '1',
   CHECKPOINT_EVERY_ROUNDS: '0', // 本脚本不管备份
   BACKUP_EVERY_ROUNDS: '0',
@@ -66,7 +67,9 @@ async function waitUp(base = BASE, timeoutMs = 20000) {
 async function login(base = BASE) {
   const res = await fetch(base + '/login', {
     method: 'POST', redirect: 'manual',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    // L2 对所有非安全方法 fail-closed，且**按实例的 SITE_ORIGIN 判**：
+    // 所以来源头必须跟着 `base` 走（第二台实例的 origin 是 BASE2，不是 BASE）。
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base },
     body: new URLSearchParams({ username: TEST_USER, password: TEST_PASS, next: '/' }),
   })
   return { cookie: (res.headers.get('set-cookie') || '').split(';')[0], status: res.status }
@@ -162,7 +165,7 @@ try {
     const BASE2 = `http://127.0.0.1:${PORT2}`
     const third = spawn(process.execPath, ['dist/server.js'], {
       cwd: ROOT,
-      env: { ...baseEnv, PORT: String(PORT2), SESSION_SECRET: 'a-different-secret-entirely' },
+      env: { ...baseEnv, PORT: String(PORT2), SESSION_SECRET: 'a-different-secret-entirely', SITE_ORIGIN: BASE2 },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let log3 = ''

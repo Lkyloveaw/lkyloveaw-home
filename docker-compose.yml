@@ -16,6 +16,13 @@ services:
       PROBE_INTERVAL_SECONDS: ${PROBE_INTERVAL_SECONDS:-60}
       PROBE_TIMEOUT_MS: ${PROBE_TIMEOUT_MS:-5000}
       PROBE_RETENTION_DAYS: ${PROBE_RETENTION_DAYS:-30}
+      # ⚠ 下面两项都**必填**，缺任一即拒绝启动。`${VAR:?…}` 让 compose 在宿主机没配时
+      # **当场报错**，而不是把容器丢进 `restart: unless-stopped` 的重启循环里刷屏。
+      # 值来自宿主机的 `.env`（docker compose 会自动读它做变量替换；容器内那份不被读取）。
+      #   SESSION_SECRET —— 会话 cookie 的签名密钥
+      #   SITE_ORIGIN    —— 写路径的来源白名单（浏览器地址栏里那个 origin，可逗号分隔多值）
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET 必填：见 .env.example}
+      SITE_ORIGIN: ${SITE_ORIGIN:?SITE_ORIGIN 必填：见 .env.example}
     volumes:
       # 历史库：必须可写
       - ./data:/app/data

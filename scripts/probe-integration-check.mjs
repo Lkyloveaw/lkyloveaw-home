@@ -42,6 +42,7 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     TARGETS_JSON: JSON.stringify(targets),
     DATABASE_PATH: DB,
     SESSION_SECRET: 'probe-integration-secret',
+    SITE_ORIGIN: BASE,
     // 每轮都 checkpoint + 备份，好在测试的几秒内触发
     PROBE_INTERVAL_SECONDS: '1',
     CHECKPOINT_EVERY_ROUNDS: '1',
@@ -117,6 +118,7 @@ try {
       TARGETS_JSON: JSON.stringify(targets),
       DATABASE_PATH: DB,
       SESSION_SECRET: 'probe-integration-secret',
+      SITE_ORIGIN: BASE,
       PROBE_INTERVAL_SECONDS: '1',
       CHECKPOINT_EVERY_ROUNDS: '1',
       BACKUP_EVERY_ROUNDS: '1',
@@ -147,7 +149,8 @@ try {
   async function login() {
     const res = await fetch(BASE + '/login', {
       method: 'POST', redirect: 'manual',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      // L2 对所有非安全方法 fail-closed：不带来源头的 POST 会被 403（**故意的**）。
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
       body: new URLSearchParams({ username: TEST_USER, password: TEST_PASS, next: '/' }),
     })
     return (res.headers.get('set-cookie') || '').split(';')[0]

@@ -64,11 +64,14 @@ cp .env.example .env        # 可选，不改也能用默认值
 npm run dev                 # 开发模式，改代码自动重启
 ```
 
-> **必须配 `SESSION_SECRET`**，否则服务拒绝启动。生成一个：
+> **必须配 `SESSION_SECRET` 与 `SITE_ORIGIN`**，缺任一服务都拒绝启动。生成密钥：
 >
 > ```bash
 > node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 > ```
+>
+> `SITE_ORIGIN` 写**浏览器地址栏里那个 origin**（例如 `http://10.0.0.226:3000`，不带路径与结尾斜杠）。
+> 它挡的是「从别的网站借你的浏览器提交表单」这类请求：所有非安全方法的来源必须精确等于它。
 >
 > 为什么不自动生成：那样每次重启所有人都会掉线，而用户看不到任何原因。
 > 失败要显眼——所以这里选择不启动，并在报错里直接给出生成命令。
@@ -326,6 +329,8 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | `SESSION_SECRET` | **无（必填）** | 会话 cookie 的签名密钥。**没配就拒绝启动** |
 | `SESSION_TTL_SECONDS` | `604800` | 会话存活时间（7 天）。绝对过期，不滑动续期 |
 | `SESSION_COOKIE_SECURE` | `0` | cookie 的 `Secure` 属性。**HTTP 部署时必须保持 0** |
+| `SITE_ORIGIN` | **无（必填）** | 写路径的来源白名单（逗号分隔多值）。**没配就拒绝启动**；写浏览器地址栏里那个 origin，不带路径与结尾斜杠 |
+| `TRUST_PROXY` | 关 | 反向代理 CIDR（逗号分隔）。**不许填 `true`**（会拒绝启动）——本仓的判定不读 `X-Forwarded-*` |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | — | 首个账号，**仅当库里没有任何账号时生效** |
 | `BACKUP_DIR` | `./data/backups` | 备份目录。默认与数据库同目录，两种部署方式都不用加挂载 |
 | `BACKUP_KEEP` | `7` | 滚动保留几份 |

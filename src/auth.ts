@@ -141,6 +141,20 @@ export function decideRequest(req: FastifyRequest): RequestDecision {
 
 /** 从 token 里取出 uid（不校验签名，仅用于查库；签名由 verifySession 负责）。 */
 /**
+ * 资格守卫：这个决策够不够格做**管理**动作（`docs/write-path-auth-decision.md` §5.1）。
+ *
+ * 它只回答「**够不够格**」这一个问题 —— **对象级规则**（不能改自己、最后管理员）
+ * 由 `users.ts` 的守卫回答（`docs/roles-decision.md` §3）。两处分开是因为它们失败的理由不同：
+ * 「你不是管理员」和「你不能把最后一个管理员降级」要给用户看不同的话。
+ *
+ * 只读 → **403，不是 404**（`docs/admin-console-ia-decision.md` §3）：用户该知道这是权限问题，
+ * 而不是地址敲错了。
+ */
+export function requireAdmin(decision: RequestDecision): boolean {
+  return decision.allow && decision.role === 'admin'
+}
+
+/**
  * 处理一个未放行的请求。
  *
  * ⚠ 这里**不下发清 cookie 的头**：查询失败可能只是 DB 抖动，

@@ -2,6 +2,7 @@
 // 独立脚本而不是口头验证——每次改完都能重跑。
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { csrfToken } from '../dist/csrf.js'
 import path from 'node:path'
 
 const PORT = 3997
@@ -28,6 +29,49 @@ const get = async (p, opts = {}) => {
 /** 带会话 cookie 的取数（登录后的常规访问）。 */
 let sessionCookie = ''
 const authed = (p) => get(p, { cookie: sessionCookie })
+
+/**
+ * 会话密钥。**e2e 知道它**，所以能自己算 L3 token（与服务器同一个纯函数）——
+ * 这是「本票可独立验收、不需要管理台存在」的关键（`docs/write-path-auth-decision.md` §9.2）。
+ */
+const SECRET = 'e2e-only-secret-not-used-anywhere-else'
+
+/**
+ * 写请求的统一入口。
+ *
+ * ⚠ **刻意不叫 `post`**：本文件后面的块里有 `const post = await authed('/posts/…')`，
+ * 同名会让这个顶层绑定在**那个块里**被遮蔽 —— 块内早于它执行的地方会报
+ * `Cannot access 'post' before initialization`（TDZ），而报错点离原因很远。
+ *
+ * **所有 POST 默认带 `Origin`** —— L2 是 fail-closed 的，不带来源头的 POST 会被 403
+ * （那是**故意的**：直连 IP 调用写接口正是要拒绝的形状）。
+ * 需要 L3 的路由（`/logout`、`/password`）由调用方传 `csrf`。
+ * `origin: null` / `referer` 这些参数是给 L2 的**反例**用的。
+ */
+const postForm = async (path, opts = {}) => {
+  const { cookie = '', form = {}, csrf = null, origin = BASE, referer = null } = opts
+  const body = new URLSearchParams(form)
+  if (csrf !== null) body.set('csrf', csrf)
+  const headers = { 'content-type': 'application/x-www-form-urlencoded' }
+  if (cookie) headers.cookie = cookie
+  if (origin !== null) headers.origin = origin
+  if (referer !== null) headers.referer = referer
+  const res = await fetch(BASE + path, { method: 'POST', redirect: 'manual', headers, body })
+  return {
+    status: res.status,
+    setCookie: res.headers.get('set-cookie') || '',
+    body: await res.text(),
+    cacheControl: res.headers.get('cache-control') || '',
+  }
+}
+
+/**
+ * 从会话 cookie（形如 `session=<token>`）算 L3 token —— 与服务器**同一个函数**。
+ *
+ * ⚠ 必须剥掉 `session=` 前缀：服务器那边 `readSessionCookie()` 交出来的就是**纯 token**，
+ * 派生用的也是它。差这一个前缀，算出来的 HMAC 完全对不上 —— 而且从代码上看「哪都对」。
+ */
+const csrfFor = (cookie) => csrfToken(SECRET, cookie.replace(/^session=/, ''))
 
 // 准备一个独立的临时数据目录与目标清单
 const tmpData = path.join(ROOT, '.e2e-tmp')
@@ -68,7 +112,9 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     PROBE_TIMEOUT_MS: '4000',
     SITE_TITLE: '验收站',
     // 闸门落地后必需：没配会拒绝启动。
-    SESSION_SECRET: 'e2e-only-secret-not-used-anywhere-else',
+    SESSION_SECRET: SECRET,
+    // L2 的判据来源（#38）：缺失即拒绝启动，所以 e2e 也必须给。
+    SITE_ORIGIN: BASE,
     // 保持默认关，顺便回归「HTTP 下 Secure 必须是关的」。
     SESSION_COOKIE_SECURE: '0',
   },
@@ -137,14 +183,9 @@ try {
   console.log('\n[登录]')
   // ══════════════════════════════════════════════════════════
   const postLogin = async (username, password, next = '/') => {
-    const body = new URLSearchParams({ username, password, next })
-    const res = await fetch(BASE + '/login', {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body,
-    })
-    return { status: res.status, setCookie: res.headers.get('set-cookie') || '', body: await res.text() }
+    // `POST /login` 按 §5.2 **只受 L2**（没有会话可派生 L3 token），所以这里不带 csrf。
+    const res = await postForm('/login', { form: { username, password, next } })
+    return { status: res.status, setCookie: res.setCookie, body: res.body }
   }
 
   {
@@ -534,14 +575,12 @@ try {
     check('第二台设备能登录（前置条件成立）', (await get('/status', { cookie: otherCookie })).status === 200)
 
     // 改密：当前浏览器重新签发，其他设备失效
-    const body = new URLSearchParams({ current: TEST_PASS, next: NEW_PASS, confirm: NEW_PASS })
-    const res = await fetch(BASE + '/password', {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: sessionCookie },
-      body,
+    const res = await postForm('/password', {
+      cookie: sessionCookie,
+      form: { current: TEST_PASS, next: NEW_PASS, confirm: NEW_PASS },
+      csrf: csrfFor(sessionCookie),
     })
-    const newCookieHeader = res.headers.get('set-cookie') || ''
+    const newCookieHeader = res.setCookie
     check('改密成功（200）', res.status === 200, `got ${res.status}`)
     check('改密后重新下发了 cookie（自己不掉线）', /session=/.test(newCookieHeader), newCookieHeader.slice(0, 30))
     const rotated = newCookieHeader ? newCookieHeader.split(';')[0] : sessionCookie
@@ -571,12 +610,8 @@ try {
     const otherCookie = otherDevice.setCookie.split(';')[0]
     check('登出前提：第二台设备此前是登录态', (await get('/status', { cookie: otherCookie })).status === 200)
 
-    const res = await fetch(BASE + '/logout', {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { cookie: sessionCookie },
-    })
-    const cleared = res.headers.get('set-cookie') || ''
+    const res = await postForm('/logout', { cookie: sessionCookie, csrf: csrfFor(sessionCookie) })
+    const cleared = res.setCookie
     check('登出 -> 302 到登录页', res.status === 302, `got ${res.status}`)
     check('登出清了 cookie（Max-Age=0）', /Max-Age=0/.test(cleared), cleared)
 
@@ -712,6 +747,7 @@ try {
         TARGETS_JSON: '[]',
         DATABASE_PATH: TEST_DB, // 复用同一个库：账号建在那个库里，换库会登不上
         SESSION_SECRET: 'e2e-empty-targets-secret',
+        SITE_ORIGIN: BASE2,
         SITE_TITLE: '空目标站',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -733,7 +769,8 @@ try {
         // 登录后看面板
         const lr = await fetch(BASE2 + '/login', {
           method: 'POST', redirect: 'manual',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          // L2 对**所有**非安全方法 fail-closed：这个实例的允许来源是 BASE2，所以必须带上它。
+          headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE2 },
           body: new URLSearchParams({ username: TEST_USER, password: NEW_PASS, next: '/status' }),
         })
         const ck = (lr.headers.get('set-cookie') || '').split(';')[0]
@@ -754,6 +791,131 @@ try {
       await sleep(600)
     }
   }
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[写路径：L2 来源校验 + L3 令牌（#38）]')
+  // ══════════════════════════════════════════════════════════
+  {
+    // **先证明前提**：同源 POST 是通的 —— 否则下面每一条「拒绝」都可能是恒真的。
+    const ok = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    check('前提：同源 POST 通（302 下发 cookie）', ok.status === 302, `got ${ok.status}`)
+    const cookieA = ok.setCookie.split(';')[0]
+    check('前提：能从会话 cookie 算出非空 token', csrfFor(cookieA).length > 0)
+
+    // ── L2 的反例 ──
+    const form = { username: TEST_USER, password: NEW_PASS }
+    check(
+      '**删掉 Origin 与 Referer → 403**（直连 IP 调写接口正是要拒绝的形状）',
+      (await postForm('/login', { form, origin: null })).status === 403,
+    )
+    check(
+      '`Origin: null` → 403（它不是「没有来源」，是「来源不可知」）',
+      (await postForm('/login', { form, origin: 'null' })).status === 403,
+    )
+    check(
+      '站外 Origin → 403',
+      (await postForm('/login', { form, origin: 'http://evil.example.com' })).status === 403,
+    )
+    check(
+      '**后缀型伪造 → 403**（`includes` 型比较会把它放进来）',
+      (await postForm('/login', { form, origin: BASE + '.evil.com' })).status === 403,
+    )
+    check(
+      '前缀型伪造 → 403',
+      (await postForm('/login', { form, origin: 'http://evil.com#' + BASE })).status === 403,
+    )
+    check(
+      'Origin 缺失但 Referer 同源 → 放行（回退只取 origin 部分）',
+      (await postForm('/login', { form, origin: null, referer: BASE + '/login?x=1' })).status === 302,
+    )
+    check(
+      'Referer 站外 → 403',
+      (await postForm('/login', { form, origin: null, referer: 'http://evil.example.com/login' })).status === 403,
+    )
+    // 判定**不读** req.hostname / req.protocol：伪造 X-Forwarded-* 不该改变结果
+    {
+      const res = await fetch(BASE + '/login', {
+        method: 'POST',
+        redirect: 'manual',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          origin: BASE,
+          'x-forwarded-host': 'evil.com',
+          'x-forwarded-proto': 'https',
+        },
+        body: new URLSearchParams(form),
+      })
+      check('加 `X-Forwarded-Host: evil.com` 判定不变（trustProxy 默认关、判定也不读它）', res.status === 302, `got ${res.status}`)
+    }
+
+    // ── L3 的反例 ──
+    check('前提：这个会话此刻是登录态', (await get('/status', { cookie: cookieA })).status === 200)
+    check('缺 csrf → 403', (await postForm('/logout', { cookie: cookieA })).status === 403)
+    check(
+      'csrf 长度不对 → 403（**不是 500**：先比长度再 timingSafeEqual）',
+      (await postForm('/logout', { cookie: cookieA, csrf: 'short' })).status === 403,
+    )
+    check(
+      'csrf 等长但不对 → 403',
+      (await postForm('/logout', { cookie: cookieA, csrf: 'x'.repeat(43) })).status === 403,
+    )
+    {
+      const other = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+      const cookieB = other.setCookie.split(';')[0]
+      check(
+        '**用另一个会话算的 token → 403**',
+        (await postForm('/logout', { cookie: cookieA, csrf: csrfFor(cookieB) })).status === 403,
+      )
+    }
+    check(
+      '前提：几次被拒之后会话仍然有效（**拒绝不产生副作用**）',
+      (await get('/status', { cookie: cookieA })).status === 200,
+    )
+
+    // ── 页面里真的渲染了 token（这两条证明 ALS 那条路是通的）──
+    const page = await get('/status', { cookie: cookieA })
+    const m = page.body.match(/<form class="logout-form"[^>]*>[\s\S]*?name="csrf" value="([^"]*)"/)
+    check('登出表单**带上了非空 token**（ALS 生效）', !!m && m[1].length > 0, m ? `len=${m[1].length}` : '没匹配到表单')
+    check('表单里那枚 token 就是本会话的那一枚', !!m && m[1] === csrfFor(cookieA))
+    // 用**页面里那枚**（而不是自己算的）提交 —— 浏览器走的就是这条路
+    const viaForm = await postForm('/logout', { cookie: cookieA, csrf: m ? m[1] : '' })
+    check('用页面里那枚 token 登出成功（浏览器走的就是这条路）', viaForm.status === 302, `got ${viaForm.status}`)
+    check('带 token 的响应有 `Cache-Control: no-store`', /no-store/.test(viaForm.cacheControl), viaForm.cacheControl)
+
+    // ── 改密后**旧页面的** token 失效 ──
+    {
+      const c = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+      const cookieC = c.setCookie.split(';')[0]
+      const oldToken = csrfFor(cookieC)
+      const changed = await postForm('/password', {
+        cookie: cookieC,
+        form: { current: NEW_PASS, next: NEW_PASS, confirm: NEW_PASS },
+        csrf: oldToken,
+      })
+      check('前提：改密成功', changed.status === 200, `got ${changed.status}`)
+      const cookieD = changed.setCookie.split(';')[0]
+      check(
+        '**改密成功后，旧页面那枚 token → 403**（会话重签，token 随之全变）',
+        (
+          await postForm('/password', {
+            cookie: cookieD,
+            form: { current: NEW_PASS, next: NEW_PASS, confirm: NEW_PASS },
+            csrf: oldToken,
+          })
+        ).status === 403,
+      )
+      check(
+        '新会话的新 token 可用（证明上一条不是恒真）',
+        (
+          await postForm('/password', {
+            cookie: cookieD,
+            form: { current: NEW_PASS, next: NEW_PASS, confirm: NEW_PASS },
+            csrf: csrfFor(cookieD),
+          })
+        ).status === 200,
+      )
+    }
+  }
+
   // ══════════════════════════════════════════════════════════
   console.log('\n[角色：默认只读与守卫（走 CLI 那条路）]')
   // ══════════════════════════════════════════════════════════

@@ -162,6 +162,35 @@ function normalizeTargets(raw: unknown[]): ProbeTarget[] {
   return out
 }
 
+/**
+ * `SITE_ORIGIN` → 允许来源集合。逗号分隔多值；每条 `trim()` 并去掉结尾的 `/`。
+ * **这里不做合法性校验** —— 那在 `assertSiteOrigins()` 里做，因为那里能一次说出**是哪一条**不合法。
+ */
+function parseSiteOrigins(raw: string | undefined): Set<string> {
+  const out = new Set<string>()
+  for (const part of (raw ?? '').split(',')) {
+    const v = part.trim().replace(/\/+$/, '')
+    if (v) out.add(v)
+  }
+  return out
+}
+
+/**
+ * `TRUST_PROXY` → `false`（默认）或 CIDR 列表。
+ * 真值写法（`1`/`true`/…）在这里**归成 `false`**，真正的拒绝在 `assertTrustProxy()` —— 那里能报错退出。
+ */
+function parseTrustProxy(raw: string | undefined): string[] | false {
+  const v = (raw ?? '').trim()
+  if (!v) return false
+  if (['0', 'false', 'no', 'off'].includes(v.toLowerCase())) return false
+  if (['1', 'true', 'yes', 'on'].includes(v.toLowerCase())) return false // 见 assertTrustProxy()
+  const list = v
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return list.length ? list : false
+}
+
 export const config = {
   port: num('PORT', 3000),
   host: process.env.HOST?.trim() || '0.0.0.0',
@@ -200,6 +229,22 @@ export const config = {
   checkpointEveryRounds: num('CHECKPOINT_EVERY_ROUNDS', 60),
   /** 每几轮探测尝试一次备份（默认与 checkpoint 同频，靠「今天是否已备份」去重）。 */
   backupEveryRounds: num('BACKUP_EVERY_ROUNDS', 60),
+
+  /**
+   * L2 的允许来源集合（**精确匹配**，`docs/write-path-auth-decision.md` §3.1）。
+   * 逗号分隔多值；每条 `trim()` 并去掉**结尾的 `/`**（浏览器地址栏里带斜杠是常态）。
+   * **为空即拒绝启动** —— 见 `assertSiteOrigins()`。
+   */
+  siteOrigins: parseSiteOrigins(process.env.SITE_ORIGIN),
+
+  /**
+   * 反向代理信任开关。**默认关**；要开就填具体 CIDR（逗号分隔）。
+   *
+   * ⚠ **不许填 `true`**（`assertTrustProxy()` 会拒绝启动）：打开它之后
+   * `req.hostname` / `req.protocol` 可被**任意直连客户端**用 `X-Forwarded-*` 伪造。
+   * 而本仓的判定**根本不用这两个值**（§3.3）—— 没有理由冒这个险。
+   */
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 } as const
 
 export type Config = typeof config
@@ -226,6 +271,93 @@ export function assertSessionSecret(): void {
       '  并写进环境变量或 .env：',
       '',
       SECRET_HINT,
+      '',
+    ].join('\n'),
+  )
+  process.exit(1)
+}
+
+/**
+ * 启动前检查 `SITE_ORIGIN`（L2 的判据）。
+ *
+ * 判据沿用 `assertSessionSecret()` 的「**重启能不能自愈**」：
+ * 缺失或写错**不会**因重启而好转，反复重启只会掩盖原因 —— 所以**拒绝启动**，并把
+ * 「怎么写、写成什么样」直接印在报错里。
+ *
+ * ⚠ 这一条是**部署契约的一部分**：升级到本版时 `.env` 里没有 `SITE_ORIGIN` 服务就起不来。
+ * 已经同步进 `.env.example` 与 `README.md`。
+ */
+export function assertSiteOrigins(): void {
+  const raw = (process.env.SITE_ORIGIN ?? '').trim()
+  if (config.siteOrigins.size === 0) {
+    console.error(
+      [
+        '',
+        '[config] 缺少 SITE_ORIGIN，拒绝启动。',
+        '',
+        '  它是「哪些来源算本站」的白名单，写路径的来源校验（L2）靠它 fail-closed。',
+        '  写**浏览器地址栏里那个 origin**（协议 + 主机 + 端口，不带路径、不带结尾斜杠）：',
+        '',
+        '    SITE_ORIGIN=http://10.0.0.226:3000',
+        '',
+        '  多个来源用逗号分隔（例如同时用 IP 与域名访问）：',
+        '',
+        '    SITE_ORIGIN=http://10.0.0.226:3000,https://wiki.example.com',
+        '',
+      ].join('\n'),
+    )
+    process.exit(1)
+  }
+
+  // 逐条校验，**指出是哪一条**：一次说清比让运维逐条试强。
+  for (const part of raw.split(',')) {
+    const v = part.trim().replace(/\/+$/, '')
+    if (!v) continue
+    let ok = false
+    try {
+      const u = new URL(v)
+      // `u.origin === v` 一次挡掉：带路径/查询/片段、结尾斜杠、以及非 http(s) 协议。
+      ok = (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === v
+    } catch {
+      ok = false
+    }
+    if (!ok) {
+      console.error(
+        [
+          '',
+          `[config] SITE_ORIGIN 里的这一条不是合法 origin：「${v}」`,
+          '',
+          '  要的是「协议://主机[:端口]」，不带路径、不带结尾斜杠。例如：',
+          '    http://10.0.0.226:3000',
+          '    https://wiki.example.com',
+          '',
+        ].join('\n'),
+      )
+      process.exit(1)
+    }
+  }
+}
+
+/**
+ * `TRUST_PROXY` **不许填 `true`**（§3.3）。
+ *
+ * 打开它之后，`req.hostname` / `req.protocol` 可被任意直连客户端用 `X-Forwarded-*` 伪造。
+ * 本仓的判定**根本不用这两个值**，所以没有理由冒这个险；要开就填具体 CIDR。
+ */
+export function assertTrustProxy(): void {
+  const raw = (process.env.TRUST_PROXY ?? '').trim().toLowerCase()
+  if (!['1', 'true', 'yes', 'on'].includes(raw)) return
+  console.error(
+    [
+      '',
+      '[config] TRUST_PROXY=true 被拒绝，拒绝启动。',
+      '',
+      '  它会让任意直连客户端能用 X-Forwarded-* 伪造主机与协议。',
+      '  要信任反向代理就填**具体的** CIDR（逗号分隔）：',
+      '',
+      '    TRUST_PROXY=127.0.0.1,10.0.0.0/8',
+      '',
+      '  不信任任何代理（默认）就不写这一项。',
       '',
     ].join('\n'),
   )

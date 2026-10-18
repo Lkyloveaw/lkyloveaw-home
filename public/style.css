@@ -367,3 +367,17 @@ main { padding-top: 34px; }
   .incident-list li { grid-template-columns: 1fr; gap: 2px; }
   .incident-err { text-align: left; }
 }
+
+/* 登出按钮（#38）：写路径要 L3 token，所以它必须是一个带 csrfField() 的**真实表单**，
+   不是一个普通链接 —— 这也是「浏览器里还能登出」这件事的落点。 */
+.logout-form { margin: 0; }
+.logout-form button {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+  padding: 0;
+}
+.logout-form button:hover { opacity: 1; text-decoration: underline; }
