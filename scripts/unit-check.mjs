@@ -762,6 +762,13 @@ if (scenario === 'uptime') {
   out.totalsWith3 = S.getUptimeRaw(60 * 60 * 1000, 3).map((p) => p.total)
 }
 
+if (scenario === 'dupcol') {
+  // 「这一列已经有了」在并发首启时是**正常结果**；别的错误一律照抛（失败要显眼）。
+  out.duplicate = S.isDuplicateColumnError(new Error('duplicate column name: round_at'))
+  out.other = S.isDuplicateColumnError(new Error('no such table: probes'))
+  out.undefined = S.isDuplicateColumnError(undefined)
+}
+
 console.log(JSON.stringify(out))
 `,
     'utf8',
@@ -879,27 +886,44 @@ console.log(JSON.stringify(out))
   check('设了 enabled_at 之后，连续可用从重新启用那一刻起算（< 5 秒）', st.enabledAtRecent === true && st.floored < 5000, JSON.stringify(st))
 
   // ── ⑫ 双进程同时首次启动 → 无重复 id、不抛异常 ──
-  const db2 = path.join(tdir, 't6.sqlite')
-  const p1 = spawnSync(process.execPath, [scenarioFile, 'import'], { cwd: root, encoding: 'utf8', env: { ...process.env, DATABASE_PATH: db2, TARGETS_JSON: JSON.stringify(FILE3) } })
-  // spawnSync 是串行的，所以这里用两次「真并发」的子进程：先起一个，不等它结束再起第二个
-  const { spawn } = await import('node:child_process')
+  /*
+   * 这条曾经**真的会偶发失败**（负载下 100 次并发首启必现 1 次）：
+   * 两个进程同时读 `PRAGMA table_info` 以为缺列，先到的补完，后到的执行 `ALTER TABLE`
+   * 拿到 `duplicate column name` → 进程直接退出 1（服务起不来）。
+   * 处置：`isDuplicateColumnError()` 容忍这一种错（补列迁移因此幂等），其余错误照抛。
+   * 这里跑 4 个进程（更接近 `docker restart` 与 `up` 撞在一起的真实形状），并**把 stderr 读走**，
+   * 失败时原文就摆在 detail 里。
+   */
   const raceDb = path.join(tdir, 't7.sqlite')
-  const raceEnv = { ...process.env, DATABASE_PATH: raceDb, TARGETS_JSON: JSON.stringify(FILE3) }
+  const raceEnv = { ...process.env, DATABASE_PATH: raceDb, TARGETS_JSON: JSON.stringify(FILE3), TARGETS_PATH: '' }
+  // 前置对照：**单进程**在另一个库上跑一遍，证明场景本身可复现（不是「四进程才有输出」）。
+  const p1 = run('import', path.join(tdir, 't6.sqlite'), { TARGETS_JSON: JSON.stringify(FILE3) })
+  const { spawn } = await import('node:child_process')
   const both = await Promise.all(
-    [0, 1].map(
+    [0, 1, 2, 3].map(
       () =>
         new Promise((resolve) => {
           const c = spawn(process.execPath, [scenarioFile, 'import'], { cwd: root, env: raceEnv })
           let out = ''
+          let err = ''
           c.stdout.on('data', (d) => (out += d))
-          c.on('close', (code) => resolve({ code, out }))
+          // stderr 也要读走：管道写满会把子进程堵住，而失败时的原文正是排查依据。
+          c.stderr.on('data', (d) => (err += d))
+          c.on('close', (code) => resolve({ code, out, err }))
         }),
     ),
   )
-  check('双进程同启：两个都正常退出（不抛异常）', both.every((r) => r.code === 0), JSON.stringify(both.map((r) => r.code)))
+  check(
+    '四进程同启：全部正常退出（补列迁移在并发下幂等，不抛异常）',
+    both.every((r) => r.code === 0),
+    JSON.stringify(both.map((r) => ({ code: r.code, err: r.err.trim().slice(-200) }))),
+  )
   const raced = json(run('import', raceDb, { TARGETS_JSON: JSON.stringify(FILE3) }))
-  check('双进程同启：库里恰好 3 行、无重复 id', raced.allCount === 3 && new Set(raced.rows.map((r) => r.id)).size === 3, JSON.stringify(raced.rows.map((r) => r.id)))
+  check('四进程同启：库里恰好 3 行、无重复 id', raced.allCount === 3 && new Set(raced.rows.map((r) => r.id)).size === 3, JSON.stringify(raced.rows.map((r) => r.id)))
   check('（前置）单进程那份数据也建好了，说明场景本身可复现', p1.status === 0)
+  const dc = json(run('dupcol', raceDb, { TARGETS_JSON: JSON.stringify(FILE3) }))
+  check('补列容错只认这一种错：`duplicate column name` → 容忍', dc.duplicate === true, JSON.stringify(dc))
+  check('别的错（`no such table`）**照旧抛**，不静默降级', dc.other === false && dc.undefined === false, JSON.stringify(dc))
 
   // ── hasHistory 与 listAllTargets（页面按它决定按钮文案）──
   const l = json(run('list', db1, { TARGETS_JSON: JSON.stringify(FILE3) }))

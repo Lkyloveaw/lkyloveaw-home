@@ -53,6 +53,15 @@ export function initStore(): Database.Database {
   if (db) return db
   fs.mkdirSync(path.dirname(config.databasePath), { recursive: true })
   db = new Database(config.databasePath)
+  /*
+   * 显式设忙等（better-sqlite3 的默认 `timeout` 也是 5000ms —— 写出来是为了让
+   * 「并发首启要等锁、不是立刻失败」这件事在代码里看得见，而不是依赖驱动的默认值）。
+   *
+   * ⚠ 真正会在并发首启时炸的**不是**开 WAL，而是**补列迁移**：
+   * 两个进程同时读到「缺列」，先到的补完，后到的就拿到 `duplicate column name`
+   * （实测：负载下 100 次并发首启里必现 1 次，服务直接起不来）。处置见 `isDuplicateColumnError()`。
+   */
+  db.pragma('busy_timeout = 5000')
   db.pragma('journal_mode = WAL')
   // 先建表（不含新列），保证旧库升级路径也能走到补列那一步。
   db.exec(`
@@ -71,10 +80,17 @@ export function initStore(): Database.Database {
   const cols = db.prepare(`PRAGMA table_info(probes)`).all() as Array<{ name: string }>
   const hasRound = cols.some((c) => c.name === 'round_at')
   if (!hasRound) {
-    db.exec(`ALTER TABLE probes ADD COLUMN round_at INTEGER`)
-    // 旧数据的每一轮就是当时的单条记录，回填成 at 即可。
+    // 并发首启：另一个进程可能刚补完这一列，我们这边就会拿到 `duplicate column name`。
+    // 那不是失败（目标状态已达成）—— 见 `isDuplicateColumnError()`。回填与建索引照常，
+    // 两者都是幂等的。
+    try {
+      db.exec(`ALTER TABLE probes ADD COLUMN round_at INTEGER`)
+      console.log('[store] 已为历史表补上 round_at 列')
+    } catch (err) {
+      if (!isDuplicateColumnError(err)) throw err
+    }
+    // 旧数据的每一轮就是当时的单条记录，回填成 at 即可（`WHERE IS NULL` 让它天然幂等）。
     db.exec(`UPDATE probes SET round_at = at WHERE round_at IS NULL`)
-    console.log('[store] 已为历史表补上 round_at 列并回填')
   }
   // 补列之后再建索引。
   db.exec(`
@@ -125,6 +141,21 @@ export function initStore(): Database.Database {
 
 function handle(): Database.Database {
   return db ?? initStore()
+}
+
+/**
+ * 「这一列已经有了」—— 在**并发首启**时这是正常结果，不是失败。
+ *
+ * 形状：两个进程同时启动、同时读 `PRAGMA table_info` 都以为缺列，先到的那个补完，
+ * 后到的那个执行 `ALTER TABLE` 就拿到 `duplicate column name`。
+ * 实测：负载下 100 次子进程并发首启里必现 1 次（服务直接起不来）；容忍之后同样 100 次为 0。
+ * 迁移的**目标状态已经达成**，所以这一种措辞被容忍。
+ *
+ * ⚠ 只容忍这一种：别的错误照旧抛出去。**失败要显眼，不要静默降级**是本仓的既有取舍，
+ * 把整个 `ALTER` 包进 `catch {}` 就等于把「迁移真的坏了」也吞掉。
+ */
+export function isDuplicateColumnError(err: unknown): boolean {
+  return /duplicate column name/i.test((err as Error | undefined)?.message ?? '')
 }
 
 const insertStmt = () => handle().prepare(

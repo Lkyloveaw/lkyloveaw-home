@@ -1,6 +1,6 @@
 // 端到端验收：从干净构建到真实 HTTP 请求，逐项断言。
 // 独立脚本而不是口头验证——每次改完都能重跑。
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { csrfToken } from '../dist/csrf.js'
 import path from 'node:path'
@@ -735,12 +735,22 @@ try {
   check('探测日志正常输出', /\[probe\]/.test(serverLog))
 
   // ══════════════════════════════════════════════════════════
-  console.log('\n[无目标清单：面板不崩，明说「还没配置」]')
+  console.log('\n[空目标清单：面板不崩，明说「还没配置」]')
   // ══════════════════════════════════════════════════════════
-  // 单独起一个实例（端口 3994）而不是复用主实例：主实例有 3 个目标，改不了。
+  /*
+   * ⚠ 目标真源已经是**数据库**（#40）。所以「再起一个 `TARGETS_JSON: '[]'` 的实例」**不再等于空清单** ——
+   * 它会读到同一个库里那 3 个目标（那正是真源语义）。要真的空，只能给它一个**全新的库**；
+   * 而那个库里也得有账号，所以用 CLI 在同一个新库里建一次号。
+   */
   {
     const PORT2 = 3994
     const BASE2 = `http://127.0.0.1:${PORT2}`
+    const EMPTY_DB = path.join(tmpData, 'empty-targets.sqlite')
+    execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--password', NEW_PASS], {
+      cwd: ROOT,
+      env: { ...process.env, DATABASE_PATH: EMPTY_DB },
+      stdio: 'ignore',
+    })
     const child2 = spawn(process.execPath, ['dist/server.js'], {
       cwd: ROOT,
       env: {
@@ -748,7 +758,7 @@ try {
         PORT: String(PORT2),
         HOST: '127.0.0.1',
         TARGETS_JSON: '[]',
-        DATABASE_PATH: TEST_DB, // 复用同一个库：账号建在那个库里，换库会登不上
+        DATABASE_PATH: EMPTY_DB, // 全新库：表为空 → 0 个目标
         SESSION_SECRET: 'e2e-empty-targets-secret',
         SITE_ORIGIN: BASE2,
         SITE_TITLE: '空目标站',
@@ -777,7 +787,7 @@ try {
           body: new URLSearchParams({ username: TEST_USER, password: NEW_PASS, next: '/status' }),
         })
         const ck = (lr.headers.get('set-cookie') || '').split(';')[0]
-        check('无目标实例也能登录（共用同一个库，账号在）', ck.startsWith('session='), `login=${lr.status}`)
+        check('无目标实例也能登录（新库里用 CLI 建过号）', ck.startsWith('session='), `login=${lr.status}`)
         const panel = await fetch(BASE2 + '/status', { headers: { cookie: ck } })
         const html = await panel.text()
         check('无目标时面板 200（不是 500）', panel.status === 200, `got ${panel.status}`)
@@ -787,7 +797,8 @@ try {
         check('空清单时 API 返回空数组（不是 null/undefined）', Array.isArray(body.targets) && body.targets.length === 0, JSON.stringify(body.targets))
         check('空清单时 overview 也是数组', Array.isArray(body.overview))
         check('空清单时服务未崩溃', child2.exitCode === null && !/启动失败/.test(log2), log2.slice(-200))
-        check('启动时给出「还没有配置被监控的系统」提示', /还没有配置被监控的系统/.test(log2), log2.split('\n').find((l) => l.includes('配置')) || '(无)')
+        check('启动时给出「还没有启用中的被监控系统」提示', /还没有启用中的被监控系统/.test(log2), log2.split('\n').find((l) => l.includes('配置') || l.includes('启用')) || '(无)')
+        check('/healthz 的目标数读库（空库 → 0，不是冻结的配置值）', (await (await fetch(BASE2 + '/healthz')).json()).targets === 0)
       }
     } finally {
       child2.kill('SIGTERM')
@@ -993,7 +1004,13 @@ try {
     check('「管理」被标成当前页（aria-current）', /aria-current="page"[^>]*>管理</.test(overview.body))
     check('概览页有四块摘要卡', (overview.body.match(/class="stat"/g) || []).length >= 4)
     check('概览页**不渲染目标列表**（不造第二份真相）', !/ledger\.internal\.example/.test(overview.body))
-    check('页面上明说这一版是只读的', /<strong>只读<\/strong>/.test(overview.body))
+    // #40 之后这句话必须**是真的**：目标页已经能写，其余三页仍只读。
+    // （原来这里断言「这一版是只读的」——那句在我把目标页接通后就成了假话，所以跟着改。）
+    check(
+      '概览页明说哪些页能写、哪些还只读（不许笼统说「只读」）',
+      /目标<\/strong>页已经能增删改/.test(overview.body) && /账号 \/ 备份 \/ 设置三页仍然是只读的/.test(overview.body),
+      overview.body.match(/这一版的写动作[^<]*/)?.[0] ?? '(没找到那句话)',
+    )
 
     // ── 只读：**先断言同一响应里另外 4 项在**，再断言「管理」不在 ──
     // 少了前一条，「没有管理」在「整页都没渲染出来」时也会通过 —— 那是恒真断言。
@@ -1431,6 +1448,161 @@ try {
     const before = fs.readdirSync(path.join(tmpData, 'media')).length
     await upload({ cookie: adminUp, csrf: token, bytes: fake, filename: 'again.png' })
     check('⑦ **失败不落盘**（被拒的上传没有留下任何文件）', fs.readdirSync(path.join(tmpData, 'media')).length === before, `${before} → ${fs.readdirSync(path.join(tmpData, 'media')).length}`)
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[管理台目标写路径（#40）：真源是数据库 · 热加载 · id 不可变]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admT = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminT = admT.setCookie.split(';')[0]
+    const csrfT = () => csrfFor(adminT)
+    /** `/api/status` 的 JSON（读者面，能证明探测**真的**跑到了新目标）。 */
+    const apiJson = async () => JSON.parse((await get('/api/status', { cookie: adminT })).body)
+    /** 管理台目标页上「有几条目标」：每条目标渲染一个 `class="target-id"`。 */
+    const rowCount = (html) => (html.match(/class="target-id"/g) ?? []).length
+
+    const NEWID = 'e2e-target-probe'
+    const NEWNAME = 'e2e 验收目标'
+    const NEWURL = 'http://10.255.255.1/'
+
+    // ── 前提：页面能开、说明写清楚了 ──
+    const page0 = await get('/admin/targets', { cookie: adminT })
+    check('前提：管理员 GET /admin/targets → 200', page0.status === 200, `got ${page0.status}`)
+    check('前提：页面写明真源是<strong>数据库</strong>、文件只在首次导入用一次', /真源是<strong>数据库<\/strong>/.test(page0.body) && /第一次启动/.test(page0.body))
+    check('前提：编辑表单里的 id 是**只读**文本（不是可改的输入框）', /id <input value="[^"]*" readonly>/.test(page0.body), (page0.body.match(/id <input[^>]*>/) ?? ['(无)'])[0])
+
+    // ── 资格与 L2 / L3：与其它写路由**同一张鉴权面** ──
+    const roT = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookieT = roT.setCookie.split(';')[0]
+    check('只读 GET /admin/targets → **403**（不是 404、也不是只读视图）', (await get('/admin/targets', { cookie: roCookieT })).status === 403)
+    check(
+      '只读 POST /admin/targets → **403**，不写、不重定向',
+      (await postForm('/admin/targets', { cookie: roCookieT, csrf: csrfFor(roCookieT), form: { action: 'target-disable', id: 'ok' } })).status === 403,
+    )
+    check(
+      '缺 csrf → **403**（L3）',
+      (await postForm('/admin/targets', { cookie: adminT, form: { action: 'target-disable', id: 'ok' } })).status === 403,
+    )
+    check(
+      '跨站来源 → **403**（L2，与其它写路由同一条）',
+      (await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), origin: 'http://evil.example.com', form: { action: 'target-disable', id: 'ok' } })).status === 403,
+    )
+    check('未知 action → **400**（闭集）', (await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-setid', id: 'ok' } })).status === 400)
+
+    // ── ⑬ 新增 → 302 + **写后读**（新目标真的进了库、进了清单）──
+    const beforeRows = rowCount(page0.body)
+    // 前提（⑭ 的前置）：此刻清单里没有它
+    const apiBefore = await apiJson()
+    check('前提：此刻 /api/status 里没有这个 id', !JSON.stringify(apiBefore.targets).includes(NEWID))
+    const created = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-create', id: NEWID, name: NEWNAME, url: NEWURL, group: '验收', expectStatus: '200', timeoutMs: '1000', enabled: 'yes' },
+    })
+    check('⑬ 新增 → **302**（PRG）', created.status === 302 && /notice=target-saved/.test(created.location), `${created.status} ${created.location}`)
+    const afterCreate = await get('/admin/targets', { cookie: adminT })
+    check('⑬ 写后读：页面上多了一条，且名字/URL/分组都对', rowCount(afterCreate.body) === beforeRows + 1 && afterCreate.body.includes(NEWNAME) && afterCreate.body.includes(NEWURL) && afterCreate.body.includes('验收'), `${beforeRows} → ${rowCount(afterCreate.body)}`)
+    const apiAfter = await apiJson()
+    check('⑬ 读者面也立刻看得到它（清单来自库，不是启动时那份配置）', apiAfter.targets.some((t) => t.id === NEWID))
+
+    // ── ⑭ 等一个探测间隔 → probes 里出现它（**热加载**真的生效）──
+    let seen = 0
+    for (let i = 0; i < 30; i++) {
+      await sleep(500)
+      const api = await apiJson()
+      const row = api.targets.find((t) => t.id === NEWID)
+      seen = row?.timeline?.length ?? 0
+      if (seen > 0) break
+    }
+    check('⑭ 不重启，下一轮探测就把它探到了（timeline 有记录 = 热加载生效）', seen > 0, `timeline=${seen}`)
+
+    // ── ⑮ 重复 id → 400 + 文案 + 库里仍只有一条 ──
+    const dupCreate = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-create', id: NEWID, name: '重名', url: NEWURL, enabled: 'yes' },
+    })
+    check('⑮ 重复 id → **400** + 「id 已存在」文案', dupCreate.status === 400 && /id 已存在/.test(dupCreate.body), `got ${dupCreate.status}`)
+    check('⑮ 库里仍只有一条（没有半条脏行）', rowCount(dupCreate.body) === beforeRows + 1, String(rowCount(dupCreate.body)))
+    check('⑮ 原来的名字没被覆盖', dupCreate.body.includes(NEWNAME) && !dupCreate.body.includes('>重名<'))
+
+    // ── ⑯ 只改 name：name 变、id 不变 ──
+    const ren = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-update', id: NEWID, name: NEWNAME + '（改过）', url: NEWURL, group: '验收', expectStatus: '200', timeoutMs: '1000' },
+    })
+    check('⑯ 编辑 → 302 + notice=target-saved', ren.status === 302 && /notice=target-saved/.test(ren.location), `${ren.status} ${ren.location}`)
+    const afterRen = await apiJson()
+    check('⑯ name 变了、`id` **没变**（它是历史库的关联键）', afterRen.targets.some((t) => t.id === NEWID && t.name === NEWNAME + '（改过）'), JSON.stringify(afterRen.targets.map((t) => [t.id, t.name])))
+    // 混一个「改 id」的字段进来：闭集里没有这个动作，多余字段一律忽略
+    const hijack = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-update', id: NEWID, newId: 'hijacked', name: NEWNAME + '（改过）', url: NEWURL },
+    })
+    check('⑯ “改 id”的字段被忽略（id 仍是原来的）', hijack.status === 302 && !(await apiJson()).targets.some((t) => t.id === 'hijacked'), `got ${hijack.status}`)
+
+    // ── 字段校验：400 + **就地重渲染并保留刚填的输入** ──
+    const badUrl = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-create', id: 'e2e-bad-url', name: '带凭证的', url: 'http://ops:hunter2@ledger.internal.example/', enabled: 'yes' },
+    })
+    check('URL 带凭证 → **400** + 明说 URL 不合规', badUrl.status === 400 && /URL 不合规/.test(badUrl.body), `got ${badUrl.status}`)
+    check('失败页**保留了刚填的输入**（不是把表单清空）', badUrl.body.includes('http://ops:hunter2@ledger.internal.example/') && badUrl.body.includes('带凭证的'))
+    check('失败页顶部是 `notice-bad` 横幅', /notice notice-bad/.test(badUrl.body))
+    check('被拒的目标**没进库**（页面行数不变）', rowCount(badUrl.body) === beforeRows + 1, String(rowCount(badUrl.body)))
+    const badTimeout = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-create', id: 'e2e-bad-timeout', name: 'x', url: NEWURL, timeoutMs: '999999999', enabled: 'yes' },
+    })
+    check('超时越界 → **400**（显式判据，不静默截断）', badTimeout.status === 400 && /超时只能是/.test(badTimeout.body), `got ${badTimeout.status}`)
+
+    // ── ⑰ 停用 → /status 与 /api/status 都不含它 ──
+    const apiBeforeDisable = await apiJson()
+    check('前提：停用前它在读者面里', apiBeforeDisable.targets.some((t) => t.id === NEWID))
+    const dis = await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-disable', id: NEWID } })
+    check('⑰ 停用 → 302 + notice=target-disabled', dis.status === 302 && /notice=target-disabled/.test(dis.location), `${dis.status} ${dis.location}`)
+    check('⑰ `/api/status` 里没有它了', !(await apiJson()).targets.some((t) => t.id === NEWID))
+    check('⑰ `/status` 面板 HTML 里也没有它了', !(await get('/status', { cookie: adminT })).body.includes(NEWNAME))
+    check('⑰ 但它还在管理台里（停用 ≠ 消失，历史留着）', (await get('/admin/targets', { cookie: adminT })).body.includes(NEWID))
+    check('⑰ 启用回来 → 又在读者面里（恢复通道永不设卡）', (await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-enable', id: NEWID } })).status === 302 && (await apiJson()).targets.some((t) => t.id === NEWID))
+
+    // ── 删除两岔：它有历史 → 只停用（notice 说「停用」，不是「删除」）──
+    const del = await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-delete', id: NEWID } })
+    check('删除（有历史）→ 302 + `target-disabled`（页面上的按钮文案用的是同一条判据）', del.status === 302 && /notice=target-disabled/.test(del.location), `${del.status} ${del.location}`)
+
+    // ── ⑱ 全仓：运行时**没有** `config.targets` 的读取点（只剩导入来源）──
+    {
+      const runtimeFiles = fs
+        .readdirSync(path.join(ROOT, 'src'))
+        .filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts'))
+        .filter((f) => /config\.targets\b/.test(fs.readFileSync(path.join(ROOT, 'src', f), 'utf8')))
+      // 允许剩下的只有这两处：`config.ts`（字段本身的定义）与 `targets-store.ts`（**只**把它当首次导入来源）。
+      const allowed = ['config.ts', 'targets-store.ts']
+      check(
+        '⑱ 运行时代码里没有 `config.targets` 读取点（只有 config.ts 的定义与 targets-store 的导入来源）',
+        runtimeFiles.every((f) => allowed.includes(f)),
+        runtimeFiles.join(', '),
+      )
+      const storeSrc = fs.readFileSync(path.join(ROOT, 'src', 'targets-store.ts'), 'utf8')
+      const mentions = (storeSrc.match(/^.*config\.targets.*$/gm) ?? []).map((l) => l.trim())
+      // 允许的**恰好**这三处：导入来源与那行警告。多出第四处就说明有人在别处读了配置。
+      const allowedMentions = [
+        'const incoming = config.targets',
+        'if (!config.targets.length) return',
+      ]
+      check(
+        '⑱ 而且它在 targets-store 里只出现在导入路径与警告里（没有第四处）',
+        mentions.length === 3 &&
+          allowedMentions.every((a) => mentions.some((m) => m.startsWith(a))) &&
+          /config\.targets\.length.*不再是输入/s.test(storeSrc),
+        JSON.stringify(mentions),
+      )
+    }
   }
 } finally {
   child.kill('SIGTERM')

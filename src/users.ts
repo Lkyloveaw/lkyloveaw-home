@@ -7,7 +7,7 @@
  * 本模块**不碰 HTTP**：所有函数都是纯库函数，可以不过 HTTP 直接断言。
  */
 import bcrypt from 'bcryptjs'
-import { initStore } from './store.js'
+import { initStore, isDuplicateColumnError } from './store.js'
 import { initSessionsTable, revokeUserSessions } from './sessions-store.js'
 
 /**
@@ -102,10 +102,16 @@ export function initUsers(): void {
 
   // 兼容旧库：早期按「账号存储」票建的 users 表没有 token_version。
   // 补列带 DEFAULT 1，既有账号全部落到 1 —— 与新建号一致，**不会因迁移把所有人踢下线**。
+  // 并发首启时另一个进程可能刚补完这一列：那一种错被容忍（`isDuplicateColumnError`），
+  // 因为迁移的目标状态已经达成 —— 见 `store.ts` 那段的实测记录。
   const cols = db.prepare(`PRAGMA table_info(users)`).all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === 'token_version')) {
-    db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`)
-    console.log('[users] 已为 users 表补上 token_version 列（既有账号落 1，不会掉线）')
+    try {
+      db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`)
+      console.log('[users] 已为 users 表补上 token_version 列（既有账号落 1，不会掉线）')
+    } catch (err) {
+      if (!isDuplicateColumnError(err)) throw err
+    }
   }
 
   /*
@@ -119,9 +125,22 @@ export function initUsers(): void {
    * 的自然外延，接受；要改成「只升启用中的」就是给这条 UPDATE 加个 WHERE，代价一行。
    */
   if (!cols.some((c) => c.name === 'role')) {
-    db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'readonly' CHECK (role IN ('admin','readonly'))`)
-    db.exec(`UPDATE users SET role = 'admin'`)
-    console.log('[users] 已补上 role 列，并把既有账号一次性升为 admin')
+    // ⚠ 只有**本进程真的补上这一列**时才跑那次全表 UPDATE：并发首启时另一个进程可能刚补完
+    // 并已经提过权，这时再无条件 `UPDATE ... = 'admin'` 会把它之后新建的只读账号一起提权。
+    // 「补列」与「一次性提权」必须是同一件事的两个半边 —— `added` 就是这条绑定。
+    let added = false
+    try {
+      db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'readonly' CHECK (role IN ('admin','readonly'))`)
+      added = true
+    } catch (err) {
+      if (!isDuplicateColumnError(err)) throw err
+    }
+    if (added) {
+      db.exec(`UPDATE users SET role = 'admin'`)
+      console.log('[users] 已补上 role 列，并把既有账号一次性升为 admin')
+    } else {
+      console.log('[users] role 列已由另一个进程补上（并发首启），跳过一次性提权')
+    }
   }
   // 会话记录表：**入口留在本函数**（它已经是「账号域的迁移入口」——`token_version` 也在这里补），
   // 而 DDL 留在 `sessions-store.ts` 跟会话代码作伴：入口在一处、知识在一处。
