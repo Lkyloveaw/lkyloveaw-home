@@ -7,7 +7,7 @@ import path from 'node:path'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static'
 import fastifyMultipart from '@fastify/multipart'
-import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config } from './config.js'
+import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config, normalizeTargets, validateTargetUrl } from './config.js'
 import {
   getPublishedPost,
   importArticlesIfEmpty,
@@ -15,7 +15,20 @@ import {
   listTags,
   warnContentDirIsNoLongerInput,
 } from './content.js'
-import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
+import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, getLatestStatuses, initStore, closeStore, sanitizeStoredErrors } from './store.js'
+import {
+  countAllTargets,
+  countEnabledTargets,
+  createTarget,
+  initTargets,
+  listAllTargets,
+  listEnabledTargets,
+  removeOrDisableTarget,
+  setTargetEnabled,
+  updateTarget,
+  warnTargetsFileIsNoLongerInput,
+  type TargetRecord,
+} from './targets-store.js'
 import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
 import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
 import { listRevisions, revertToRevision } from './store.js'
@@ -52,6 +65,7 @@ import {
   aboutPage,
   adminArticlesPage,
   adminOverviewPage,
+  adminTargetsPage,
   forbiddenPage,
   homePage,
   loginPage,
@@ -78,11 +92,12 @@ const site = { title: config.siteTitle, description: config.siteDescription }
  * 概览页的四块摘要（`docs/admin-console-ia-decision.md` §6.1）。
  *
  * **一律现算**：不落库、不缓存 —— 计数是「一眼的状态」，不是账本，
- * 与列表在极短窗口内相差一两条可接受。数据来源是本票定的临时来源
- * （目标读 `config.targets`、账号读 `listUsers()`、备份读 `backup.ts`、设置读 `config`），
- * ④⑤⑥ 各自换成库时**只改这里**。
+ * 与列表在极短窗口内相差一两条可接受。数据来源：目标与（将来的）设置读库，
+ * 账号读 `listUsers()`、备份读 `backup.ts` —— ④⑤⑥⑦ 各自把自己那一块换成库。
  */
 function buildAdminOverview(): AdminOverview {
+  // 目标清单**只读一次**，四个数字都从同一个数组里算（同一请求内不许出现两个口径）。
+  const targets = listAllTargets()
   const users = listUsers()
   const backups = listBackups()
   const latest = backups.length ? backups[backups.length - 1]! : null
@@ -98,9 +113,9 @@ function buildAdminOverview(): AdminOverview {
 
   return {
     targets: {
-      enabled: config.targets.filter((t) => t.enabled !== false).length,
-      total: config.targets.length,
-      groups: new Set(config.targets.map((t) => t.group ?? '未分组')).size,
+      enabled: targets.filter((t) => t.enabled).length,
+      total: targets.length,
+      groups: new Set(targets.map((t) => t.group ?? '未分组')).size,
     },
     accounts: {
       total: users.length,
@@ -119,18 +134,25 @@ function buildAdminOverview(): AdminOverview {
   }
 }
 
-/** 汇总面板需要的数据。每次请求现算：SQLite 聚合在这个数据量下是毫秒级，不值得再加缓存层。 */
-function buildSummary(): StatusSummary {  const targets = config.targets
-    .filter((t) => t.enabled !== false)
-    .map((target) => ({
+/**
+ * 汇总面板需要的数据。每次请求现算：SQLite 聚合在这个数据量下是毫秒级，不值得再加缓存层。
+ *
+ * ⚠ **目标清单只读一次**（`docs/targets-source-decision.md` §7 那条警告的落点）：
+ * 同一个数组既喂 `buildSummary` 的卡片，又喂 `getUptimeRaw()` 的「期望目标数」。
+ * 若两处各读一次，可用率曲线的口径就可能与卡片分叉 ——
+ * 表现为「曲线上少了几个点」这种没人会立刻发现的偏差。
+ */
+function buildSummary(): StatusSummary {
+  const targets = listEnabledTargets()
+  return {
+    targets: targets.map((target) => ({
       target,
-      stats: getStats(target.id, WINDOW_MS),
+      // `enabledAt` 给「连续可用时长」设下界（§5）：停用再启用后从重新启用那一刻算起。
+      stats: getStats(target.id, WINDOW_MS, target.enabledAt),
       timeline: getTimeline(target.id, WINDOW_MS, 60),
       latency: getLatencyRaw(target.id, WINDOW_MS, 120),
-    }))
-  return {
-    targets,
-    overview: getUptimeRaw(WINDOW_MS, 120),
+    })),
+    overview: getUptimeRaw(WINDOW_MS, targets.length, 120),
     incidents: getRecentIncidents(8),
     generatedAt: Date.now(),
     windowLabel: WINDOW_LABEL,
@@ -165,6 +187,88 @@ function parseFormBody(body: unknown): Record<string, string> {
   return out
 }
 
+/** 单目标超时的上界（毫秒）。全局默认 5 秒、`targets.json` 的示例最多 8 秒，60 秒留足余量。 */
+const TARGET_TIMEOUT_MAX_MS = 60000
+
+interface TargetFormFields {
+  id: string
+  name: string
+  url: string
+  group?: string
+  expectStatus?: number[]
+  timeoutMs?: number
+  /** 只有「新增」用得上；编辑不动启用状态（那是 `target-enable` / `target-disable` 的事）。 */
+  enabled: boolean
+}
+
+type TargetFormParse = { ok: true; value: TargetFormFields } | { ok: false; message: string }
+
+/**
+ * 目标表单的**字段校验**（`docs/write-path-auth-decision.md` §5.3 的第 6 步）。
+ *
+ * ⚠ URL 复用 `config.validateTargetUrl()`、整条形状最后再过一遍 `config.normalizeTargets()` ——
+ * **不在这里重写一套**（`docs/targets-source-decision.md` §8）：重写会让「文件里被拒的 URL
+ * 在网页上能存进去」（协议白名单、URL 里的凭证、缺字段三条都会漏）。
+ * 上面那些逐字段检查只为了一件事：**给人话的报错**（它会原样出现在顶部的 `notice-bad` 横幅里）。
+ */
+function parseTargetForm(form: Record<string, string>, requireId: boolean): TargetFormParse {
+  const id = String(form.id ?? '').trim()
+  const name = String(form.name ?? '').trim()
+  const url = String(form.url ?? '').trim()
+
+  if (requireId && !id) return { ok: false, message: 'id 不能为空。' }
+  if (!name) return { ok: false, message: '名称不能为空。' }
+  if (!url) return { ok: false, message: 'URL 不能为空。' }
+  const reason = validateTargetUrl(url)
+  if (reason) return { ok: false, message: `URL 不合规：${reason}` }
+
+  const rawCodes = String(form.expectStatus ?? '').trim()
+  let expectStatus: number[] | undefined
+  if (rawCodes) {
+    const parts = rawCodes.split(',').map((s) => s.trim()).filter(Boolean)
+    const codes = parts.map((p) => Number(p))
+    if (!codes.length || codes.some((n) => !Number.isInteger(n) || n < 100 || n > 599)) {
+      return {
+        ok: false,
+        message: `状态码只能是 100–599 的整数、逗号分隔（收到：${rawCodes}）。`,
+      }
+    }
+    // 去重：`200,200` 与 `200` 是同一件事，没必要让库里的 JSON 记住重复项。
+    expectStatus = [...new Set(codes)]
+  }
+
+  const rawTimeout = String(form.timeoutMs ?? '').trim()
+  let timeoutMs: number | undefined
+  if (rawTimeout) {
+    const n = Number(rawTimeout)
+    if (!Number.isInteger(n) || n < 1 || n > TARGET_TIMEOUT_MAX_MS) {
+      return {
+        ok: false,
+        message: `超时只能是 1–${TARGET_TIMEOUT_MAX_MS} 的整数毫秒（收到：${rawTimeout}）。`,
+      }
+    }
+    timeoutMs = n
+  }
+
+  // 最后以**既有校验器**为准（`normalizeTargets()`：缺 id/name/url、URL 合规、id 唯一一站式）。
+  // 走到这里它不该再拒绝任何东西；真拒了说明上面漏了一条 —— 那也要**显眼地 400**，不能悄悄存进去。
+  const [normalized] = normalizeTargets([
+    {
+      id,
+      name,
+      url,
+      group: String(form.group ?? '').trim(),
+      expectStatus,
+      timeoutMs,
+      enabled: form.enabled === 'yes',
+    },
+  ])
+  if (!normalized) {
+    return { ok: false, message: '这条目标没通过校验：请检查 id / 名称 / URL。' }
+  }
+  return { ok: true, value: { ...normalized, enabled: normalized.enabled !== false } }
+}
+
 export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   // 先查密钥：没配就拒绝启动（不会因重启自愈的配置错误，必须显眼地停）。
   assertSessionSecret()
@@ -176,6 +280,10 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   initStore()
   initUsers()
+  // 目标清单的真源是 SQLite（`docs/targets-source-decision.md` §2）：
+  // **表为空时**才从 targets.json / TARGETS_JSON 导入一次，此后文件被完全忽略（只打一行警告）。
+  initTargets()
+  warnTargetsFileIsNoLongerInput()
   // 首次导入：**库里一篇文章都没有时**才读 content/*.md（与 targets.json、.env 同一条规则）。
   // 之后那些文件就不再是输入 —— 改它们对站点没有任何影响，只由下面这行提醒一次。
   importArticlesIfEmpty()
@@ -755,6 +863,102 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     }
   })
 
+  // ── 管理台 · 目标（#40）──────────────────────────────────
+
+  /**
+   * 目标的 `action` **闭集**（`docs/write-path-auth-decision.md` §5.3 第 5 步）。
+   *
+   * ⚠ 里面**没有**「改 id」这个动作：`id` 是历史库的关联键（`docs/targets-source-decision.md` §3），
+   * 换 id 要在页面上走「新增一个 + 停用旧的」两步。没有的动作就是 400。
+   */
+  const TARGET_ACTIONS = new Set([
+    'target-create',
+    'target-update',
+    'target-enable',
+    'target-disable',
+    'target-delete',
+  ])
+
+  /** 页面数据：清单与状态点**各读一次**（两个 map 一次请求，不给列表逐行查库）。 */
+  const buildTargetsPage = (opts: {
+    notice?: unknown
+    bad?: string | null
+    submitted?: Record<string, string> | null
+  }): string => adminTargetsPage(listAllTargets(), { ...opts, statuses: getLatestStatuses() }, site)
+
+  app.get('/admin/targets', async (req, reply) => {
+    // 资格用闸门刚算出来的那个角色（请求上下文里）—— 不重复查库；拿不到即非管理员 → 403（fail-closed）。
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      return forbiddenPage('admin', site)
+    }
+    const query = req.query as { notice?: unknown }
+    reply.type('text/html; charset=utf-8')
+    return buildTargetsPage({ notice: query.notice })
+  })
+
+  app.post('/admin/targets', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const form = parseFormBody(req.body)
+    const action = String(form.action ?? '')
+    // 失败一律 **400 + 就地重渲染**（顶部横幅 + 保留刚填的输入），成功才 302 + 闭集 notice（#23 §4.1/§4.2）。
+    const back = (bad: string): unknown => {
+      reply.code(400).type('text/html; charset=utf-8')
+      return buildTargetsPage({ bad, submitted: form })
+    }
+
+    if (!TARGET_ACTIONS.has(action)) return back('未知的动作，已拒绝。')
+
+    const id = String(form.id ?? '').trim()
+
+    // 启用 / 停用：只认 id + 对象在不在（没有别的字段可校验）。
+    if (action === 'target-enable' || action === 'target-disable') {
+      if (!id) return back('缺少 id。')
+      const enabled = action === 'target-enable'
+      const n = setTargetEnabled(id, enabled)
+      if (n !== 1) return back(`找不到这个目标：${id}`)
+      console.log(`[targets] ${enabled ? '启用' : '停用'} ${id}`)
+      return reply.redirect(
+        `/admin/targets?notice=${enabled ? 'target-enabled' : 'target-disabled'}`,
+        302,
+      )
+    }
+
+    // 删除：**两岔由库里有没有历史决定**（§4）。页面上的按钮文案用的是同一条判据，
+    // 所以用户看到的「删除」与这里真做的事永远一致。
+    if (action === 'target-delete') {
+      if (!id) return back('缺少 id。')
+      const out = removeOrDisableTarget(id)
+      if (out === 'missing') return back(`找不到这个目标：${id}`)
+      console.log(`[targets] ${out === 'deleted' ? '删除' : '停用（有历史，不删）'} ${id}`)
+      return reply.redirect(
+        `/admin/targets?notice=${out === 'deleted' ? 'target-deleted' : 'target-disabled'}`,
+        302,
+      )
+    }
+
+    // 字段校验（第 6 步）—— URL 复用 `config.validateTargetUrl()`，**不在这里重写一份**。
+    const parsed = parseTargetForm(form, action === 'target-create')
+    if (!parsed.ok) return back(parsed.message)
+    const fields = parsed.value
+
+    if (action === 'target-create') {
+      const out = createTarget(fields)
+      // 「先查再插」是 TOCTOU 的形状；这里靠主键约束兜底（§6.1）。
+      if (out === 'duplicate') {
+        return back(`id 已存在：${fields.id} —— id 不可改，要换 id 就新增一个再停用旧的。`)
+      }
+      console.log(`[targets] 新增 ${fields.id}`)
+      return reply.redirect('/admin/targets?notice=target-saved', 302)
+    }
+
+    // `target-update`：对象守卫在字段之后（第 7 步）—— 否则「找不到这个目标」
+    // 会淹没在「URL 没填」里（§5.3 的顺序理由）。
+    const n = updateTarget(fields.id, fields)
+    if (n !== 1) return back(`找不到这个目标：${fields.id}`)
+    console.log(`[targets] 保存 ${fields.id}`)
+    return reply.redirect('/admin/targets?notice=target-saved', 302)
+  })
+
   // ── 登录 / 登出 / 改密 ───────────────────────────────────
 
   app.get('/login', async (req, reply) => {
@@ -877,8 +1081,8 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     return aboutPage(site)
   })
 
-  /** 健康检查：**保持匿名 200**（HEALTHCHECK / systemd 都不带凭证）。 */
-  app.get('/healthz', async () => ({ ok: true, targets: config.targets.length }))
+  /** 健康检查：**保持匿名 200**（HEALTHCHECK / systemd 都不带凭证）。计数读库（§7），不是读启动时的那份配置。 */
+  app.get('/healthz', async () => ({ ok: true, targets: countEnabledTargets() }))
 
   app.setNotFoundHandler(async (_req, reply) => {
     reply.code(404).type('text/html; charset=utf-8')
@@ -893,11 +1097,12 @@ async function main(): Promise<void> {
   await app.listen({ port: config.port, host: config.host })
 
   const shown = config.host === '0.0.0.0' ? 'localhost' : config.host
+  const targetCount = countEnabledTargets()
   console.log(`\n  站点已启动  http://${shown}:${config.port}`)
-  console.log(`  监控目标    ${config.targets.length} 个（清单：${process.env.TARGETS_PATH ?? 'targets.json'}）`)
+  console.log(`  监控目标    ${targetCount} 个（真源：SQLite · 共 ${countAllTargets()} 条，含停用）`)
   console.log(`  登录账号    ${countUsers()} 个`)
-  if (!config.targets.length) {
-    console.warn('  提示：还没有配置被监控的系统，编辑 targets.json 后重启即可。')
+  if (!targetCount) {
+    console.warn('  提示：还没有启用中的被监控系统 —— 登录后在 管理台 → 目标 里新增。')
   }
   console.log('')
 

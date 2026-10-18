@@ -169,7 +169,10 @@ export function forbiddenPage(
 export const NOTICE_TEXT: Record<string, string> = {
   'target-saved': '已保存目标。',
   'target-enabled': '已启用目标。',
-  'target-disabled': '已停用目标。',
+  'target-disabled': '已停用目标。它不再被探测，历史一行没删。',
+  // 「删除」有历史时其实走的是停用（`docs/targets-source-decision.md` §4），
+  // 所以这个 key 只在**真的物理删掉**时才会出现。
+  'target-deleted': '已删除目标（它没有任何历史记录）。这个 id 现在可以重新使用。',
   'account-created': '已创建账号。',
   'role-changed': '已修改角色。',
   'account-disabled': '已停用账号。',
@@ -246,7 +249,8 @@ export function adminOverviewPage(
 修复：<code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code></p>`
       : '') +
     `<h1>管理台</h1>
-<p class="admin-hint">这一版是<strong>只读</strong>的：五个页面看到真实数据，写动作由各自的票接上。</p>
+<p class="admin-hint">这一版的写动作<strong>按页逐张接上</strong>：<strong>目标</strong>页已经能增删改
+（真源是数据库）；账号 / 备份 / 设置三页仍然是只读的，各自的票接上时会在这里说明。</p>
 <div class="stat-strip">
 ${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
 ${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
@@ -255,6 +259,169 @@ ${card('站点设置', d.settings.title, `${d.settings.description} · 每 ${d.s
 </div>`
 
   return layout({ title: '管理台', description: site.description, active: 'admin', body }, site)
+}
+
+/** 管理台目标页的一行（`docs/admin-console-ia-decision.md` §6.2）。 */
+export interface AdminTargetRow {
+  id: string
+  name: string
+  url: string
+  group?: string
+  expectStatus?: number[]
+  timeoutMs?: number
+  enabled: boolean
+  /** 有历史 ⇒ 「删除」按钮其实是**停用**（`docs/targets-source-decision.md` §4）。 */
+  hasHistory: boolean
+}
+
+export interface AdminTargetsOptions {
+  notice?: unknown
+  /** 400 的失败说明（**就地重渲染**时显示）。 */
+  bad?: string | null
+  /**
+   * 失败时**用户刚提交的那份表单**（§4.2：保留已填输入）。
+   * 只有 `action` 与某一行的 `id` 对得上时，这一行才用它回填 —— 其余行照旧显示库里的值。
+   */
+  submitted?: Record<string, string> | null
+  /** 每个目标最近一次探测的状态（状态点）。停用中的目标不画点：它的「最近一次」是陈的。 */
+  statuses?: Map<string, ProbeResult['status']>
+}
+
+/**
+ * `/admin/targets`（`docs/admin-console-ia-decision.md` §6.2 · `docs/targets-source-decision.md`）。
+ *
+ * 一页两态：**列表**（按 `group` 分标题，同一手法见 `statusPage`）+ 每行的**行内编辑表单**。
+ * 顶部的「新增」表单与每一行自己的表单**都是原生表单** —— 禁用 JS 也能读写（本仓的既有约束）。
+ *
+ * `id` 在编辑表单里**只读**（用 `readonly` 文本，不是 `disabled`：禁用控件提交时没有值，
+ * 而我们正需要它当 `WHERE id = ?`）—— `id` 是历史库主键，改它等于丢掉这个目标的全部历史。
+ * 要换 id 就是「新增一个 + 停用旧的」两步显式动作。
+ *
+ * 「删除」**不是一个按钮两种命运**：按钮文案由服务端按同一判据（有没有历史）渲染，
+ * 用户看到的就是会发生的那件事。
+ */
+export function adminTargetsPage(
+  rows: AdminTargetRow[],
+  opts: AdminTargetsOptions,
+  site: { title: string; description: string },
+): string {
+  const sub = opts.submitted ?? null
+  const forCreate = sub && sub.action === 'target-create' ? sub : null
+  const val = (s: Record<string, string> | null, key: string, fallback = ''): string =>
+    escapeHtml(s && s[key] !== undefined ? s[key] : fallback)
+
+  const statusDotFor = (row: AdminTargetRow): string => {
+    if (!row.enabled) return ''
+    const status = opts.statuses?.get(row.id) ?? null
+    return statusDot(status)
+  }
+
+  const newForm = `<h2>新增目标</h2>
+<form method="post" action="/admin/targets" class="target-new">${csrfField()}
+<input type="hidden" name="action" value="target-create">
+<div class="form-row">
+<label>id <input name="id" value="${val(forCreate, 'id')}" placeholder="wiki" required></label>
+<label>名称 <input name="name" value="${val(forCreate, 'name')}" placeholder="知识库" required></label>
+</div>
+<div class="form-row">
+<label>URL <input name="url" value="${val(forCreate, 'url')}" placeholder="http://10.0.0.10/" required></label>
+<label>分组 <input name="group" value="${val(forCreate, 'group')}" placeholder="办公（可留空）"></label>
+</div>
+<div class="form-row">
+<label>状态码 <input name="expectStatus" value="${val(forCreate, 'expectStatus')}" placeholder="200,301（留空 = 200-399 都算可用）"></label>
+<label>超时 ms <input name="timeoutMs" value="${val(forCreate, 'timeoutMs')}" placeholder="留空 = 用全局值"></label>
+<label class="confirm"><input type="checkbox" name="enabled" value="yes"${!forCreate || forCreate.enabled ? ' checked' : ''}> 立即启用</label>
+<button type="submit">新增</button>
+</div>
+</form>`
+
+  const renderRow = (row: AdminTargetRow): string => {
+    const s = sub && sub.action === 'target-update' && sub.id === row.id ? sub : null
+    const state = row.enabled
+      ? '<span class="tag tag-active">启用中</span>'
+      : '<span class="tag">已停用</span>'
+    // 「删除」的两岔（§4）：有历史 → 停用；没历史 → 真的删掉。
+    const removeForm = row.hasHistory
+      ? `<form method="post" action="/admin/targets" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="target-delete">
+<input type="hidden" name="id" value="${escapeHtml(row.id)}">
+<button type="submit">停用</button>
+<span class="stat-sub">它有历史记录，删了会留下指向不存在目标的记录 —— 所以这里只停用，历史一行不删。</span>
+</form>`
+      : `<form method="post" action="/admin/targets" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="target-delete">
+<input type="hidden" name="id" value="${escapeHtml(row.id)}">
+<button type="submit" class="btn-danger">删除</button>
+<span class="stat-sub">它<strong>没有任何历史记录</strong>，删了就真没了（删掉之后可以用同一个 id 重新建）。</span>
+</form>`
+
+    return `<div class="target-row">
+<div class="target-row-head">
+${statusDotFor(row)}<strong>${escapeHtml(row.name)}</strong>
+<code class="target-id">${escapeHtml(row.id)}</code>${state}
+</div>
+<form method="post" action="/admin/targets" class="target-edit">${csrfField()}
+<input type="hidden" name="action" value="target-update">
+<input type="hidden" name="id" value="${escapeHtml(row.id)}">
+<div class="form-row">
+<label>id <input value="${escapeHtml(row.id)}" readonly></label>
+<label>名称 <input name="name" value="${val(s, 'name', row.name)}" required></label>
+<label>URL <input name="url" value="${val(s, 'url', row.url)}" required></label>
+</div>
+<div class="form-row">
+<label>分组 <input name="group" value="${val(s, 'group', row.group ?? '')}"></label>
+<label>状态码 <input name="expectStatus" value="${val(s, 'expectStatus', (row.expectStatus ?? []).join(','))}" placeholder="留空 = 200-399"></label>
+<label>超时 ms <input name="timeoutMs" value="${val(s, 'timeoutMs', row.timeoutMs == null ? '' : String(row.timeoutMs))}"></label>
+<button type="submit">保存</button>
+</div>
+</form>
+${
+  row.enabled
+    ? `<form method="post" action="/admin/targets" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="target-disable">
+<input type="hidden" name="id" value="${escapeHtml(row.id)}">
+<button type="submit">停用</button>
+<span class="stat-sub">停用后不再探测它，历史留着；随时可以再启用（连续可用的计时会从重新启用那一刻重算）。</span>
+</form>`
+    : `<form method="post" action="/admin/targets" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="target-enable">
+<input type="hidden" name="id" value="${escapeHtml(row.id)}">
+<button type="submit">启用</button>
+<span class="stat-sub">启用后下一轮探测开始重新记录它。</span>
+</form>`
+}
+${removeForm}
+</div>`
+  }
+
+  // 按 `group` 分标题（与 `statusPage` 同一手法），**分组不进 URL**（§1.2）。
+  // 顺序由 SQL 给定（未分组排最后），这里只负责「分组一变就开一个新标题」。
+  let list = ''
+  let currentGroup: string | null = null
+  for (const row of rows) {
+    const g = row.group?.trim() || '未分组'
+    if (g !== currentGroup) {
+      list += `<h2 class="target-group">${escapeHtml(g)}</h2>`
+      currentGroup = g
+    }
+    list += renderRow(row)
+  }
+
+  const body =
+    renderNotice(opts.notice) +
+    (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
+    `<h1>目标</h1>
+<p class="admin-hint">真源是<strong>数据库</strong>（SQLite）：<code>targets.json</code> / <code>TARGETS_JSON</code>
+只在<strong>第一次启动、表还是空的时候</strong>导入一次，之后完全忽略 —— 改文件不再有任何效果。
+改完<strong>下一轮探测生效</strong>（≤ 1 个探测间隔），不用重启。</p>
+<p class="admin-hint"><code>id</code> 不可改：它是历史库的关联键，改它等于丢掉这个目标的全部历史。
+要换 id 就「新增一个 + 停用旧的」。状态码填逗号分隔的数字（如 <code>200,301</code>），
+留空表示 200-399 都算可用；超时填毫秒数（1–60000），留空用全局值。</p>
+${rows.length ? '' : '<p class="empty">库里还没有目标。用下面的表单新增一个。</p>'}
+${newForm}
+${list}`
+
+  return layout({ title: '目标 · 管理台', description: site.description, active: 'admin', body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
@@ -371,7 +538,7 @@ function statOf(summary: StatusSummary, id: string): { target: ProbeTarget; stat
 function statusBlock(summary: StatusSummary): string {
   if (!summary.targets.length) {
     return `<section class="section"><div class="section-head"><h2>内网业务系统</h2><a class="more" href="/status">详情 →</a></div>
-    <p class="empty">还没有配置要监控的系统。编辑 <code>targets.json</code> 即可。</p></section>`
+    <p class="empty">还没有配置要监控的系统。登录后在 <strong>管理台 → 目标</strong> 里新增一个即可。</p></section>`
   }
   const stats = summary.targets.map((t) => t.stats)
   const withData = stats.filter((s) => s.samples > 0)
@@ -457,14 +624,15 @@ summary: 可选的一句话摘要
 
 正文用 Markdown 写。</code></pre>
   <h2>怎么加一个被监控的系统</h2>
-  <p>编辑 <code>targets.json</code>，加一条记录，服务会在下一个探测周期自动开始记录历史：</p>
-  <pre><code>{
-  "id": "wiki",
-  "name": "知识库",
-  "url": "http://10.0.0.10/",
-  "group": "办公"
-}</code></pre>
-  <p>状态数据存在 SQLite 里，不用手工维护。</p>
+  <p>登录后在 <strong>管理台 → 目标</strong> 里新增一条即可，服务会在下一个探测周期自动开始记录历史
+  （不用改文件、也不用重启）。</p>
+  <pre><code>id:   wiki
+名称: 知识库
+URL:  http://10.0.0.10/
+分组: 办公</code></pre>
+  <p>目标清单的真源是 SQLite。<code>targets.json</code> 只在<strong>第一次启动、清单还是空的时候</strong>
+  导入一次，之后改它不再有任何效果 —— 那行警告会在每次启动时提醒你。</p>
+  <p>状态数据也存在同一个 SQLite 里，不用手工维护。</p>
 </section>`
   return layout({ title: '关于', description: site.description, active: 'about', body }, site)
 }

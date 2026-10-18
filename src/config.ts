@@ -18,6 +18,14 @@ export interface ProbeTarget {
   timeoutMs?: number
   /** 显式关掉这个目标而不必删历史。 */
   enabled?: boolean
+  /**
+   * **当前启用状态的起始时刻**（epoch ms），来自 `targets.enabled_at`（`docs/targets-source-decision.md` §5）。
+   *
+   * 它只修一个静默谎：停用两个月再启用后，「连续可用时长」不该从两个月前算起。
+   * 从文件/`TARGETS_JSON` 读来的目标没有这个值（文件不是真源，也不记状态变更时刻）——
+   * 缺省即「不设下界」，与旧行为一致。
+   */
+  enabledAt?: number
 }
 
 const ROOT = process.cwd()
@@ -92,6 +100,15 @@ function loadTargets(): ProbeTarget[] {
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:'])
 
 /**
+ * 目标清单的来源描述（**只用于日志与警告**）：`TARGETS_JSON` 优先，其次文件路径 ——
+ * 与 `loadTargets()` 的优先级一致。
+ */
+export function targetsSourceLabel(): string {
+  if (process.env.TARGETS_JSON?.trim()) return 'TARGETS_JSON'
+  return resolveFromRoot(process.env.TARGETS_PATH?.trim() || './targets.json')
+}
+
+/**
  * 校验一条目标 URL。返回 `null` 表示合规，否则返回拒绝原因（会进日志）。
  *
  * 三条校验（`docs/probe-request-constraints-decision.md` §2.2）：
@@ -104,8 +121,11 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:'])
  *
  * 为什么不合规是「warn + 跳过」而不是「拒绝启动」：与「零账号允许启动」同一原则——
  * 一条脏配置不该让整个站点起不来，显眼告警即可。
+ *
+ * ⚠ **导出给写路径复用**（`docs/targets-source-decision.md` §8）：网页上的新增/编辑必须调**这个**函数，
+ * 在路由里另写一份会让「文件里被拒的 URL 在网页上能存进去」。
  */
-function validateTargetUrl(url: string): string | null {
+export function validateTargetUrl(url: string): string | null {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -121,8 +141,13 @@ function validateTargetUrl(url: string): string | null {
   return null
 }
 
-/** 过滤掉缺 id/name/url 的坏条目：宁可少探一个，也不要让整轮探测因为一条脏数据挂掉。 */
-function normalizeTargets(raw: unknown[]): ProbeTarget[] {
+/**
+ * 过滤掉缺 id/name/url 的坏条目：宁可少探一个，也不要让整轮探测因为一条脏数据挂掉。
+ *
+ * ⚠ **导出给写路径复用**（`docs/targets-source-decision.md` §8）：网页上的新增/编辑必须调**这个**函数，
+ * 在路由里另写一份会让「文件里被拒的 URL 在网页上能存进去」。
+ */
+export function normalizeTargets(raw: unknown[]): ProbeTarget[] {
   const out: ProbeTarget[] = []
   const seen = new Set<string>()
   for (const item of raw) {

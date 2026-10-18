@@ -5,6 +5,7 @@
  */
 import { config, type ProbeTarget } from './config.js'
 import { recordResults, pruneOldProbes, checkpoint, type ProbeResult } from './store.js'
+import { listEnabledTargets } from './targets-store.js'
 import { sweepSessions } from './sessions-store.js'
 import { classifyRuntimeError } from './sanitize.js'
 import { runBackup } from './backup.js'
@@ -28,7 +29,7 @@ async function probeOne(target: ProbeTarget, roundAt: number): Promise<ProbeResu
       //
       // 注意语义变化：`manual` 之后 3xx 会**原样返回**，而默认判定区间是 200-399，
       // 所以 302 仍会被判为 `up`。这是**有意的**——改默认会静默变更所有既有部署的语义。
-      // 想让 302 算失败，请在 targets.json 里写 `"expectStatus": [200]`（README 有示例）。
+      // 想让 302 算失败，请在管理台 → 目标里把该目标的状态码填成 `200`（旧写法是 targets.json 的 `expectStatus`）。
       redirect: 'manual',
       signal: controller.signal,
       headers: { 'user-agent': 'personal-wiki-uptime/0.1' },
@@ -78,7 +79,17 @@ async function probeOne(target: ProbeTarget, roundAt: number): Promise<ProbeResu
 
 /** 探测一轮全部目标。并发执行，整体耗时约等于最慢的那个目标。 */
 export async function probeAll(): Promise<ProbeResult[]> {
-  const targets = config.targets.filter((t) => t.enabled !== false)
+  /*
+   * **每一轮开头读一次库**（`docs/targets-source-decision.md` §6）：不缓存、不设版本号。
+   *
+   * 为什么不做缓存：探测间隔默认 60 秒，一天 1440 次单表 SELECT，而 SQLite 这类查询是微秒级。
+   * 缓存要引入一个版本号、一个失效路径、以及「版本号没更新 → 网页上刚加的目标不生效」
+   * 这个**新的静默失败**。用一次微秒级查询换掉一整套失效逻辑，这笔账不需要犹豫。
+   *
+   * 读在**循环外**：所以一轮之内不会出现「前半轮有它、后半轮没有它」。
+   * 生效时机：网页上改完 → **下一轮**开始生效（≤ 1 个间隔），不打断正在等的那一轮。
+   */
+  const targets = listEnabledTargets()
   if (!targets.length) return []
   // 一轮共用一个 roundAt：并发发起的各目标 at 会相差几毫秒，
   // 整体可用率必须按轮聚合，否则一个点只有 1 个目标，曲线在 0%/100% 之间乱跳。

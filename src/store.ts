@@ -248,8 +248,14 @@ interface StatsRow {
   lastError: string | null
 }
 
-/** 统计某个目标在窗口内的可用率与延迟。窗口内没数据时各项为 null。 */
-export function getStats(targetId: string, windowMs: number): TargetStats {
+/**
+ * 统计某个目标在窗口内的可用率与延迟。窗口内没数据时各项为 null。
+ *
+ * `enabledAt`：目标**当前启用状态的起始时刻**（`targets.enabled_at`，`docs/targets-source-decision.md` §5）。
+ * 传进来只用于一件事：给「连续可用时长」设下界，修掉「停用两个月再启用 → 显示连续可用 60 天」的静默谎。
+ * 省略即不设下界（从文件读来的目标、以及不过库的调用方走这条）。
+ */
+export function getStats(targetId: string, windowMs: number, enabledAt?: number): TargetStats {
   const since = Date.now() - windowMs
   const row = handle()
     .prepare(
@@ -283,7 +289,7 @@ export function getStats(targetId: string, windowMs: number): TargetStats {
     lastStatus: (row?.lastStatus as ProbeResult['status'] | null) ?? null,
     lastCheckedAt: row?.lastCheckedAt ?? null,
     lastError: row?.lastError ?? null,
-    upStreakMs: computeUpStreak(targetId),
+    upStreakMs: computeUpStreak(targetId, enabledAt ?? 0),
   }
 }
 
@@ -305,15 +311,21 @@ function percentileLatency(targetId: string, since: number, q: number): number |
 /**
  * 连续可用时长：从最近一次非 up 记录之后的第一条 up 记录算起。
  * 为什么不用「最后 N 条」近似：可用性承诺（"连续稳定 3 天"）必须经得起回看，近似值会撒谎。
+ *
+ * `enabledAt`（`docs/targets-source-decision.md` §5）是下界的第二个来源：
+ * 目标停用两个月（这段时间自然没有探测记录、也没有「非 up」记录）再启用，
+ * 只按「最近一次非 up」算就会把停用的那两个月算进连续可用 —— 界面显示「连续可用 60 天」，
+ * 而它其实停了 60 天。取 `max(最近一次非 up, enabled_at)` 之后，
+ * 重新启用后的连续可用从**重新启用那一刻**算起。
  */
-function computeUpStreak(targetId: string): number | null {
+function computeUpStreak(targetId: string, enabledAt: number): number | null {
   const lastBad = handle()
     .prepare(
       `SELECT at FROM probes WHERE target_id = ? AND status != 'up' ORDER BY at DESC LIMIT 1`,
     )
     .get(targetId) as { at: number } | undefined
 
-  const since = lastBad ? lastBad.at : 0
+  const since = Math.max(lastBad ? lastBad.at : 0, enabledAt)
   const firstUpAfter = handle()
     .prepare(
       `SELECT at FROM probes WHERE target_id = ? AND status = 'up' AND at > ? ORDER BY at ASC LIMIT 1`,
@@ -353,6 +365,24 @@ export function getRecentIncidents(limit = 8): Array<ProbeResult & { at: number 
     )
     .all(limit) as Array<ProbeResult>
   return rows
+}
+
+/**
+ * 每个目标**最近一条**探测的状态 —— 管理台目标页那排「状态点」用它。
+ *
+ * 为什么单独一个函数而不是逐目标 `getStats()`：后者一个目标要跑四条查询（含 p95 与连续可用），
+ * 而管理台只要一个点。一条 SQL 拿全：`MAX(id)` 是「最近一条」的可靠判据
+ * （自增主键即写入顺序，比按 `at` 排更稳 —— 同一毫秒内的两条 `at` 相同）。
+ */
+export function getLatestStatuses(): Map<string, ProbeResult['status']> {
+  const rows = handle()
+    .prepare(
+      `SELECT p.target_id AS targetId, p.status AS status
+         FROM probes p
+         JOIN (SELECT target_id, MAX(id) AS id FROM probes GROUP BY target_id) m ON m.id = p.id`,
+    )
+    .all() as Array<{ targetId: string; status: ProbeResult['status'] }>
+  return new Map(rows.map((r) => [r.targetId, r.status]))
 }
 
 export interface OverviewPoint {
@@ -437,10 +467,20 @@ export function getLatencyRaw(targetId: string, windowMs: number, limit = 120): 
  * 只保留「参与目标数 >= 当前目标数」的轮次。原因：从旧库迁移来的记录每轮只有 1 个目标，
  * 它们的 1/1 会画成 100%、0/1 画成 0%，与现在每轮的 1/3=33% 混在一张图里就是锯齿，
  * 且会让人误以为可用率曾经大幅波动。宁可少几个点，也不要给出含义不一致的曲线。
+ *
+ * ⚠ `expectedCount` **必须由调用方传进来**（`docs/targets-source-decision.md` §7）：
+ * 目标清单的真源已经是库，而本函数的调用方（`buildSummary()`）也刚读过一次 ——
+ * 若这里自己去读，就会出现「本函数读库的那一刻」与「buildSummary 读库的那一刻」两次读，
+ * 两个口径一旦分叉，表现为**可用率曲线上少了几个点**，没人会立刻发现。
+ * 所以：**同一请求内清单只读一次，同一个数组喂两个函数。**
  */
-export function getUptimeRaw(windowMs: number, limit = 120): OverviewPoint[] {
+export function getUptimeRaw(
+  windowMs: number,
+  expectedCount: number,
+  limit = 120,
+): OverviewPoint[] {
   const since = Date.now() - windowMs
-  const expected = Math.max(1, config.targets.filter((t) => t.enabled !== false).length)
+  const expected = Math.max(1, expectedCount)
   const rows = handle()
     .prepare(
       `SELECT round_at AS at, COUNT(*) AS total,
