@@ -1010,10 +1010,10 @@ try {
     // #40 之后这句话必须**是真的**：目标页已经能写，其余三页仍只读。
     // （原来这里断言「这一版是只读的」——那句在我把目标页接通后就成了假话，所以跟着改。）
     check(
-      '概览页明说哪些页能写、哪些还只读（不许笼统说「只读」）',
+      '概览页明说四页都能写（自述必须是真话）',
       // 每接通一页就来改这一行 —— 它保证概览页那句自述**永远是真的**。
-      /目标<\/strong> \/ <strong>站点设置<\/strong> \/ <strong>备份<\/strong>/.test(overview.body) &&
-        /账号<\/strong>页仍然是只读的/.test(overview.body),
+      /四页<strong>都能写<\/strong>/.test(overview.body) &&
+        /<strong>目标<\/strong> \/ <strong>站点设置<\/strong> \/ <strong>备份<\/strong> \/ <strong>账号<\/strong>/.test(overview.body),
       overview.body.match(/这一版的写动作[^<]*/)?.[0] ?? '(没找到那句话)',
     )
 
@@ -1817,6 +1817,171 @@ try {
     // ── 未登录：回跳目标认得这个页面 ──
     const anonB = await get('/admin/backups')
     check('未登录 /admin/backups → 302 且带 next', anonB.status === 302 && anonB.location.includes('next=%2Fadmin%2Fbackups'), `${anonB.status} ${anonB.location}`)
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[账号管理页（#44）：守卫只调用不重写 · 三处必勾确认 · 口令永不回填]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admA = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminA = admA.setCookie.split(';')[0]
+    const csrfA = () => csrfFor(adminA)
+    const pageA = async (p = '/admin/accounts') => (await get(p, { cookie: adminA })).body
+    const post = (form) => postForm('/admin/accounts', { cookie: adminA, csrf: csrfA(), form })
+
+    /** 直接读库里的那一行 —— 比页面更硬的证据（页面可能没刷新，库不会）。 */
+    const Database = (await import('better-sqlite3')).default
+    const dbRow = (username) => {
+      const conn = new Database(TEST_DB)
+      try {
+        return conn.prepare('SELECT id, username, role, enabled FROM users WHERE username = ?').get(username)
+      } finally {
+        conn.close()
+      }
+    }
+    /** 页面上「这个用户名」附近的那一段 HTML（判它的角色 / 状态用）。 */
+    const rowOf = (html, username) => {
+      const i = html.indexOf(username)
+      return i < 0 ? '' : html.slice(i, i + 700)
+    }
+
+    // ── 前提：页能开、领域词渲染、自己的行不给按钮 ──
+    const p0 = await pageA()
+    check('前提：管理员 GET /admin/accounts → 200', /<h1>账号<\/h1>/.test(p0))
+    check(
+      '前提：角色用**领域词**渲染（不显示 admin / readonly 原始值）',
+      /管理员/.test(p0) && /只读/.test(p0) && !/>admin</.test(p0) && !/>readonly</.test(p0),
+    )
+    check('前提：列表里有 `roleprobe`（此刻唯一的管理员）', /roleprobe/.test(p0))
+    check(
+      '前提：**自己的那一行**明确标出「这是你自己」，且不给改角色按钮',
+      /这是你自己/.test(rowOf(p0, 'roleprobe')) && !/value="account-role"/.test(rowOf(p0, 'roleprobe')),
+      rowOf(p0, 'roleprobe').slice(0, 140),
+    )
+    check(
+      '但**别人的行**有改角色按钮（不然「不给按钮」在整页都不渲染时也恒真）',
+      /value="account-role"/.test(rowOf(p0, TEST_USER)),
+      rowOf(p0, TEST_USER).slice(0, 140),
+    )
+
+    const roA = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookieA = roA.setCookie.split(';')[0]
+    check('只读 GET /admin/accounts → **403**', (await get('/admin/accounts', { cookie: roCookieA })).status === 403)
+    check(
+      '缺 csrf → **403**（L3）',
+      (await postForm('/admin/accounts', { cookie: adminA, form: { action: 'account-enable', id: '1' } })).status === 403,
+    )
+    check(
+      '跨站来源 → **403**（L2）',
+      (await postForm('/admin/accounts', { cookie: adminA, csrf: csrfA(), origin: 'http://evil.example.com', form: { action: 'account-enable', id: '1' } })).status === 403,
+    )
+    check(
+      '未知 action → **400**（闭集：没有「删账号」这个动作）',
+      (await postForm('/admin/accounts', { cookie: adminA, csrf: csrfA(), form: { action: 'account-delete', id: '1' } })).status === 400,
+    )
+
+    // ── 新增：默认只读；两种失败都 400 且**不回填口令** ──
+    const created = await post({ action: 'account-create', username: 'e2e-acct', password: 'e2e-acct-pass-1', password2: 'e2e-acct-pass-1' })
+    check('新增 → **302** + notice=account-created', created.status === 302 && /notice=account-created/.test(created.location), `${created.status} ${created.location}`)
+    check(
+      '写后读：新账号在列表里，角色是**只读**（最小权限，不是顺手给的默认值）',
+      dbRow('e2e-acct').role === 'readonly' && /只读/.test(rowOf(await pageA(), 'e2e-acct')),
+      JSON.stringify(dbRow('e2e-acct')),
+    )
+    const dupUser = await post({ action: 'account-create', username: 'e2e-acct', password: 'e2e-acct-pass-1', password2: 'e2e-acct-pass-1' })
+    check('用户名重复 → **400** + 人话', dupUser.status === 400 && /用户名已存在/.test(dupUser.body))
+    const mismatch = await post({ action: 'account-create', username: 'e2e-mismatch', password: 'aaaaaaaa1', password2: 'bbbbbbbb2' })
+    check('两次口令不一致 → **400**', mismatch.status === 400 && /两次输入的口令不一致/.test(mismatch.body))
+    check(
+      '失败页**保留用户名**、但**绝不回填口令**',
+      /value="e2e-mismatch"/.test(mismatch.body) && !mismatch.body.includes('aaaaaaaa1') && !mismatch.body.includes('bbbbbbbb2'),
+    )
+    const shortPw = await post({ action: 'account-create', username: 'e2e-short', password: 'short', password2: 'short' })
+    check('口令太短 → **400** + 给出下限', shortPw.status === 400 && /口令至少 8 位/.test(shortPw.body))
+
+    const acctId = dbRow('e2e-acct').id
+
+    // ── 只读账号 POST → 403，且**没有发生任何变化** ──
+    const roPost = await postForm('/admin/accounts', {
+      cookie: roCookieA,
+      csrf: csrfFor(roCookieA),
+      form: { action: 'account-disable', id: String(acctId), confirm: 'yes' },
+    })
+    check('只读 POST /admin/accounts → **403**（资格判定在这里第一次被真用上）', roPost.status === 403, `got ${roPost.status}`)
+    check('而且**该账号一行没动**（不是「403 了但已经写了」）', dbRow('e2e-acct').enabled === 1)
+
+    // ── 三类动作**未勾确认框** → 400 且未写 ──
+    const promote = await post({ action: 'account-role', id: acctId, role: 'admin' })
+    check('提权 → **302** + notice=role-changed（恢复通道永不设卡）', promote.status === 302 && /notice=role-changed/.test(promote.location), `${promote.status} ${promote.location}`)
+    check('写后读：它现在是管理员', dbRow('e2e-acct').role === 'admin' && /管理员/.test(rowOf(await pageA(), 'e2e-acct')))
+
+    const demoteNoConfirm = await post({ action: 'account-role', id: acctId, role: 'readonly' })
+    check('降级**未勾确认框** → **400** + 说清后果', demoteNoConfirm.status === 400 && /需要勾选确认框/.test(demoteNoConfirm.body), `got ${demoteNoConfirm.status}`)
+    check('未勾确认框时**没写**：它仍是管理员', dbRow('e2e-acct').role === 'admin')
+
+    const disableNoConfirm = await post({ action: 'account-disable', id: acctId })
+    check('停用**未勾确认框** → **400**', disableNoConfirm.status === 400 && /需要勾选确认框/.test(disableNoConfirm.body), `got ${disableNoConfirm.status}`)
+    check('未勾确认框时**没写**：它仍启用', dbRow('e2e-acct').enabled === 1)
+
+    const resetNoConfirm = await post({ action: 'account-reset-password', id: acctId, password: 'e2e-acct-pass-2', password2: 'e2e-acct-pass-2' })
+    check('重置口令**未勾确认框** → **400**', resetNoConfirm.status === 400 && /需要勾选确认框/.test(resetNoConfirm.body), `got ${resetNoConfirm.status}`)
+    const oldPwOk = await postForm('/login', { form: { username: 'e2e-acct', password: 'e2e-acct-pass-1', next: '/' } })
+    check('未勾确认框时**口令没变**（旧口令仍能登录 = 没写库的硬证据）', oldPwOk.status === 302, `got ${oldPwOk.status}`)
+
+    // ── 正常路径：停用 → 302 + 写后读（连登录也进不来）；再启用 ──
+    const disabled = await post({ action: 'account-disable', id: acctId, confirm: 'yes' })
+    check('停用（勾了确认框）→ **302** + notice=account-disabled', disabled.status === 302 && /notice=account-disabled/.test(disabled.location), `${disabled.status} ${disabled.location}`)
+    check('写后读：库里已停用，页面也显示已停用', dbRow('e2e-acct').enabled === 0 && /已停用/.test(rowOf(await pageA(), 'e2e-acct')))
+    const disabledLogin = await postForm('/login', { form: { username: 'e2e-acct', password: 'e2e-acct-pass-1', next: '/' } })
+    check('停用后**登不进来**（闸门每请求查 enabled）', disabledLogin.status !== 302, `got ${disabledLogin.status}`)
+    const enabled = await post({ action: 'account-enable', id: acctId })
+    check('启用（**无确认框**，恢复通道）→ **302** + notice=account-enabled', enabled.status === 302 && /notice=account-enabled/.test(enabled.location), `${enabled.status} ${enabled.location}`)
+    check('写后读：又启用了', dbRow('e2e-acct').enabled === 1)
+
+    // ── 重置口令（勾确认框）→ 旧口令失效、新口令可用 ──
+    const reset = await post({ action: 'account-reset-password', id: acctId, password: 'e2e-acct-pass-3', password2: 'e2e-acct-pass-3', confirm: 'yes' })
+    check('重置口令 → **302** + notice=password-reset', reset.status === 302 && /notice=password-reset/.test(reset.location), `${reset.status} ${reset.location}`)
+    const oldNow = await postForm('/login', { form: { username: 'e2e-acct', password: 'e2e-acct-pass-1', next: '/' } })
+    const newNow = await postForm('/login', { form: { username: 'e2e-acct', password: 'e2e-acct-pass-3', next: '/' } })
+    check('写后读：**旧口令登不进、新口令能登进**', oldNow.status !== 302 && newNow.status === 302, `old=${oldNow.status} new=${newNow.status}`)
+
+    // ── 降级（勾了确认框）→ 回到只读 ──
+    const demoteOk = await post({ action: 'account-role', id: acctId, role: 'readonly', confirm: 'yes' })
+    check('降级（勾了确认框）→ **302** + notice=role-changed', demoteOk.status === 302 && /notice=role-changed/.test(demoteOk.location), `${demoteOk.status} ${demoteOk.location}`)
+    check('写后读：它已回到只读', dbRow('e2e-acct').role === 'readonly')
+
+    // ── 「不能改自己」：两条都拒，且**都没写** ──
+    const selfId = dbRow('roleprobe').id
+    check('前提：`roleprobe` 此刻确实是**唯一启用中的管理员**', dbRow('roleprobe').role === 'admin' && dbRow('roleprobe').enabled === 1)
+    const selfDemote = await post({ action: 'account-role', id: selfId, role: 'readonly', confirm: 'yes' })
+    check('改**自己**的角色 → **400** + 「不能改自己」', selfDemote.status === 400 && /不能改自己的角色/.test(selfDemote.body), `got ${selfDemote.status}`)
+    check('写后读：自己仍是管理员（守卫拦在写之前）', dbRow('roleprobe').role === 'admin')
+    const selfDisable = await post({ action: 'account-disable', id: selfId, confirm: 'yes' })
+    check('停用**自己** → **400** + 仍是启用中', selfDisable.status === 400 && /不能改自己/.test(selfDisable.body) && dbRow('roleprobe').enabled === 1, `got ${selfDisable.status}`)
+
+    /*
+     * 「最后一名**启用中的**管理员不能被降级」要**非自己**地触发，需要一个「停用中的管理员」当靶子：
+     * 此刻启用中的管理员只剩 roleprobe 一个；把它（e2e-acct）提成管理员再停用，
+     * 降级**它**才会命中那条规则 —— 而且这一次不是「改自己」。
+     */
+    await post({ action: 'account-role', id: acctId, role: 'admin' })
+    await post({ action: 'account-disable', id: acctId, confirm: 'yes' })
+    check(
+      '前提：靶子是个**停用中的管理员**（所以下面那条不是误撞「改自己」）',
+      dbRow('e2e-acct').role === 'admin' && dbRow('e2e-acct').enabled === 0,
+      JSON.stringify(dbRow('e2e-acct')),
+    )
+    const lastAdmin = await post({ action: 'account-role', id: acctId, role: 'readonly', confirm: 'yes' })
+    check(
+      '降级「最后一名启用中的管理员」（非自己那条路径）→ **400** + 守卫原话',
+      lastAdmin.status === 400 && /最后一个启用中的管理员/.test(lastAdmin.body),
+      `got ${lastAdmin.status}`,
+    )
+    check('写后读：它仍是管理员（400 就是没写）', dbRow('e2e-acct').role === 'admin')
+
+    // ── 未登录：回跳目标认得这个页面 ──
+    const anonA = await get('/admin/accounts')
+    check('未登录 /admin/accounts → 302 且带 next', anonA.status === 302 && anonA.location.includes('next=%2Fadmin%2Faccounts'), `${anonA.status} ${anonA.location}`)
   }
 } finally {
   child.kill('SIGTERM')

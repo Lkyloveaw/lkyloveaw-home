@@ -54,6 +54,7 @@ export const KNOWN_PAGES: ReadonlySet<string> = new Set([
   '/admin/targets',
   '/admin/settings',
   '/admin/backups',
+  '/admin/accounts',
 ])
 
 /** 已知路由判定，供 `next` 校验使用（前缀匹配 `:slug` / `:tag` 这类动态段）。 */

@@ -51,17 +51,21 @@ import {
 import {
   countEnabledAdmins,
   countUsers,
+  createUser,
   ensureFirstUserFromEnv,
   findById,
   initUsers,
   listUsers,
+  MIN_PASSWORD_LENGTH,
+  setEnabled,
   setPassword,
+  setRole,
   verifyPassword,
 } from './users.js'
 import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCookieHeader } from './session.js'
 import { createSession, revokeSession } from './sessions-store.js'
 import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin } from './auth.js'
-import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, verifyCsrf } from './csrf.js'
+import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, currentUserId, verifyCsrf } from './csrf.js'
 import { docToMarkdown, markdownToDoc } from './article-import.js'
 import { docToHtml } from './article-html.js'
 import { docFromJson } from './article-doc.js'
@@ -75,6 +79,7 @@ import {
 } from './article-rules.js'
 import {
   aboutPage,
+  adminAccountsPage,
   adminArticlesPage,
   adminBackupsPage,
   adminOverviewPage,
@@ -451,7 +456,9 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     const csrf = csrfToken(config.sessionSecret, readSessionCookie(req.headers.cookie) ?? '') ?? ''
     // 角色一并进上下文：顶栏据此决定要不要渲染「管理」那一项（IA §2），
     // 管理台路由也据此判资格 —— **不重复查库**（闸门那次查询已经把角色带出来了）。
-    csrfContext.enterWith({ token: csrf, isAdmin: decision.role === 'admin' })
+    // `userId` 一并进上下文：#44 的账号页要它来判「这一行是不是你自己」，
+    // 写路径把它当 `actorId` 交给 users.ts 的守卫（**不重复查库**）。
+    csrfContext.enterWith({ token: csrf, isAdmin: decision.role === 'admin', userId: decision.userId })
   })
 
   /**
@@ -1145,6 +1152,137 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     } finally {
       backupRunning = false
     }
+  })
+
+  // ── 管理台 · 账号（#44）────────────────────────────────
+
+  /**
+   * 账号的 `action` **闭集**（`docs/write-path-auth-decision.md` §5.3 第 5 步）。
+   * 五个动作对应 §6.3 的四件事：新增 · 改角色 · 启停 · 重置口令（**没有删除账号**）。
+   */
+  const ACCOUNT_ACTIONS = new Set([
+    'account-create',
+    'account-role',
+    'account-enable',
+    'account-disable',
+    'account-reset-password',
+  ])
+
+  const buildAccountsPage = (opts: {
+    notice?: unknown
+    bad?: string | null
+    submitted?: Record<string, string> | null
+  }): string => {
+    const selfId = currentUserId()
+    return adminAccountsPage(
+      listUsers().map((u) => ({
+        id: u.id,
+        username: u.username,
+        role: u.role,
+        enabled: u.enabled === 1,
+        tokenVersion: u.token_version,
+        isSelf: u.id === selfId,
+      })),
+      opts,
+      siteOf(),
+    )
+  }
+
+  app.get('/admin/accounts', async (req, reply) => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      return forbiddenPage('admin', siteOf())
+    }
+    const query = req.query as { notice?: unknown }
+    reply.type('text/html; charset=utf-8')
+    return buildAccountsPage({ notice: query.notice })
+  })
+
+  app.post('/admin/accounts', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const form = parseFormBody(req.body)
+    const action = String(form.action ?? '')
+    // 失败一律 **400 + 就地重渲染**（保留输入；口令字段永不回填）—— §4.2。
+    const back = (bad: string): unknown => {
+      reply.code(400).type('text/html; charset=utf-8')
+      return buildAccountsPage({ bad, submitted: form })
+    }
+    if (!ACCOUNT_ACTIONS.has(action)) return back('未知的动作，已拒绝。')
+
+    const actorId = currentUserId()
+
+    // ── 新增（字段全部在对象之前：§5.3 的 5 → 6 → 7）──
+    if (action === 'account-create') {
+      const username = String(form.username ?? '').trim()
+      const password = String(form.password ?? '')
+      const again = String(form.password2 ?? '')
+      if (!username) return back('用户名不能为空。')
+      if (password.length < MIN_PASSWORD_LENGTH) return back(`口令至少 ${MIN_PASSWORD_LENGTH} 位。`)
+      if (password !== again) return back('两次输入的口令不一致。')
+      try {
+        // 角色**不从这里给**：新账号一律只读，提权是另一个显式动作（`docs/roles-decision.md` §4）。
+        createUser(username, password)
+      } catch (err) {
+        return back((err as Error).message) // 用户名重复 / 口令不合规（users.ts 给的是人话）
+      }
+      console.log(`[accounts] 新增账号 ${username}（只读）`)
+      return reply.redirect('/admin/accounts?notice=account-created', 302)
+    }
+
+    // ── 其余动作都要一个**存在**的对象 ──
+    const idNum = Number(String(form.id ?? '').trim())
+    const target = Number.isInteger(idNum) ? findById(idNum) : undefined
+    if (!target) return back('找不到这个账号（它可能刚被删掉，刷新看看）。')
+
+    if (action === 'account-role') {
+      const role = String(form.role ?? '')
+      if (role !== 'admin' && role !== 'readonly') return back('角色只能是「管理员」或「只读」。')
+      // §5.1：**降级**要必勾确认框；提权不设卡（恢复通道）。
+      if (role === 'readonly' && String(form.confirm ?? '') !== 'yes') {
+        return back('降为只读需要勾选确认框：降级后对方下一个请求就进不了管理台。')
+      }
+      try {
+        // ⚠ 守卫在 `users.ts` 里（**网页与 CLI 共用同一个函数**）——这里只调用，不重写一份。
+        setRole(target.id, role, actorId)
+      } catch (err) {
+        return back((err as Error).message)
+      }
+      console.log(`[accounts] ${target.username} → ${role === 'admin' ? '管理员' : '只读'}`)
+      return reply.redirect('/admin/accounts?notice=role-changed', 302)
+    }
+
+    if (action === 'account-enable' || action === 'account-disable') {
+      const enabled = action === 'account-enable'
+      if (!enabled && String(form.confirm ?? '') !== 'yes') {
+        return back('停用账号需要勾选确认框：对方下一个请求就会被挡在登录页外。')
+      }
+      try {
+        setEnabled(target.id, enabled, actorId)
+      } catch (err) {
+        return back((err as Error).message)
+      }
+      console.log(`[accounts] ${enabled ? '启用' : '停用'}账号 ${target.username}`)
+      return reply.redirect(
+        `/admin/accounts?notice=${enabled ? 'account-enabled' : 'account-disabled'}`,
+        302,
+      )
+    }
+
+    // ── 重置口令（§6.3：就地输入新口令，不生成随机口令；必勾确认框）──
+    const password = String(form.password ?? '')
+    const again = String(form.password2 ?? '')
+    if (password.length < MIN_PASSWORD_LENGTH) return back(`口令至少 ${MIN_PASSWORD_LENGTH} 位。`)
+    if (password !== again) return back('两次输入的口令不一致。')
+    if (String(form.confirm ?? '') !== 'yes') {
+      return back('重置口令需要勾选确认框：这会让对方所有设备上的登录立刻失效。')
+    }
+    try {
+      // `setPassword` 内部：改哈希 + `token_version + 1` + 级联吊销该账号全部会话（同一事务）。
+      setPassword(target.id, password)
+    } catch (err) {
+      return back((err as Error).message)
+    }
+    console.log(`[accounts] 重置口令 ${target.username}（该账号全部会话已失效）`)
+    return reply.redirect('/admin/accounts?notice=password-reset', 302)
   })
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────

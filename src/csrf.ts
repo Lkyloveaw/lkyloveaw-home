@@ -24,8 +24,12 @@ import { AsyncLocalStorage } from 'node:async_hooks'
  * ⚠ 放在本模块而不是 `server.ts`：`views.ts` 要读它，而 `views.ts` **不能** import `server.ts`
  * （那是循环依赖）。本模块两边都能 import，且它本来就只依赖 `node:crypto`。
  */
-export const csrfContext = new AsyncLocalStorage<{ token: string; isAdmin: boolean }>()
-
+export const csrfContext = new AsyncLocalStorage<{
+  token: string
+  isAdmin: boolean
+  /** 当前登录者的 `users.id`。管理台的账号页要它来判「这一行是不是你自己」（#44）。 */
+  userId?: number
+}>()
 /** 当前请求的 token；**没有上下文时返回空串**（渲染出的表单会提交失败，而不是悄悄放行）。 */
 export function currentCsrfToken(): string {
   return csrfContext.getStore()?.token ?? ''
@@ -38,6 +42,19 @@ export function currentCsrfToken(): string {
  */
 export function currentIsAdmin(): boolean {
   return csrfContext.getStore()?.isAdmin === true
+}
+
+/**
+ * 当前登录者的 `users.id`（**没有上下文时给 `undefined`**）。
+ *
+ * 用途有两处，都在管理台的账号页：渲染时判「这一行是不是你自己」（自己的行不给改角色/停用按钮），
+ * 写路径把它当 `actorId` 交给 `users.ts` 的守卫（「不能改自己」那一条）。
+ *
+ * ⚠ 拿不到时（脚本 / 测试直接调用）守卫里那条**只跳过「不能改自己」**——
+ * 「不能把启用中的管理员减到零」照旧生效（它不依赖 actor）。网页路径上上下文一定在。
+ */
+export function currentUserId(): number | undefined {
+  return csrfContext.getStore()?.userId
 }
 
 /**

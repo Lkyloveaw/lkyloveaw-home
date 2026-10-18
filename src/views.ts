@@ -8,6 +8,7 @@ import type { ProbeTarget } from './config.js'
 import type { TargetStats, TimelinePoint, OverviewPoint, ProbeResult, LatencyPoint } from './store.js'
 import { latencyChart, uptimeChart } from './charts.js'
 import { currentCsrfToken, currentIsAdmin } from './csrf.js'
+import { MIN_PASSWORD_LENGTH } from './users.js'
 
 /**
  * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
@@ -256,8 +257,8 @@ export function adminOverviewPage(
 修复：<code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code></p>`
       : '') +
     `<h1>管理台</h1>
-<p class="admin-hint">这一版的写动作<strong>按页逐张接上</strong>：<strong>目标</strong> / <strong>站点设置</strong> / <strong>备份</strong>
-三页已经能改（真源都是数据库）；<strong>账号</strong>页仍然是只读的，它那张票接上时会在这里说明。</p>
+<p class="admin-hint">四页<strong>都能写</strong>：<strong>目标</strong> / <strong>站点设置</strong> / <strong>备份</strong> / <strong>账号</strong>
+（目标与设置的真源是数据库；账号与备份动的是库里的行与磁盘上的产物）。</p>
 <div class="stat-strip">
 ${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
 ${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
@@ -620,6 +621,149 @@ ${listing}
 <code>sessions</code> 表跟着库一起被搬回去了。恢复属于 SSH 操作，做之前想清楚这一点。</p>`
 
   return layout({ title: '备份 · 管理台', description: site.description, active: 'admin', body }, site)
+}
+
+/** 账号页的一行（`docs/admin-console-ia-decision.md` §6.3）。 */
+export interface AdminAccountRow {
+  id: number
+  username: string
+  role: 'admin' | 'readonly'
+  enabled: boolean
+  /** 凭据代次：排查「为什么掉线」时唯一有用的数字（§6.3 点名要显示它）。 */
+  tokenVersion: number
+  /** 是不是当前登录者自己 —— 自己的行**不渲染**改角色 / 停用按钮（服务端同样拒绝）。 */
+  isSelf: boolean
+}
+
+export interface AdminAccountsOptions {
+  notice?: unknown
+  bad?: string | null
+  /**
+   * 失败时保留的输入。⚠ **口令字段永不回填**（§6.3）——
+   * 把口令写回 HTML 等于把它留在页面、浏览器缓存与日志里。
+   */
+  submitted?: Record<string, string> | null
+}
+
+/**
+ * `/admin/accounts`（`docs/admin-console-ia-decision.md` §6.3 · `docs/roles-decision.md`）。
+ *
+ * 四个动作：新增 · 改角色 · 停用/启用 · 重置口令。三处**必勾确认框**（§5.1：
+ * 重置口令 · 停用账号 · 降级角色）—— 用 HTML 原生 `required`，**不用 JS `confirm()`**：
+ * 本仓的约束是「禁用 JS 也要能读能写」，而禁用 JS 时 `confirm()` 根本不执行。
+ * 提权与启用**不设卡**：它们是恢复通道（`roles-decision.md` §3）。
+ *
+ * 角色用**领域词**渲染（管理员 / 只读），不显示 `admin` / `readonly`（§6.3）。
+ * 「不能改自己」在 UI 上是**不给按钮**，服务端那一份在 `users.ts` 的守卫里（双保险）。
+ */
+export function adminAccountsPage(
+  rows: AdminAccountRow[],
+  opts: AdminAccountsOptions,
+  site: { title: string; description: string },
+): string {
+  const sub = opts.submitted ?? null
+  const roleWord = (r: 'admin' | 'readonly'): string => (r === 'admin' ? '管理员' : '只读')
+  /** 新增表单的回填：只回填用户名（口令永不回填）。 */
+  const newUsername = escapeHtml(sub?.action === 'account-create' ? (sub.username ?? '') : '')
+
+  const newForm = `<h2>新增账号</h2>
+<form method="post" action="/admin/accounts">${csrfField()}
+<input type="hidden" name="action" value="account-create">
+<div class="form-row">
+<label>用户名 <input name="username" value="${newUsername}" required></label>
+<label>新口令 <input type="password" name="password" autocomplete="new-password" required></label>
+<label>再输一次 <input type="password" name="password2" autocomplete="new-password" required></label>
+<button type="submit">新增（只读）</button>
+</div>
+<p class="stat-sub">新账号<strong>默认只读</strong>（最小权限）：要给他管理权，创建后点那一行的「升为管理员」——
+那是一次显式的提权动作。口令至少 ${MIN_PASSWORD_LENGTH} 位，不会被回填、也不会写进页面。</p>
+</form>`
+
+  const row = (u: AdminAccountRow): string => {
+    const roleCell = `<span class="tag${u.role === 'admin' ? ' tag-active' : ''}">${roleWord(u.role)}</span>`
+    const stateCell = u.enabled ? '<span class="tag tag-active">启用中</span>' : '<span class="tag">已停用</span>'
+
+    if (u.isSelf) {
+      return `<tr>
+<td><strong>${escapeHtml(u.username)}</strong><div class="stat-sub">id ${u.id} · 这是你自己</div></td>
+<td>${roleCell}</td>
+<td>${stateCell}</td>
+<td>${u.tokenVersion}</td>
+<td><span class="stat-sub">自己的角色 / 启停不在这里改（服务端也会拒）—— 这是防自锁的第一道。
+改自己的口令请用「系统可用性」页上的那条入口（它不踢别的设备，也不需要确认框）。</span></td>
+</tr>`
+    }
+
+    const roleForm =
+      u.role === 'admin'
+        ? `<form method="post" action="/admin/accounts" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="account-role">
+<input type="hidden" name="id" value="${u.id}">
+<input type="hidden" name="role" value="readonly">
+<label class="confirm"><input type="checkbox" name="confirm" value="yes" required>
+我确认：降级后对方<strong>下一个请求</strong>就进不了管理台（不会踢掉他的登录）。</label>
+<button type="submit" class="btn-danger">降为只读</button>
+</form>`
+        : `<form method="post" action="/admin/accounts" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="account-role">
+<input type="hidden" name="id" value="${u.id}">
+<input type="hidden" name="role" value="admin">
+<button type="submit">升为管理员</button>
+<span class="stat-sub">提权立刻生效（下一个请求就能进管理台），<strong>不</strong>需要确认框。</span>
+</form>`
+
+    const stateForm = u.enabled
+      ? `<form method="post" action="/admin/accounts" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="account-disable">
+<input type="hidden" name="id" value="${u.id}">
+<label class="confirm"><input type="checkbox" name="confirm" value="yes" required>
+我确认：停用后对方<strong>下一个请求</strong>就会被挡在登录页外（不删他任何数据，随时能再启用）。</label>
+<button type="submit" class="btn-danger">停用</button>
+</form>`
+      : `<form method="post" action="/admin/accounts" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="account-enable">
+<input type="hidden" name="id" value="${u.id}">
+<button type="submit">启用</button>
+<span class="stat-sub">启用是<strong>恢复通道</strong>，永不设卡。</span>
+</form>`
+
+    const pwForm = `<form method="post" action="/admin/accounts" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="account-reset-password">
+<input type="hidden" name="id" value="${u.id}">
+<input type="password" name="password" placeholder="新口令" autocomplete="new-password" required>
+<input type="password" name="password2" placeholder="再输一次" autocomplete="new-password" required>
+<label class="confirm"><input type="checkbox" name="confirm" value="yes" required>
+我确认：这会立刻让 <strong>${escapeHtml(u.username)}</strong> 所有设备上的登录失效；新口令由我告知对方。</label>
+<button type="submit">重置口令</button>
+</form>`
+
+    return `<tr>
+<td><strong>${escapeHtml(u.username)}</strong><div class="stat-sub">id ${u.id}</div></td>
+<td>${roleCell}</td>
+<td>${stateCell}</td>
+<td>${u.tokenVersion}</td>
+<td>${roleForm}${stateForm}${pwForm}</td>
+</tr>`
+  }
+
+  const table = rows.length
+    ? `<table class="admin-table"><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>凭据代次</th><th>操作</th></tr></thead>
+<tbody>${rows.map(row).join('\n')}</tbody></table>`
+    : '<p class="empty">库里还没有账号（这不该发生：零账号时用环境变量或 CLI 建第一个）。</p>'
+
+  const body =
+    renderNotice(opts.notice) +
+    (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
+    `<h1>账号</h1>
+<p class="admin-hint">两个角色：<strong>管理员</strong>能进管理台并做全部写操作；<strong>只读</strong>能看全部只读面、能改自己的口令，但管理台整块进不来。
+角色的真源是 <code>users.role</code> 一列，<strong>不进 cookie</strong> —— 所以降级 / 提权在下一个请求就生效，不需要踢会话。</p>
+<p class="admin-hint">守卫只数<strong>启用中的</strong>管理员：最后一名启用中的管理员不能被降级或停用（否则管理台没人能进）。
+「改自己」被两道挡住：这里不给按钮，服务端也拒。</p>
+${newForm}
+<h2>现有账号（${rows.length}）</h2>
+${table}`
+
+  return layout({ title: '账号 · 管理台', description: site.description, active: 'admin', body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
