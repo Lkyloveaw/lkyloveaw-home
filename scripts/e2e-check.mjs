@@ -566,6 +566,11 @@ try {
   console.log('\n[登出]')
   // ══════════════════════════════════════════════════════════
   {
+    // 第二台「设备」先登录 —— 稍后它**必须仍然有效**（判定表 §5 第 24 行：登出 ≠ 踢掉所有设备）
+    const otherDevice = await postLogin(TEST_USER, NEW_PASS)
+    const otherCookie = otherDevice.setCookie.split(';')[0]
+    check('登出前提：第二台设备此前是登录态', (await get('/status', { cookie: otherCookie })).status === 200)
+
     const res = await fetch(BASE + '/logout', {
       method: 'POST',
       redirect: 'manual',
@@ -574,15 +579,45 @@ try {
     const cleared = res.headers.get('set-cookie') || ''
     check('登出 -> 302 到登录页', res.status === 302, `got ${res.status}`)
     check('登出清了 cookie（Max-Age=0）', /Max-Age=0/.test(cleared), cleared)
-    // ⚠ 登出**不是吊销**：签名 cookie 无状态，服务端没有失效名单，
-    // 所以理论上把原 cookie 再拿回来仍然有效。这条断言把这个已知局限钉住，
-    // 防止日后有人误以为登出=吊销。
+
+    /*
+     * ⚠ **#55 起：登出 = 真吊销。这条断言此前断言的正好相反。**
+     *
+     * 旧版写的是「已知局限：登出后原 cookie 重放仍有效」—— 当时登出只清本机 cookie，
+     * 服务端没有失效名单，所以那是**如实的**记录。现在它是 bug：登出把 `sessions` 那一行
+     * 标记 `revoked_at`，重放必须失效。
+     * **反转它，而不是删掉它** —— 删掉就没人再守着「登出到底有没有真吊销」这件事了。
+     */
     const replayed = await get('/status', { cookie: sessionCookie })
     check(
-      '已知局限：登出后原 cookie 重放仍有效（登出=本机遗忘，不是吊销）',
-      replayed.status === 200,
+      '**登出后原 cookie 重放已失效**（登出 = 真吊销，不再是「本机遗忘」）',
+      replayed.status === 302,
       `got ${replayed.status}`,
     )
+    // 第 24 行：只吊销**这一份**，同账号其他设备不受影响。
+    // 少了这条，「把登出实现成 bumpTokenVersion」也能通过上面那条 —— 而用户要的**恰恰是不要**那样。
+    check(
+      '**登出后第二台设备仍然有效**（登出 ≠ 踢掉所有设备）',
+      (await get('/status', { cookie: otherCookie })).status === 200,
+    )
+
+    // ⑦ 升级前的老 cookie（签名**合法**、载荷里没有 sid）→ 302，**不是 500**
+    {
+      const { signSession } = await import('../dist/session.js')
+      const legacy = signSession('e2e-only-secret-not-used-anywhere-else', {
+        uid: 1,
+        exp: Date.now() + 3_600_000,
+        pv: 1,
+      })
+      check(
+        '旧格式 cookie（无 sid）→ 302 而不是 500',
+        (await get('/status', { cookie: 'session=' + legacy })).status === 302,
+      )
+      check(
+        '旧格式 cookie 走 API 也是 401 而不是 500',
+        (await get('/api/status', { cookie: 'session=' + legacy })).status === 401,
+      )
+    }
     // 真吊销通道：CLI --revoke-sessions
     const { execFileSync } = await import('node:child_process')
     execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--revoke-sessions'], {
@@ -592,6 +627,12 @@ try {
     })
     const afterRevoke = await get('/status', { cookie: sessionCookie })
     check('CLI --revoke-sessions 之后旧 cookie 真失效', afterRevoke.status === 302, `got ${afterRevoke.status}`)
+    // ⚠ 用**第二台设备**的 cookie 断言才有意义：登出已经把 sessionCookie 吊销过了，
+    // 拿它来验「账号级吊销」是**恒真**的 —— 那正是「断言必须先证明前提」要防的东西。
+    check(
+      'CLI --revoke-sessions 踢掉**该账号剩余**的会话（第二台设备也失效）',
+      (await get('/status', { cookie: otherCookie })).status === 302,
+    )
     // 且口令未被改，仍能登录
     const stillWorks = await postLogin(TEST_USER, NEW_PASS)
     check('--revoke-sessions 不改口令，原口令仍可登录', stillWorks.status === 302, `got ${stillWorks.status}`)
@@ -713,6 +754,63 @@ try {
       await sleep(600)
     }
   }
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[角色：默认只读与守卫（走 CLI 那条路）]')
+  // ══════════════════════════════════════════════════════════
+  // ⚠ 为什么在 e2e 里再测一遍：unit-check 测的是 `setRole()` / `setEnabled()` **函数**，
+  //    而这里是**命令行**那条路 —— 参数解析、退出码，以及「CLI 不是绕过守卫的后门」。
+  {
+    const { execFileSync } = await import('node:child_process')
+    const cliEnv = { ...process.env, DATABASE_PATH: TEST_DB }
+    const runCli = (...args) => {
+      try {
+        const out = execFileSync(process.execPath, ['dist/cli/passwd.js', ...args], {
+          cwd: ROOT,
+          env: cliEnv,
+          encoding: 'utf8',
+        })
+        return { code: 0, out }
+      } catch (err) {
+        return { code: err.status ?? 1, out: String(err.stdout ?? '') + String(err.stderr ?? '') }
+      }
+    }
+
+    // 新建账号默认只读 —— 最小权限，不是「顺手给的默认值」
+    runCli('--user', 'roleprobe', '--password', 'roleprobe-password-1')
+    const listed = runCli('--list')
+    check(
+      'CLI 新建的账号默认是**只读**',
+      /roleprobe\s+id=\d+\s+只读/.test(listed.out),
+      listed.out.split('\n').find((l) => l.includes('roleprobe')) ?? '',
+    )
+
+    // 提权是恢复通道，永不设卡
+    const promoted = runCli('--user', 'roleprobe', '--role', 'admin')
+    check('CLI 提权成功（恢复通道永不设卡）', promoted.code === 0 && /改为 admin/.test(promoted.out), promoted.out.trim())
+
+    // 前提先成立：此刻恰好一个管理员，否则下面的两条「拒绝」不成立
+    const adminCount = (runCli('--list').out.match(/管理员/g) ?? []).length
+    check('前提：此刻恰好一个启用中的管理员', adminCount === 1, `n=${adminCount}`)
+
+    // 降级 / 停用最后一个管理员会被拒 —— 而且**退出码非零**（脚本里能判、cron 里能停）
+    const demote = runCli('--user', 'roleprobe', '--role', 'readonly')
+    check(
+      'CLI 拒绝降级最后一个管理员（退出码非零）',
+      demote.code !== 0 && /最后一个启用中的管理员/.test(demote.out),
+      `code=${demote.code}`,
+    )
+    const disable = runCli('--user', 'roleprobe', '--disable')
+    check(
+      'CLI 拒绝停用最后一个管理员（退出码非零）',
+      disable.code !== 0 && /最后一个启用中的管理员/.test(disable.out),
+      `code=${disable.code}`,
+    )
+
+    // 非法角色在参数解析处就挡住（库里的 CHECK 是第二道）
+    const bad = runCli('--user', 'roleprobe', '--role', 'admni')
+    check('CLI 拒绝非法角色取值', bad.code !== 0 && /只能是 admin 或 readonly/.test(bad.out), bad.out.trim())
+  }
+
 } finally {
   child.kill('SIGTERM')
   await sleep(800)

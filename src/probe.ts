@@ -5,6 +5,7 @@
  */
 import { config, type ProbeTarget } from './config.js'
 import { recordResults, pruneOldProbes, checkpoint, type ProbeResult } from './store.js'
+import { sweepSessions } from './sessions-store.js'
 import { classifyRuntimeError } from './sanitize.js'
 import { runBackup } from './backup.js'
 
@@ -112,6 +113,18 @@ async function maybeCheckpointAndBackup(): Promise<void> {
       }
     } catch (err) {
       console.error('[probe] checkpoint 失败：', (err as Error).message)
+    }
+
+    /*
+     * 顺手清掉**已死**的会话行（过期的 + 已吊销的），与 checkpoint 并列、共用这个心跳。
+     * 为什么不放进 `onRequest`：那是每个请求都要付的代价，而清理是每日级的活。
+     * 只删死行 —— 活着的会话一行不动（`docs/session-revoke-decision.md` §7）。
+     */
+    try {
+      const removed = sweepSessions()
+      if (removed > 0) console.log(`[probe] 已清理 ${removed} 条已死会话行`)
+    } catch (err) {
+      console.error('[probe] 会话清理失败：', (err as Error).message)
     }
   }
 

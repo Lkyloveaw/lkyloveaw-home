@@ -17,6 +17,7 @@ import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw,
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import {
+  countEnabledAdmins,
   countUsers,
   ensureFirstUserFromEnv,
   findById,
@@ -24,8 +25,8 @@ import {
   setPassword,
   verifyPassword,
 } from './users.js'
-import { issueSession, isSafeNextPath, sessionCookieHeader } from './session.js'
-import { createSession } from './sessions-store.js'
+import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCookieHeader } from './session.js'
+import { createSession, revokeSession } from './sessions-store.js'
 import { decideRequest, deny, isKnownPath, logoutHeader } from './auth.js'
 import {
   aboutPage,
@@ -121,6 +122,24 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     )
   }
 
+  /*
+   * 零管理员：**只告警，不自愈，也不拒启**（`docs/roles-decision.md` §5）。
+   *
+   * - 不自动提权：静默改权限比锁死更难排查 —— 运维会看到「权限自己变了」而找不到是谁改的。
+   * - 不拒绝启动：零管理员是**运行状态**（服务本身健康，只是没人能进管理台），
+   *   拒启会进 `restart: unless-stopped` 的崩溃重启循环，把真正的原因刷没。
+   *   这与「`users` 表为空允许启动 + 告警」是同一条判据的两个实例。
+   *
+   * 进这个状态只可能来自手工改库：守卫拦住了全部 API 通道，CLI 的提权/启用方向也不造成它。
+   */
+  if (countUsers() > 0 && countEnabledAdmins() === 0) {
+    console.warn(
+      '\n  ⚠ 库里没有「启用中的管理员」：管理台没人能进（读面不受影响）。\n' +
+        '     修复：node dist/cli/passwd.js --user <名字> --role admin\n' +
+        '     （本服务不会自动提权 —— 静默改权限比锁死更难排查）\n',
+    )
+  }
+
   const app = Fastify({
     logger: false,
     trustProxy: true,
@@ -190,10 +209,23 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     return reply.redirect(next, 302)
   })
 
-  app.post('/logout', async (_req, reply) => {
+  app.post('/logout', async (req, reply) => {
+    /*
+     * **真吊销**（#55）：把这一条会话行标成已吊销，而不只是清掉本机 cookie。
+     * 只清 cookie 的话，已经泄漏出去的那串签名 token 在过期前照样能用 —— 那正是「登出」这个词
+     * 在过去名不副实的地方。
+     *
+     * **幂等**：不管有没有吊销到（没登录 / 已经吊销过 / 老 cookie 没有 sid），
+     * 都**永远**清 cookie + 302。登出是用户的意图，不能因为查不到会话行就失败。
+     */
+    try {
+      const sid = decodeSid(readSessionCookie(req.headers.cookie))
+      if (sid && revokeSession(sid) > 0) console.log('[auth] 已吊销会话（登出）')
+    } catch (err) {
+      // 库抖动不该让「登出」失败：清 cookie 那一半永远要发生。
+      console.error('[auth] 吊销会话失败（仍然清 cookie）：', (err as Error).message)
+    }
     reply.header('set-cookie', logoutHeader(config.sessionCookieSecure))
-    // ⚠ 登出只清本机 cookie，**不是吊销**：签名 cookie 无状态，
-    // 已泄漏的 token 在过期前仍有效。真吊销走 CLI --revoke-sessions。
     return reply.redirect('/login', 302)
   })
 

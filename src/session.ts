@@ -11,6 +11,12 @@
  * 见 `docs/session-decision.md`。
  */
 import crypto from 'node:crypto'
+/**
+ * 角色类型从 `users.ts` 借来 —— 用 `import type` 是**刻意的**：它编译后完全消失，
+ * 所以本模块在运行期**仍然只依赖 `node:crypto`**（纯函数、不过 HTTP、不碰库），
+ * 那正是「判定表可以不过 HTTP 直接断言」的前提。
+ */
+import type { Role } from './users.js'
 
 export const SESSION_COOKIE_NAME = 'session'
 
@@ -89,6 +95,13 @@ export interface SessionUser {
 
 /**
  * 校验 token。**不做任何 I/O**，用户状态由调用方查好后传进来。
+ *
+ * ⚠ **闸门已经不再调用它**（#55 起改走 `decideSession` + 库里的会话行）。
+ * 保留它有两个理由，都不是「留着好看」：
+ * 1. `docs/session-decision.md` §4 那张 **14 行判定表**仍在 `scripts/unit-check.mjs` 里跑着，
+ *    删掉它等于把那份回归面一起删掉（`docs/session-revoke-decision.md` §3 明确要求「回归面不缩小」）；
+ * 2. 它守着**签名与载荷形状**这一层，与 `decideSession` 是同一套判断的两种输入形态。
+ * 要不要把两者合一，是收口票的事，不是这张票顺手做的。
  *
  * 判定顺序是有意的：
  * 1. **先比签名长度再 `timingSafeEqual`** —— 实测长度不等会抛
@@ -238,10 +251,13 @@ export interface SessionRecord {
 /**
  * 判定所需的最小状态：闸门那**一次** `LEFT JOIN` 查询的全部结果。
  * `user` 为 `null` = 会话行在、账号行不在 —— 它与「会话行不存在」是两件事，排查方向也不同。
+ *
+ * `role` 并进**同一次**查询：`docs/roles-decision.md` §2 定下「取角色的成本是零，不新增查询次数」。
+ * **角色不进 cookie**（库是唯一真源），所以降级/提权在下一个请求就生效，不需要踢会话。
  */
 export interface SessionState {
   session: SessionRecord
-  user: { id: number; enabled: number; tokenVersion: number } | null
+  user: { id: number; enabled: number; tokenVersion: number; role: Role } | null
 }
 
 /** 判决值。闸门只判断 `=== 'ok'`，其余全部进日志。 */

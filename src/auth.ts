@@ -10,8 +10,16 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { config } from './config.js'
-import { getAuthState } from './users.js'
-import { clearCookieHeader, isSafeNextPath, readSessionCookie, verifySession } from './session.js'
+import type { Role } from './users.js'
+import { findSessionState } from './sessions-store.js'
+import {
+  clearCookieHeader,
+  decideSession,
+  decodeSid,
+  isSafeNextPath,
+  readSessionCookie,
+  type SessionState,
+} from './session.js'
 
 /**
  * 匿名白名单：**精确匹配**，不是前缀匹配。
@@ -53,6 +61,11 @@ export interface RequestDecision {
   deny?: 'redirect' | 'unauthorized'
   /** 放行时的当前用户 id（用于渲染「你是谁」与改密）。 */
   userId?: number
+  /**
+   * 放行时的角色。它来自闸门**那一次**查询，**不进 cookie**（`docs/roles-decision.md` §2）——
+   * 所以降级/提权在下一个请求就生效，不需要踢会话。
+   */
+  role?: Role
 }
 
 /**
@@ -71,54 +84,62 @@ function wantsJson(req: FastifyRequest): boolean {
 /**
  * 判定一个请求该不该放行。
  *
- * 关键行为（`docs/session-decision.md` §7.6）：**查库失败 = 未登录，但不 fail-open**。
- * DB 一挂就整站无鉴权，与 Destination 直接冲突；宁可 302 到登录页。
- * 区别只体现在日志里，不影响对外行为。
+ * 流程（`docs/session-revoke-decision.md` §4）：
+ * 1. 白名单命中 → 放行（精确匹配，不动）；
+ * 2. 解 cookie → 无 token 即拒绝（**不查库**）；
+ * 3. 取载荷里的 `sid`；取不到（含**升级前的老 cookie**）即拒绝，**不查库**；
+ * 4. **一次** `sessions ⋈ users` 查询拿判定所需的全部状态；
+ * 5. 纯函数 `decideSession()` 判定（判定表见 §5）；
+ * 6. 非 `ok` → 按页面/API 分流拒绝，并把**判决值**写进日志（排查「为什么我掉线了」时第一个要看的东西）。
+ *
+ * 关键行为（`docs/session-decision.md` §7.6 沿用）：**查库失败 = 未登录，但不 fail-open，也不清 cookie**。
+ * DB 一挂就整站无鉴权，与 Destination 直接冲突；而清 cookie 会把一次抖动升级成一次登出
+ * —— 用户的会话其实还是有效的。
  */
 export function decideRequest(req: FastifyRequest): RequestDecision {
   const pathname = req.url.split('?')[0] ?? req.url
+  const denyShape = (): RequestDecision => ({
+    allow: false,
+    deny: wantsJson(req) ? 'unauthorized' : 'redirect',
+  })
 
   // 白名单：精确匹配
   if (PUBLIC_PATHS.has(pathname)) return { allow: true }
 
   const token = readSessionCookie(req.headers.cookie)
-  if (!token) return { allow: false, deny: wantsJson(req) ? 'unauthorized' : 'redirect' }
+  if (!token) return denyShape()
 
-  // 先验签名拿到 uid，再查库比对 pv/enabled。
-  // 两步分开是因为 verifySession 刻意不做 I/O（它是纯函数，便于断言）。
-  let uid: number | undefined
-  try {
-    const payload = decodePayload(token)
-    uid = payload
-  } catch {
-    uid = undefined
+  // ⚠ 这一步**不验签**（`decodeSid` 的契约），只为拿到查库用的键。
+  // 取不到就说明载荷畸形 —— 这正是老 cookie 走的路，它们没有 `sid`。
+  const sid = decodeSid(token)
+  if (!sid) {
+    console.warn('[auth] 载荷里没有 sid（升级前的老 cookie，或手改），按未登录处理')
+    return denyShape()
   }
-  if (uid === undefined) return { allow: false, deny: wantsJson(req) ? 'unauthorized' : 'redirect' }
 
-  let state
+  let state: SessionState | null
   try {
-    state = getAuthState(uid)
+    state = findSessionState(sid)
   } catch (err) {
-    // 查库失败：按未登录处理，显眼记日志。**不** fail-open。
-    console.error('[auth] 查询账号状态失败，按未登录处理：', (err as Error).message)
-    return { allow: false, deny: wantsJson(req) ? 'unauthorized' : 'redirect' }
+    console.error('[auth] 查询会话状态失败，按未登录处理：', (err as Error).message)
+    return denyShape()
   }
 
-  const verdict = verifySession(config.sessionSecret, token, state)
-  if (verdict !== 'ok') return { allow: false, deny: wantsJson(req) ? 'unauthorized' : 'redirect' }
-  return { allow: true, userId: uid }
+  const verdict = decideSession(config.sessionSecret, token, state, Date.now())
+  if (verdict !== 'ok') {
+    console.warn(`[auth] 会话判决：${verdict}`)
+    return denyShape()
+  }
+  // 判定表的第 17 / 21 行保证 `ok` 蕴含两者都在；这里只是让类型收窄，真走到就是 bug。
+  if (!state || !state.user) {
+    console.error('[auth] 判决为 ok 但状态缺失 —— 不该发生')
+    return denyShape()
+  }
+
+  return { allow: true, userId: state.session.uid, role: state.user.role }
 }
 
 /** 从 token 里取出 uid（不校验签名，仅用于查库；签名由 verifySession 负责）。 */
-function decodePayload(token: string): number | undefined {
-  const dot = token.lastIndexOf('.')
-  if (dot <= 0) return undefined
-  const raw = JSON.parse(Buffer.from(token.slice(0, dot), 'base64url').toString('utf8')) as unknown
-  if (!raw || typeof raw !== 'object') return undefined
-  const uid = (raw as { uid?: unknown }).uid
-  return typeof uid === 'number' && Number.isInteger(uid) ? uid : undefined
-}
-
 /**
  * 处理一个未放行的请求。
  *

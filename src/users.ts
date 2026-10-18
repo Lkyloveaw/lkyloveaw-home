@@ -8,7 +8,7 @@
  */
 import bcrypt from 'bcryptjs'
 import { initStore } from './store.js'
-import { initSessionsTable } from './sessions-store.js'
+import { initSessionsTable, revokeUserSessions } from './sessions-store.js'
 
 /**
  * bcrypt 代价因子。
@@ -20,6 +20,12 @@ export const BCRYPT_COST = 12
 /** 口令最短长度。见 map Notes：「密码 bcrypt 哈希，最短 8 位」。 */
 export const MIN_PASSWORD_LENGTH = 8
 
+/**
+ * 角色。用**领域词**当取值而不是 `INTEGER 0/1`：`SELECT` 出来不会记反，
+ * 写接口与日志里也不需要一张常量对照表（`docs/roles-decision.md` §2）。
+ */
+export type Role = 'admin' | 'readonly'
+
 export interface UserRow {
   id: number
   username: string
@@ -28,13 +34,16 @@ export interface UserRow {
   enabled: number
   updated_at: number | null
   token_version: number
+  role: Role
 }
 
-/** 闸门每请求只需要这三项——不要 SELECT *，多余字段是日后泄漏的种子。 */
+/** 闸门每请求只需要这几项——不要 SELECT *，多余字段是日后泄漏的种子。 */
 export interface AuthState {
   id: number
   enabled: number
   tokenVersion: number
+  /** **库是唯一真源**：角色不进 cookie，所以降级/提权下一个请求就生效（§2 的理由）。 */
+  role: Role
 }
 
 /**
@@ -86,7 +95,8 @@ export function initUsers(): void {
       created_at    INTEGER NOT NULL,
       enabled       INTEGER NOT NULL DEFAULT 1,
       updated_at    INTEGER,
-      token_version INTEGER NOT NULL DEFAULT 1
+      token_version INTEGER NOT NULL DEFAULT 1,
+      role          TEXT    NOT NULL DEFAULT 'readonly' CHECK (role IN ('admin','readonly'))
     );
   `)
 
@@ -96,6 +106,22 @@ export function initUsers(): void {
   if (!cols.some((c) => c.name === 'token_version')) {
     db.exec(`ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`)
     console.log('[users] 已为 users 表补上 token_version 列（既有账号落 1，不会掉线）')
+  }
+
+  /*
+   * 角色列（`docs/roles-decision.md` §2）。`CHECK` 让非法值被**库**挡住，
+   * 而不是靠每个写路径各自记得校验。
+   *
+   * ⚠ 补列时那句 `UPDATE ... SET role='admin'` 是**无条件全表**的，而且只能在这里跑：
+   * 能执行它的唯一时刻就是「role 列刚被补上」的那一刻 —— 此刻库里的每一行都必然是列诞生之前
+   * 就存在的账号。**已知后果**（§2 写在明面上）：停用中的既有账号也会成为管理员；
+   * 它登不进来所以眼下无害，但日后 `--enable` 会让它**直接是管理员**。这是「既有账号 = 当时信任的人」
+   * 的自然外延，接受；要改成「只升启用中的」就是给这条 UPDATE 加个 WHERE，代价一行。
+   */
+  if (!cols.some((c) => c.name === 'role')) {
+    db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'readonly' CHECK (role IN ('admin','readonly'))`)
+    db.exec(`UPDATE users SET role = 'admin'`)
+    console.log('[users] 已补上 role 列，并把既有账号一次性升为 admin')
   }
   // 会话记录表：**入口留在本函数**（它已经是「账号域的迁移入口」——`token_version` 也在这里补），
   // 而 DDL 留在 `sessions-store.ts` 跟会话代码作伴：入口在一处、知识在一处。
@@ -129,6 +155,12 @@ export function countUsers(): number {
 
 export interface CreateUserOptions {
   enabled?: boolean
+  /**
+   * 角色。**默认 `readonly`（最小权限）** —— 要给人管理权，是一次**显式**的提权动作。
+   * 唯一的例外是「零账号首启」（`ensureFirstUserFromEnv`）：那时必须显式传 `admin`，
+   * 否则全新部署开箱就锁死管理台。例外写在调用点上，不靠 `DEFAULT` 蒙出来（`docs/roles-decision.md` §4）。
+   */
+  role?: Role
 }
 
 /** 建号。用户名重复时抛出可读错误（底层是 `SQLITE_CONSTRAINT_UNIQUE`）。 */
@@ -140,10 +172,16 @@ export function createUser(username: string, password: string, opts: CreateUserO
   try {
     const info = db()
       .prepare(
-        `INSERT INTO users (username, password_hash, created_at, enabled, token_version)
-         VALUES (?, ?, ?, ?, 1)`,
+        `INSERT INTO users (username, password_hash, created_at, enabled, token_version, role)
+         VALUES (?, ?, ?, ?, 1, ?)`,
       )
-      .run(name, bcrypt.hashSync(password, BCRYPT_COST), Date.now(), opts.enabled === false ? 0 : 1)
+      .run(
+        name,
+        bcrypt.hashSync(password, BCRYPT_COST),
+        Date.now(),
+        opts.enabled === false ? 0 : 1,
+        opts.role ?? 'readonly',
+      )
     return findById(Number(info.lastInsertRowid))!
   } catch (err) {
     if (String((err as Error).message).includes('UNIQUE')) {
@@ -179,18 +217,82 @@ export function verifyPassword(username: string, password: string): UserRow | nu
  * 调用方（闸门）在成功后要**用新版本给当前响应重新签发 cookie**，
  * 否则用户会把自己也踢下线。见 `docs/session-decision.md` §8.3。
  */
+/**
+ * 改口令。
+ *
+ * **递增 `token_version` 与「级联吊销该账号全部会话」放进同一事务**（`docs/session-revoke-decision.md` §6.4 的双保险）：
+ * 前者让旧 cookie 在签名/代次那一层失配，后者让它在库里也立刻作废。两条一起，
+ * 半途失败不会留下「口令换了但旧 cookie 还能用」的窗口。
+ */
 export function setPassword(id: number, password: string): void {
   assertPassword(password)
-  db()
-    .prepare(`UPDATE users SET password_hash = ?, updated_at = ?, token_version = token_version + 1 WHERE id = ?`)
-    .run(bcrypt.hashSync(password, BCRYPT_COST), Date.now(), id)
+  const conn = db()
+  conn.transaction(() => {
+    conn
+      .prepare(`UPDATE users SET password_hash = ?, updated_at = ?, token_version = token_version + 1 WHERE id = ?`)
+      .run(bcrypt.hashSync(password, BCRYPT_COST), Date.now(), id)
+    revokeUserSessions(id)
+  })()
 }
 
-/** 启停账号。`enabled` 每请求都被闸门查，所以它立刻生效，**不需要**动 token_version。 */
-export function setEnabled(id: number, enabled: boolean): void {
-  db()
-    .prepare(`UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?`)
-    .run(enabled ? 1 : 0, Date.now(), id)
+export type RoleChangeDecision = { ok: true } | { ok: false; reason: string }
+
+/**
+ * 启用中的管理员数 —— 守卫**只数这个**。
+ * 停用的管理员登不进来，若把他算作「还有管理员」，守卫就等于形同虚设：一处自锁会被伪装成一处安全。
+ */
+export function countEnabledAdmins(): number {
+  const row = db()
+    .prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND enabled = 1`)
+    .get() as { n: number }
+  return row.n
+}
+
+/**
+ * 角色 / 启停的守卫 —— **一个函数，网页写路径与 CLI 共用**。
+ * 两条通道规则不一致时，CLI 就成了绕过守卫的后门（`docs/roles-decision.md` §3）。
+ *
+ * 判据：
+ * - **提权与启用永不设卡** —— 它们是恢复通道，锁死了总得有出路；
+ * - 只有「会减少启用中的管理员」的改动才检查：降级一个 `admin`、或停用一个启用中的 `admin`；
+ * - 检查两条：**不能改自己**（自锁里最容易误触的一条，直接不给这个按钮）、**不能减到零**。
+ */
+export function checkRoleChange(
+  targetId: number,
+  next: { role?: Role; enabled?: boolean },
+  actorId?: number,
+): RoleChangeDecision {
+  const target = findById(targetId)
+  if (!target) return { ok: false, reason: '账号不存在' }
+
+  const demoting = next.role === 'readonly' && target.role === 'admin'
+  const disabling = next.enabled === false && target.role === 'admin' && target.enabled === 1
+  if (!demoting && !disabling) return { ok: true }
+
+  if (actorId !== undefined && actorId === targetId) {
+    return { ok: false, reason: '不能改自己的角色，也不能停用自己' }
+  }
+  if (countEnabledAdmins() <= 1) {
+    return { ok: false, reason: '这是最后一个启用中的管理员：降级或停用会让管理台没人能进' }
+  }
+  return { ok: true }
+}
+
+/** 改角色。**守卫在函数内部**，不靠调用方记得查 —— 这样它绕不过去。 */
+export function setRole(id: number, role: Role, actorId?: number): void {
+  const decision = checkRoleChange(id, { role }, actorId)
+  if (!decision.ok) throw new Error(decision.reason)
+  db().prepare(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`).run(role, Date.now(), id)
+}
+
+/**
+ * 启停账号。`enabled` 每请求都被闸门查，所以它立刻生效，**不需要**动 `token_version`
+ * （要立刻踢人是**改口令**的动作，不是改启停的动作）。
+ */
+export function setEnabled(id: number, enabled: boolean, actorId?: number): void {
+  const decision = checkRoleChange(id, { enabled }, actorId)
+  if (!decision.ok) throw new Error(decision.reason)
+  db().prepare(`UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?`).run(enabled ? 1 : 0, Date.now(), id)
 }
 
 /**
@@ -211,17 +313,17 @@ export function bumpTokenVersion(id: number): number {
  */
 export function getAuthState(id: number): AuthState | null {
   const row = db()
-    .prepare(`SELECT id, enabled, token_version FROM users WHERE id = ?`)
-    .get(id) as { id: number; enabled: number; token_version: number } | undefined
+    .prepare(`SELECT id, enabled, token_version, role FROM users WHERE id = ?`)
+    .get(id) as { id: number; enabled: number; token_version: number; role: Role } | undefined
   if (!row) return null
-  return { id: row.id, enabled: row.enabled, tokenVersion: row.token_version }
+  return { id: row.id, enabled: row.enabled, tokenVersion: row.token_version, role: row.role }
 }
 
 /** 列出全部账号（CLI 用），不含口令哈希。 */
 export function listUsers(): Array<Omit<UserRow, 'password_hash'>> {
   return db()
     .prepare(
-      `SELECT id, username, created_at, enabled, updated_at, token_version
+      `SELECT id, username, created_at, enabled, updated_at, token_version, role
          FROM users ORDER BY username ASC`,
     )
     .all() as Array<Omit<UserRow, 'password_hash'>>
@@ -237,9 +339,12 @@ export function listUsers(): Array<Omit<UserRow, 'password_hash'>> {
 export function ensureFirstUserFromEnv(username: string, password: string): boolean {
   if (countUsers() > 0) return false
   if (!username || !password) return false
-  createUser(username, password)
+  // ⚠ **必须显式传 `admin`**，不能靠默认值：表里一个账号都没有时，若首个账号是只读，
+  // 全新部署就**开箱锁死**管理台（`docs/roles-decision.md` §4）。这里不会变成后门管理员 ——
+  // 上一行的 `countUsers() > 0` 已经保证「表非空时环境变量被完全忽略」。
+  createUser(username, password, { role: 'admin' })
   console.warn(
-    `[users] 已用环境变量创建首个账号「${normalizeUsername(username)}」，请立即用网页改密或 CLI 重置口令。`,
+    `[users] 已用环境变量创建首个账号「${normalizeUsername(username)}」（角色 admin），请立即用网页改密或 CLI 重置口令。`,
   )
   return true
 }

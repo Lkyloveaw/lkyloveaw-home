@@ -98,7 +98,7 @@ section('users: 旧库补列（既有账号落 1，不掉线）')
      u.initUsers(); u.initUsers();
      const raw = (await import('better-sqlite3')).default(${JSON.stringify(oldPath)});
      const cols = raw.prepare('PRAGMA table_info(users)').all().map(c=>c.name);
-     const row = raw.prepare('SELECT username,token_version FROM users').get();
+     const row = raw.prepare('SELECT username,token_version,role FROM users').get();
      console.log(JSON.stringify({cols, row}));
      raw.close();`,
     'utf8',
@@ -107,6 +107,10 @@ section('users: 旧库补列（既有账号落 1，不掉线）')
   const { cols, row } = JSON.parse(out.trim().split('\n').pop())
   check('旧库补列后含 token_version', cols.includes('token_version'), cols.join(','))
   check('既有账号 token_version = 1（迁移不掉线）', row.token_version === 1, JSON.stringify(row))
+  check('旧库补列后含 role', cols.includes('role'), cols.join(','))
+  // 这条是角色迁移的**全部内容**：能跑那句无条件 UPDATE 的唯一时刻，就是 role 列刚被补上的那一刻，
+  // 此刻库里的每一行都必然是列诞生之前就存在的账号（`docs/roles-decision.md` §2）。
+  check('**既有账号被一次性升为 admin**（迁移的唯一时刻，无条件全表）', row.role === 'admin', JSON.stringify(row))
   check('旧库上重复执行 initUsers() 不报错', true)
 }
 
@@ -468,6 +472,93 @@ section('sessions: 判定表 24 用例（docs/session-revoke-decision.md §5）'
     check('sweep：**活着的行一行不动**', sessionsStore.findSessionState(live.sid) !== null)
     check('sweep：过期的那行真的没了', sessionsStore.findSessionState(expired.sid) === null)
   }
+}
+
+// ════════════════════════════════════════════════════
+section('roles: 默认只读 · CHECK · 守卫（docs/roles-decision.md §2 §3）')
+// ════════════════════════════════════════════════════
+{
+  const sessionsStore = await import(mod('dist/sessions-store.js'))
+
+  // ── 默认与库约束 ──
+  const carol = users.createUser('Carol', 'carol-password-123')
+  check('新建账号默认 role = readonly（最小权限）', carol.role === 'readonly', carol.role)
+
+  const raw = new Database(config.databasePath)
+  let rejected = ''
+  try {
+    raw.prepare(`UPDATE users SET role = 'admni' WHERE id = ?`).run(carol.id)
+  } catch (err) {
+    rejected = String(err.message)
+  }
+  raw.close()
+  // 非法值被**库**挡住，而不是靠每个写路径各自记得校验（§2 的理由）
+  check('库的 CHECK 拒绝非法角色', /CHECK constraint failed/.test(rejected), rejected.slice(0, 70))
+
+  // ── 守卫判定表（§3）──
+  // 提权永不设卡：这是恢复通道
+  users.setRole(carol.id, 'admin')
+  check('提权 readonly → admin 允许（恢复通道永不设卡）', users.findById(carol.id).role === 'admin')
+
+  // 此刻其余账号都是 readonly —— 于是 carol 就是「恰好一个启用中的管理员」
+  check('前提：库里恰好一个启用中的管理员', users.countEnabledAdmins() === 1, `n=${users.countEnabledAdmins()}`)
+
+  // ⚠ 同一个目标、同一个动作，**带不带 actor 走的是两条判据**：
+  //    网页路径知道「谁在操作」，所以先撞「不能改自己」；CLI 没有 actor（运维就是操作者），
+  //    于是撞「最后一个管理员」。两条都拦得住，但理由不同 —— 这正是守卫要区分的东西。
+  const selfDemote = (() => {
+    try {
+      users.setRole(carol.id, 'readonly', carol.id)
+      return ''
+    } catch (err) {
+      return String(err.message)
+    }
+  })()
+  check('**不能改自己**（网页路径：自锁里最容易误触的一条）', /不能改自己/.test(selfDemote), selfDemote)
+
+  const lastAdmin = (() => {
+    try {
+      users.setRole(carol.id, 'readonly')
+      return ''
+    } catch (err) {
+      return String(err.message)
+    }
+  })()
+  check('**最后一个启用中的管理员不可降级**（CLI 路径）', /最后一个启用中的管理员/.test(lastAdmin), lastAdmin)
+
+  const lastDisable = (() => {
+    try {
+      users.setEnabled(carol.id, false)
+      return ''
+    } catch (err) {
+      return String(err.message)
+    }
+  })()
+  check('**最后一个启用中的管理员不可停用**', /最后一个启用中的管理员/.test(lastDisable), lastDisable)
+
+  // 停用的管理员**不算数** —— 否则守卫形同虚设（一处自锁会被伪装成一处安全）
+  const dave = users.createUser('Dave', 'dave-password-123', { enabled: false, role: 'admin' })
+  check('停用的 admin 不计入「启用中的管理员」', users.countEnabledAdmins() === 1, `n=${users.countEnabledAdmins()}`)
+  users.setEnabled(dave.id, true)
+  check('启用账号永不设卡', users.findById(dave.id).enabled === 1)
+  check('启用后它计入管理员数', users.countEnabledAdmins() === 2, `n=${users.countEnabledAdmins()}`)
+
+  // 管理员 ≥ 2 时，降级别人是允许的（守卫只防「减到零」）
+  users.setRole(carol.id, 'readonly', dave.id)
+  check('管理员 ≥ 2 时降级别人允许', users.findById(carol.id).role === 'readonly')
+
+  // ── 改口令 = 递增代次 **且** 级联吊销会话（同一事务，双保险）──
+  const mine = sessionsStore.createSession(carol.id, users.findById(carol.id).token_version, 60_000)
+  const others = sessionsStore.createSession(dave.id, users.findById(dave.id).token_version, 60_000)
+  users.setPassword(carol.id, 'carol-password-456')
+  check(
+    '改口令**级联吊销**该账号的会话行',
+    sessionsStore.findSessionState(mine.sid)?.session.revokedAt !== null,
+  )
+  check(
+    '改口令**不碰**别人的会话行',
+    sessionsStore.findSessionState(others.sid)?.session.revokedAt === null,
+  )
 }
 
 if (failed === 0) {
