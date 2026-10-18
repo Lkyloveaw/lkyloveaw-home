@@ -15,6 +15,7 @@ import {
   warnContentDirIsNoLongerInput,
 } from './content.js'
 import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, initStore, closeStore, sanitizeStoredErrors } from './store.js'
+import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackups } from './backup.js'
@@ -32,8 +33,20 @@ import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCook
 import { createSession, revokeSession } from './sessions-store.js'
 import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin } from './auth.js'
 import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, verifyCsrf } from './csrf.js'
+import { docToMarkdown, markdownToDoc } from './article-import.js'
+import { docToHtml } from './article-html.js'
+import { docFromJson } from './article-doc.js'
+import {
+  checkSlugAvailable,
+  normalizeTags,
+  slugConflictMessage,
+  validateBodySize,
+  validateSlug,
+  validateTitle,
+} from './article-rules.js'
 import {
   aboutPage,
+  adminArticlesPage,
   adminOverviewPage,
   forbiddenPage,
   homePage,
@@ -42,6 +55,8 @@ import {
   postPage,
   postsPage,
   statusPage,
+  type AdminArticleForm,
+  type AdminArticleListItem,
   type AdminOverview,
   type StatusSummary,
 } from './views.js'
@@ -327,6 +342,185 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     // 路由不解释它 —— 否则「哪些 key 有效」会长出第二份名单。
     const query = req.query as { notice?: unknown }
     return adminOverviewPage(buildAdminOverview(), site, query.notice)
+  })
+
+  // ── 管理台 · 文章（#50）──────────────────────────────────
+
+  /** 文章的 `action` **闭集**（`docs/article-write-api-decision.md` §3.2）。未知值 → 400，**不拼进 SQL**。 */
+  const ARTICLE_ACTIONS = new Set(['article-create', 'article-save', 'article-publish', 'article-unpublish'])
+
+  /** `tags` 列是 JSON 数组字符串。解析失败就当作没有标签 —— **不抛**（一篇脏数据不该让整页 500）。 */
+  const parseTagList = (json: string): string[] => {
+    try {
+      const v = JSON.parse(json) as unknown
+      return Array.isArray(v) ? v.map(String) : []
+    } catch {
+      return []
+    }
+  }
+
+  const todayStamp = (): string => new Date().toISOString().slice(0, 10)
+
+  /**
+   * 列表 + 编辑面的数据（**一律现算**）。
+   *
+   * ⚠ `opts.submitted` 是**失败重渲染**的关键：400 时以**用户刚提交的**为准，
+   * 而不是库里的旧值 —— 票面原话：一篇三千字因为 slug 重名被打回、正文却空了，
+   * 是这个页面能犯的**最贵**的一次错。
+   */
+  const buildArticlesPage = (
+    editSlug: string | undefined,
+    opts: { notice?: unknown; bad?: string | null; submitted?: Record<string, string> },
+  ): string => {
+    const list: AdminArticleListItem[] = listArticlesForAdmin().map((r) => ({
+      slug: r.slug,
+      title: r.title,
+      date: r.date,
+      draft: r.draft === 1,
+      trashed: r.deletedAt !== null,
+      tags: parseTagList(r.tags),
+    }))
+
+    let edit: AdminArticleForm | null = null
+    let preview: string | null = null
+    if (editSlug !== undefined) {
+      const row = editSlug ? getArticleForAdmin(editSlug) : undefined
+      const sub = opts.submitted
+      if (row) {
+        edit = {
+          slug: row.slug,
+          title: sub?.title ?? row.title,
+          date: sub?.date ?? row.date,
+          tags: sub?.tags ?? parseTagList(row.tags).join(', '),
+          summary: sub?.summary ?? (row.summary ?? ''),
+          // 没有提交内容时，把库里的**文档 JSON 还原成 Markdown**（`docToMarkdown` 的用处就在这）
+          markdown: sub?.body_md ?? docToMarkdown(docFromJson(JSON.parse(row.body))),
+          draft: row.draft === 1,
+          isNew: false,
+        }
+        // 草稿预览：**同一页面、同一鉴权**（不在 `/posts/*` 下开任何预览入口）
+        if (row.draft === 1 && !sub) {
+          try {
+            preview = docToHtml(docFromJson(JSON.parse(row.body)))
+          } catch (err) {
+            console.error('[articles] 草稿预览渲染失败：', (err as Error).message)
+          }
+        }
+      } else if (sub || editSlug === '') {
+        edit = {
+          slug: sub?.slug ?? '',
+          title: sub?.title ?? '',
+          date: sub?.date ?? todayStamp(),
+          tags: sub?.tags ?? '',
+          summary: sub?.summary ?? '',
+          markdown: sub?.body_md ?? '',
+          draft: true,
+          isNew: true,
+        }
+      }
+    }
+    return adminArticlesPage(list, edit, { notice: opts.notice, bad: opts.bad ?? null, preview }, site)
+  }
+
+  /**
+   * 管理台写路由的守卫：**资格（只读 → 403）→ L3**（`docs/write-path-auth-decision.md` §5.3 的顺序）。
+   * 两件事写在**同一个 `preValidation`** 里就是为了保住这个顺序 —— 分成两个钩子的话
+   * L3 会先跑（`preValidation` 早于 handler，而资格判定本该在它之前）。
+   */
+  const adminWriteGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      await reply.send(forbiddenPage('admin', site))
+      return
+    }
+    await csrfGuard(req, reply)
+  }
+
+  app.get('/admin/articles', async (req, reply) => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      return forbiddenPage('admin', site)
+    }
+    const q = req.query as { notice?: unknown; edit?: unknown }
+    reply.type('text/html; charset=utf-8')
+    return buildArticlesPage(typeof q.edit === 'string' ? q.edit : undefined, { notice: q.notice })
+  })
+
+  app.post('/admin/articles', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const form = parseFormBody(req.body)
+    const action = String(form.action ?? '')
+    const origSlug = String(form.orig_slug ?? '').trim()
+    const back = (bad: string, slug?: string): unknown => {
+      reply.code(400).type('text/html; charset=utf-8')
+      return buildArticlesPage(slug ?? origSlug ?? undefined, { bad, submitted: form })
+    }
+
+    if (!ARTICLE_ACTIONS.has(action)) return back('未知的动作，已拒绝。')
+
+    // 发布 / 撤下：只改状态，**不碰正文**（正文要改先「保存」）
+    if (action === 'article-publish' || action === 'article-unpublish') {
+      const row = getArticleForAdmin(origSlug)
+      if (!row) return back('找不到这篇文章：' + origSlug)
+      upsertArticleWithRevision({
+        slug: row.slug,
+        title: row.title,
+        body: row.body,
+        summary: row.summary,
+        date: row.date,
+        tags: row.tags,
+        draft: action === 'article-publish' ? 0 : 1,
+        now: Date.now(),
+      })
+      const notice = action === 'article-publish' ? 'article-published' : 'article-unpublished'
+      return reply.redirect('/admin/articles?edit=' + encodeURIComponent(row.slug) + '&notice=' + notice, 302)
+    }
+
+    // 新建 / 保存：**校验 → 转文档 → 落库**
+    const title = String(form.title ?? '').trim()
+    const slug = String(form.slug ?? '').trim()
+    const markdown = String(form.body_md ?? '')
+    const summary = String(form.summary ?? '').trim()
+    const date = String(form.date ?? '').trim() || todayStamp()
+    const { tags, rejected } = normalizeTags(form.tags)
+
+    const t = validateTitle(title)
+    if (!t.ok) return back(t.reason, slug || undefined)
+    const s = validateSlug(slug)
+    if (!s.ok) return back(s.reason, slug || undefined)
+
+    if (action === 'article-create') {
+      const avail = checkSlugAvailable(slug)
+      // 撞名 → 400，文案**给出占用者标题**；占用者在回收站时要**明说**（`article-rules.ts` 已就位）
+      if (!avail.available) return back(slugConflictMessage(slug, { title: avail.title, inTrash: avail.inTrash }), slug)
+    } else if (slug !== origSlug) {
+      // 表单里那个字段对已有文章是只读的，但**服务端也要拦** —— 前端只读不是规则
+      return back('slug 不可修改：对外链接已经发出去了。', origSlug)
+    }
+    if (rejected.length) {
+      return back('标签名不合法：' + rejected.join('、') + '（标签名就是 URL，不能含 /）', slug || undefined)
+    }
+
+    const { doc, warnings } = markdownToDoc(markdown)
+    const bodyJson = JSON.stringify(doc.toJSON())
+    const size = validateBodySize(bodyJson)
+    if (!size.ok) return back(size.reason, slug || undefined)
+
+    const existing = action === 'article-create' ? undefined : getArticleForAdmin(origSlug)
+    const result = upsertArticleWithRevision({
+      slug,
+      title,
+      body: bodyJson,
+      summary: summary || null,
+      date,
+      tags: JSON.stringify(tags),
+      // **新建一律草稿**（票面的第一条规矩）；保存**不改状态** —— 发布是另一个动作
+      draft: existing ? existing.draft : 1,
+      now: Date.now(),
+    })
+    if (warnings.length) console.warn('[articles] 转换告警：' + warnings.slice(0, 3).join('；'))
+    console.log('[articles] ' + result + ' ' + slug + (existing ? '' : '（新建，默认草稿）'))
+    const notice = action === 'article-create' ? 'article-created' : 'article-saved'
+    return reply.redirect('/admin/articles?edit=' + encodeURIComponent(slug) + '&notice=' + notice, 302)
   })
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────

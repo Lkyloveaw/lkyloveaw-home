@@ -47,6 +47,7 @@ export const KNOWN_PAGES: ReadonlySet<string> = new Set([
   // 管理台（#39）。它**不在** PUBLIC_PATHS 里 —— `/admin*` 本来就该受闸门保护，
   // 这里登记只是为了 `next` 校验能把它当成一个「登录后可以回跳的站内地址」。
   '/admin',
+  '/admin/articles',
 ])
 
 /** 已知路由判定，供 `next` 校验使用（前缀匹配 `:slug` / `:tag` 这类动态段）。 */

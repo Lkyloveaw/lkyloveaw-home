@@ -177,6 +177,10 @@ export const NOTICE_TEXT: Record<string, string> = {
   'password-reset': '已重置口令。',
   'backup-started': '已触发备份。',
   'settings-saved': '已保存设置。',
+  'article-created': '已新建文章（草稿）。',
+  'article-saved': '已保存。',
+  'article-published': '已发布，读者现在能看到它。',
+  'article-unpublished': '已撤下，改回草稿。',
 }
 
 /**
@@ -610,4 +614,126 @@ ${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
 export function notFoundPage(site: { title: string; description: string }): string {
   const body = `<section class="section"><h1>404</h1><p class="empty">这个页面不存在。</p><p class="back"><a href="/">← 回首页</a></p></section>`
   return layout({ title: '404', description: site.description, active: 'home', body }, site)
+}
+
+/** 管理台文章列表里的一行。 */
+export interface AdminArticleListItem {
+  slug: string
+  title: string
+  date: string
+  draft: boolean
+  /** 在回收站里（`deleted_at` 非空）。列表里**标出来**，但不在这里做还原/彻底删除（归 #51）。 */
+  trashed: boolean
+  tags: string[]
+}
+
+/** 编辑面要的一份表单数据。**`markdown` 是库里的文档 JSON 还原出来的**（`docToMarkdown`）。 */
+export interface AdminArticleForm {
+  slug: string
+  title: string
+  date: string
+  /** 逗号分隔的原始串（照用户上次输入的样子回填）。 */
+  tags: string
+  summary: string
+  markdown: string
+  draft: boolean
+  /** 新建时 slug 可填；已有文章**只读**（发布后不可改，`article-rules.ts` 的规矩）。 */
+  isNew: boolean
+}
+
+export interface AdminArticlesOptions {
+  notice?: unknown
+  /** 400 的失败说明（**就地重渲染**时显示）。 */
+  bad?: string | null
+  /** 草稿的渲染预览（HTML，已由 `docToHtml` 产出）。**只在管理台内**。 */
+  preview?: string | null
+}
+
+/**
+ * `/admin/articles`（`docs/article-write-api-decision.md` §3.4）。
+ *
+ * 一页两态：**列表**，或列表 + 展开的编辑面（`?edit=<slug>`）。
+ *
+ * ⚠ **失败时正文必须回填** —— 调用方把用户刚提交的 Markdown 放回 `edit.markdown`，
+ * 这一页只负责原样渲染。票面原话：一篇三千字因为 slug 重名被打回、正文却空了，
+ * 是这个页面能犯的**最贵**的一次错。
+ *
+ * 草稿预览**在同一页面、同一鉴权**下渲染 —— **不在 `/posts/*` 下开任何预览入口**。
+ */
+export function adminArticlesPage(
+  list: AdminArticleListItem[],
+  edit: AdminArticleForm | null,
+  opts: AdminArticlesOptions,
+  site: { title: string; description: string },
+): string {
+  const rows = list.length
+    ? list
+        .map((a) => {
+          const badge = a.trashed
+            ? '<span class="tag tag-active">回收站</span>'
+            : a.draft
+              ? '<span class="tag">草稿</span>'
+              : ''
+          const tags = a.tags.map((t) => '<span class="tag">' + escapeHtml(t) + '</span>').join('')
+          return (
+            '<tr>' +
+            '<td>' + badge + '</td>' +
+            '<td><a href="/admin/articles?edit=' + encodeURIComponent(a.slug) + '">' + escapeHtml(a.title) + '</a>' +
+            '<div class="stat-sub">' + escapeHtml(a.slug) + '</div></td>' +
+            '<td>' + escapeHtml(a.date) + '</td>' +
+            '<td>' + tags + '</td>' +
+            '</tr>'
+          )
+        })
+        .join('')
+    : '<tr><td colspan="4" class="empty">还没有文章。</td></tr>'
+
+  const editForm = edit
+    ? `<h2>${edit.isNew ? '新建文章' : '编辑：' + escapeHtml(edit.title)}</h2>
+<form method="post" action="/admin/articles" class="article-form">${csrfField()}
+<input type="hidden" name="action" value="${edit.isNew ? 'article-create' : 'article-save'}">
+<input type="hidden" name="orig_slug" value="${escapeHtml(edit.slug)}">
+<div class="form-row">
+<label>标题 <input name="title" value="${escapeHtml(edit.title)}" required></label>
+<label>slug <input name="slug" value="${escapeHtml(edit.slug)}"${edit.isNew ? '' : ' readonly'}></label>
+</div>
+<div class="form-row">
+<label>日期 <input type="date" name="date" value="${escapeHtml(edit.date)}"></label>
+<label>标签 <input name="tags" value="${escapeHtml(edit.tags)}" placeholder="逗号分隔"></label>
+</div>
+<div class="form-row">
+<label>摘要 <input name="summary" value="${escapeHtml(edit.summary)}" placeholder="留空则从正文派生"></label>
+</div>
+<textarea name="body_md" rows="22" class="article-body" spellcheck="false">${escapeHtml(edit.markdown)}</textarea>
+<div class="form-actions"><button type="submit">保存</button>
+<span class="stat-sub">正文写 Markdown；保存后刷新不重复提交。</span></div>
+</form>
+${
+  edit.isNew
+    ? ''
+    : `<form method="post" action="/admin/articles" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="${edit.draft ? 'article-publish' : 'article-unpublish'}">
+<input type="hidden" name="orig_slug" value="${escapeHtml(edit.slug)}">
+<button type="submit"${edit.draft ? '' : ' class="btn-danger"'}>${edit.draft ? '发布' : '撤下（改回草稿）'}</button>
+<span class="stat-sub">${edit.draft ? '发布后它会出现在「分享」里，slug 从此不可改。' : '撤下后读者看不到它，但它还在，随时可以再发。'}</span>
+</form>`
+}
+${
+  opts.preview
+    ? `<h2>预览（草稿在管理台内渲染，读者看不到）</h2><div class="card article-preview">${opts.preview}</div>`
+    : ''
+}`
+    : ''
+
+  const body =
+    renderNotice(opts.notice) +
+    (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
+    `<h1>文章</h1>
+<p class="admin-hint">这一版能写、能改、能发。回收站与修订历史在下一票。</p>
+<p class="form-actions"><a href="/admin/articles?edit=">＋ 新建一篇</a></p>
+<table class="admin-table"><thead><tr><th>状态</th><th>标题 / slug</th><th>日期</th><th>标签</th></tr></thead>
+<tbody>${rows}</tbody></table>
+${editForm}`
+
+  return layout({ title: '文章 · 管理台', description: site.description, active: 'admin', body }, site)
 }

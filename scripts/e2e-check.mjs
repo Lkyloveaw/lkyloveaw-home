@@ -1043,6 +1043,131 @@ try {
     )
   }
 
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[管理台文章写路径（#50）：写 · 改 · 发 · 撤 + 草稿纪律]')
+  // ══════════════════════════════════════════════════════════
+  {
+    // 用角色那节提权的 roleprobe（管理员），壳那节已经证明它能登进管理台
+    const adm = await postForm('/login', {
+      form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' },
+    })
+    const admin = adm.setCookie.split(';')[0]
+    const csrf = () => csrfFor(admin)
+    const SLUG = 'e2e-写路径探针'
+    const TITLE = 'e2e 写路径探针标题'
+    const MD = '# 一级标题\n\n正文**加粗**与 `代码`。\n\n- 甲\n- 乙\n'
+
+    // 前置：管理台文章页在
+    const list0 = await get('/admin/articles', { cookie: admin })
+    check('前提：管理员能打开 /admin/articles', list0.status === 200, `got ${list0.status}`)
+    check('前提：页面上有「新建一篇」入口', /新建一篇/.test(list0.body))
+
+    // ① 新建（**默认草稿**）
+    const created = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-create', slug: SLUG, title: TITLE, date: '2026-03-01', tags: '探针, 验收', summary: '', body_md: MD },
+    })
+    check('① 新建 → 302（PRG，刷新不重复提交）', created.status === 302, `got ${created.status}`)
+    check('① 回跳到编辑面并带 notice', /edit=.*notice=article-created/.test(created.location), created.location)
+
+    // ② 草稿纪律：读面三处都看不见它
+    const posts = await get('/posts', { cookie: admin })
+    check('② 草稿**不在** /posts 列表里', !posts.body.includes(TITLE))
+    const tagsPage = await get('/tags/' + encodeURIComponent('探针'), { cookie: admin })
+    check('② 草稿的标签也翻不到它', !tagsPage.body.includes(TITLE))
+    const direct = await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })
+    check('② 草稿直链 **404**（不是「凭链接可预览」）', direct.status === 404, `got ${direct.status}`)
+
+    // ③ 但在管理台里能打开，且**正文被还原成 Markdown**（docToMarkdown 的用处）
+    const editPage = await get('/admin/articles?edit=' + encodeURIComponent(SLUG), { cookie: admin })
+    check('③ ?edit= 能打开草稿', editPage.status === 200 && editPage.body.includes(TITLE))
+    check('③ **正文回填**（文档 JSON 还原成了 Markdown）', editPage.body.includes('# 一级标题') && editPage.body.includes('**加粗**'))
+    check('③ 草稿在管理台内**有预览**（读者看不到）', /article-preview/.test(editPage.body) && /一级标题/.test(editPage.body))
+    check('③ slug 对已有文章是只读的（发布后不可改）', /name="slug"[^>]*readonly/.test(editPage.body))
+
+    // ④ 保存（改标题 + 改正文）→ 仍是草稿
+    const saved = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-save', orig_slug: SLUG, slug: SLUG, title: TITLE + '（改过）', date: '2026-03-01', tags: '探针', summary: '', body_md: MD + '\n新增一段。\n' },
+    })
+    check('④ 保存 → 302 + notice', saved.status === 302 && /notice=article-saved/.test(saved.location), saved.location)
+    const stillDraft = await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })
+    check('④ 保存**不改状态**（还是草稿，直链仍 404）', stillDraft.status === 404, `got ${stillDraft.status}`)
+
+    // ⑤ 发布 → 读面立刻可见
+    const pub = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-publish', orig_slug: SLUG },
+    })
+    check('⑤ 发布 → 302 + notice', pub.status === 302 && /notice=article-published/.test(pub.location), pub.location)
+    const live = await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })
+    check('⑤ 发布后直链 **200**', live.status === 200, `got ${live.status}`)
+    check('⑤ 正文真的渲染了（加粗成了 <strong>）', /<strong>加粗<\/strong>/.test(live.body))
+    check('⑤ 出现在列表里', (await get('/posts', { cookie: admin })).body.includes(TITLE + '（改过）'))
+
+    // ⑥ 撤下 → 回到草稿
+    const unpub = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-unpublish', orig_slug: SLUG },
+    })
+    check('⑥ 撤下 → 302 + notice', unpub.status === 302 && /notice=article-unpublished/.test(unpub.location), unpub.location)
+    check('⑥ 撤下后直链又 **404**', (await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })).status === 404)
+    check('⑥ 但文章还在（管理台里打开得到）', (await get('/admin/articles?edit=' + encodeURIComponent(SLUG), { cookie: admin })).status === 200)
+
+    // ⑦ 撞名 → 400，**正文必须还在**（票面：这是这个页面能犯的最贵的一次错）
+    const LONG = '这是一段很长很长的正文。'.repeat(40)
+    const dup = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-create', slug: SLUG, title: '撞名的那篇', date: '2026-03-02', tags: '', summary: '', body_md: LONG },
+    })
+    check('⑦ 撞名 → **400**', dup.status === 400, `got ${dup.status}`)
+    check('⑦ 文案给出占用者标题', dup.body.includes(TITLE), '没看到占用者标题')
+    check('⑦ **正文还在**（三千字被打回、正文却空了，是最贵的一次错）', dup.body.includes('这是一段很长很长的正文。'))
+    check('⑦ 失败页也带 notice-bad 横幅', /notice notice-bad/.test(dup.body))
+
+    // ⑧ 非法标签（名字即 URL，禁 `/`）→ 400
+    const badTag = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-create', slug: SLUG + '-2', title: '标签不合法', date: '2026-03-03', tags: 'a/b', summary: '', body_md: '正文' },
+    })
+    check('⑧ 标签含 `/` → 400', badTag.status === 400, `got ${badTag.status}`)
+    check('⑧ 文案说明为什么', /标签名/.test(badTag.body))
+
+    // ⑨ 未知 action → 400（闭集）
+    const badAction = await postForm('/admin/articles', {
+      cookie: admin,
+      csrf: csrf(),
+      form: { action: 'article-drop-table', orig_slug: SLUG },
+    })
+    check('⑨ 未知 action → 400（闭集，不拼进 SQL）', badAction.status === 400, `got ${badAction.status}`)
+
+    // ⑩ 缺 L3 token → 403（写路由全都过同一个守卫）
+    const noCsrf = await postForm('/admin/articles', {
+      cookie: admin,
+      form: { action: 'article-publish', orig_slug: SLUG },
+    })
+    check('⑩ 缺 csrf → 403', noCsrf.status === 403, `got ${noCsrf.status}`)
+
+    // ⑪ 只读 → 403（不是 404、不是重定向）
+    const roLogin2 = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookie2 = roLogin2.setCookie.split(';')[0]
+    check('⑪ 只读 GET /admin/articles → **403**', (await get('/admin/articles', { cookie: roCookie2 })).status === 403)
+    const roWrite = await postForm('/admin/articles', {
+      cookie: roCookie2,
+      csrf: csrfFor(roCookie2),
+      form: { action: 'article-publish', orig_slug: SLUG },
+    })
+    check('⑪ 只读写 → **403**（且不是重定向）', roWrite.status === 403, `got ${roWrite.status}`)
+
+    // 收尾：把探针文章发回去再删掉？—— 没有删除动作（归 #51），留着不影响别的断言
+  }
 } finally {
   child.kill('SIGTERM')
   await sleep(800)

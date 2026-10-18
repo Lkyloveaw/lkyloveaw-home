@@ -599,9 +599,11 @@ export function upsertArticleWithRevision(input: ArticleInput): 'inserted' | 'up
 }
 
 /** 库里全部文章的概览（CLI 的 `--list` 用；不做读者过滤，因为它就是给管理员看的）。 */
-export function listArticlesForAdmin(): Array<Pick<ArticleRow, 'slug' | 'title' | 'date' | 'draft' | 'deletedAt'>> {
+export function listArticlesForAdmin(): Array<
+  Pick<ArticleRow, 'slug' | 'title' | 'date' | 'draft' | 'deletedAt' | 'tags'>
+> {
   const rows = handle()
-    .prepare(`SELECT slug, title, date, draft, deleted_at FROM articles ORDER BY date DESC, slug ASC`)
+    .prepare(`SELECT slug, title, date, draft, deleted_at, tags FROM articles ORDER BY date DESC, slug ASC`)
     .all() as Array<Record<string, unknown>>
   return rows.map((r) => ({
     slug: String(r.slug),
@@ -609,6 +611,7 @@ export function listArticlesForAdmin(): Array<Pick<ArticleRow, 'slug' | 'title' 
     date: String(r.date),
     draft: Number(r.draft),
     deletedAt: r.deleted_at === null || r.deleted_at === undefined ? null : Number(r.deleted_at),
+    tags: String(r.tags ?? '[]'),
   }))
 }
 

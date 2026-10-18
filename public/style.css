@@ -398,3 +398,13 @@ main { padding-top: 34px; }
 .confirm { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; font-size: 0.86rem; }
 .btn-danger { border-color: var(--bad); color: var(--bad); }
 .admin-hint { color: var(--fg-faint); font-size: 0.86rem; }
+
+/* 管理台文章页（#50）：列表表格 + 正文文本框 + 草稿预览 */
+.admin-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-bottom: 24px; }
+.admin-table th { text-align: left; color: var(--fg-faint); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.admin-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.article-form { display: block; margin-bottom: 18px; }
+.article-body { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88rem;
+  line-height: 1.6; padding: 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-soft); color: var(--fg); resize: vertical; }
+.article-preview { padding: 12px 16px; }
