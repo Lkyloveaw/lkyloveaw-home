@@ -10,6 +10,9 @@
 > ⚠ **本票只产决定**。本文**不含实现代码**；判定表是**待验证的断言清单**。
 > 落地由 [实现批次怎么切](https://github.com/Lkyloveaw/lkyloveaw-home/issues/27) 切出的批次票执行。
 >
+> ✅ **2026-10-18 更新**：已由 [实现④目标网页化](https://github.com/Lkyloveaw/lkyloveaw-home/issues/40) 落地，
+> 18 条断言全部跑成绿 —— 证据位置、落地时修掉的既有缺陷、两处偏差见 **§9.3**。
+>
 > 📌 **本文里凡标 `【默认】`的选择都是我替你定的（不是从既有事实推出来的）**，
 > 理由都写了，**推翻成本基本是一行**。你要改哪条，说一句就行。
 
@@ -296,6 +299,34 @@ const targets = listEnabledTargets()   // SELECT ... WHERE enabled = 1 → Probe
 
 **断言质量要求**（沿用既有原则）：每条**先证明前提成立**——
 第 14 条必须先断言「新增前它不在结果里」；第 8 条必须先断言「该 id 此刻确实没有历史行」。
+
+### 9.3 落地结果（2026-10-18 由 [实现④目标网页化](https://github.com/Lkyloveaw/lkyloveaw-home/issues/40) 回填）
+
+**上面 18 条全部跑成绿**，不是「待验证」了。断言位置：
+
+- 9.1 的 12 条 → `scripts/unit-check.mjs` 的 `[targets: 首次导入 / id 不可变 / 删除两岔 / enabled_at]`
+  一节（全部在**子进程**里跑：每场景自带 `DATABASE_PATH` / `TARGETS_JSON`，互不污染）。
+  其中第 12 条是**真并发**四个子进程打同一个新库。
+- 9.2 的 6 条 → `scripts/e2e-check.mjs` 的 `[管理台目标写路径（#40）]` 一节。
+  第 14 条（热加载）用「新目标的 `timeline` 有没有记录」证明 —— 那只能来自探测真的跑了它；
+  第 18 条是文本断言（`src/` 里除 `config.ts` 与 `targets-store.ts` 外不许出现 `config.targets`）。
+
+**落地时发现并修掉的既有缺陷**（第 12 条逼出来的）：两进程同时首启会**崩在补列迁移上** ——
+「读 `PRAGMA table_info` → 缺列就 `ALTER TABLE`」这个形状在并发下必有一个进程拿到
+`duplicate column name`，进程退出 1、服务起不来。实测负载下 100 次并发首启里必现 1 次。
+`store.ts` 的 `probes.round_at` 与 `users.ts` 的 `token_version` / `role` 三处同一形状，已全部改成幂等
+（新增 `isDuplicateColumnError()`：只容忍这一种措辞，别的错照抛）；修后同一压测 100 次 0 失败。
+`users.ts` 那处还顺带绑住了「补列」与「一次性全表提权」，避免并发下把新号一起提权。
+
+**两处与本文原定的偏差（记录事实，不偷偷改）**：
+
+1. **§2 的优先级那句话内部矛盾**：原文写「文件来源优先 `TARGETS_PATH`，其次 `TARGETS_JSON`，
+   与今天 `config.loadTargets()` 的优先级一致」，但 `loadTargets()` 实际是 **`TARGETS_JSON` 优先**。
+   落地按**「与今天一致」**那一半做（`TARGETS_JSON` 优先），因为改导入优先级不在本票范围内。
+2. **首次导入会让「连续可用时长」从导入那一刻重新起算**（`enabled_at` = 导入时刻）。
+   对全新部署没有差别；对**升级上来的库**，历史一行没丢，只是「这一段连续」从迁移起算。
+   这是 §5 那条规则的一次性代价，方向是保守的（少报而不是多报）—— 真机验收（票⑩）会看到它。
+
 
 **⚠ 已在本机跑过的验证**：**没有**。本票产出时的会话里 `ops_bash`（缺 bash IPC 兼容收据）与
 `pwsh`（执行策略禁止 `prepare-workspace.ps1`）都不可用，上面 18 条**一条都没跑**。
