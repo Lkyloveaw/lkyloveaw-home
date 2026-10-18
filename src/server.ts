@@ -18,6 +18,7 @@ import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw,
 import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
 import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
 import { listRevisions, revertToRevision } from './store.js'
+import { mediaMime, mediaPath } from './media.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackups } from './backup.js'
@@ -611,6 +612,43 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     console.log('[articles] ' + result + ' ' + slug + (existing ? '' : '（新建，默认草稿）'))
     const notice = action === 'article-create' ? 'article-created' : 'article-saved'
     return reply.redirect('/admin/articles?edit=' + encodeURIComponent(slug) + '&notice=' + notice, 302)
+  })
+
+  // ── 媒体服务（#52）──────────────────────────────────────
+
+  /**
+   * `GET /media/<name>` —— 媒体服务（规格 [#41](https://github.com/Lkyloveaw/lkyloveaw-home/issues/41)）。
+   *
+   * - **不在 `PUBLIC_PATHS` 里**：永远在登录闸门后 —— 与文章**同一条可见性边界**（未登录看到的
+   *   和文章一样是「去登录」，不是一个能白拿图片的口子）。
+   * - 名字先过 `isSafeMediaName`：**拒 `../`、拒编码斜杠、拒 `.svg`** —— 目录穿越在**形状**这一层就断了，
+   *   不靠 `path.join` 自觉（它会把 `..` 老老实实拼上去）。
+   * - 不合法或不存在 → **404**（不是 500、不是目录列表、不是 Fastify 默认 JSON）。
+   * - `nosniff`：被替换的文件不会被当脚本执行。
+   * - **长缓存**：文件名就是内容哈希，内容**永不改变**（改图 = 新文件 + 新 URL）。
+   *   这一行会覆盖 `onRequest` 里那句全局 `no-store` —— 那是**有意的**：动态页面不进共享缓存，
+   *   而内容寻址的媒体**恰恰应该**被长期缓存。
+   */
+  app.get('/media/:name', async (req, reply) => {
+    const name = (req.params as { name: string }).name
+    const mime = mediaMime(name)
+    if (!mime) {
+      reply.code(404).type('text/plain; charset=utf-8')
+      return 'not found'
+    }
+    let buf: Buffer
+    try {
+      buf = fs.readFileSync(mediaPath(name))
+    } catch {
+      // 名字合法但文件不在（被孤图清理删了、或手工挪走了）—— 同样是 404，不泄漏磁盘状态。
+      reply.code(404).type('text/plain; charset=utf-8')
+      return 'not found'
+    }
+    reply
+      .type(mime)
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Cache-Control', 'public, max-age=31536000, immutable')
+    return reply.send(buf)
   })
 
   // ── 登录 / 登出 / 改密 ───────────────────────────────────

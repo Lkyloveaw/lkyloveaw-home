@@ -116,6 +116,8 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     SESSION_SECRET: SECRET,
     // L2 的判据来源（#38）：缺失即拒绝启动，所以 e2e 也必须给。
     SITE_ORIGIN: BASE,
+    // 媒体目录（#52）：指向临时目录，验收不污染真实数据（规格 user story 45）
+    MEDIA_DIR: path.join(tmpData, 'media'),
     // 保持默认关，顺便回归「HTTP 下 Secure 必须是关的」。
     SESSION_COOKIE_SECURE: '0',
   },
@@ -1306,6 +1308,60 @@ try {
     })
     check('㉖ 回收站里的文章退回 → **400**（先还原）', revTrashed.status === 400 && /先还原/.test(revTrashed.body), `got ${revTrashed.status}`)
     await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: { action: 'article-restore', orig_slug: RSLUG } })
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[媒体服务（#52）：登录可见 · 名字即安全边界 · 长缓存]')
+  // ══════════════════════════════════════════════════════════
+  {
+    // 直接往媒体目录放一张**真 PNG**（上传通道还没做，但服务契约现在就该成立）
+    const MEDIA = path.join(tmpData, 'media')
+    fs.mkdirSync(MEDIA, { recursive: true })
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(64, 7),
+    ])
+    const { createHash } = await import('node:crypto')
+    const mediaNameOk = createHash('sha256').update(png).digest('hex') + '.png'
+    fs.writeFileSync(path.join(MEDIA, mediaNameOk), png)
+
+    const admMedia = await postForm('/login', {
+      form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' },
+    })
+    const adminMedia = admMedia.setCookie.split(';')[0]
+
+    // **先证明前提**：登录态能拿到它 —— 否则下面每条「拒绝」都可能是恒真的
+    const res = await fetch(BASE + '/media/' + mediaNameOk, { headers: { cookie: adminMedia } })
+    check('前提：登录后 GET /media/<name> → 200', res.status === 200, `got ${res.status}`)
+    check('Content-Type 是 image/png', res.headers.get('content-type') === 'image/png', res.headers.get('content-type') ?? '')
+    check('带 `X-Content-Type-Options: nosniff`', res.headers.get('x-content-type-options') === 'nosniff')
+    check(
+      '**长缓存**（内容寻址，内容永不改变 —— 它覆盖了全局那句 no-store，是有意的）',
+      /max-age=\d+/.test(res.headers.get('cache-control') ?? ''),
+      res.headers.get('cache-control') ?? '',
+    )
+    const bytes = Buffer.from(await res.arrayBuffer())
+    check('返回的字节与落盘的一模一样', bytes.equals(png), `${bytes.length} vs ${png.length}`)
+
+    // 未登录 → 与文章**同一条**可见性边界，不是一个能白拿图片的口子
+    const anonMedia = await fetch(BASE + '/media/' + mediaNameOk, { redirect: 'manual' })
+    check('未登录 → **302**（和文章一样要登录）', anonMedia.status === 302, `got ${anonMedia.status}`)
+
+    // 名字即安全边界
+    const badNames = [
+      ['编码的目录穿越', encodeURIComponent('../' + mediaNameOk)],
+      ['`.svg`（即使形状对）', 'a'.repeat(64) + '.svg'],
+      ['非 64 位十六进制', 'abc.png'],
+      ['带路径的多段', 'x/' + mediaNameOk],
+    ]
+    for (const [label, bad] of badNames) {
+      const r = await fetch(BASE + '/media/' + bad, { headers: { cookie: adminMedia }, redirect: 'manual' })
+      check(`非法名 → **404**：${label}`, r.status === 404, `got ${r.status}`)
+    }
+    const missing = await fetch(BASE + '/media/' + 'b'.repeat(64) + '.png', { headers: { cookie: adminMedia } })
+    check('合法名但文件不存在 → **404**（不泄漏磁盘状态）', missing.status === 404, `got ${missing.status}`)
+    const missingBody = await missing.text()
+    check('404 响应**不含内部信息**（不是 Fastify 默认 JSON）', !/not found.*Route|ENOENT/i.test(missingBody), missingBody.slice(0, 60))
   }
 } finally {
   child.kill('SIGTERM')
