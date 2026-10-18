@@ -48,6 +48,11 @@ export const KNOWN_PAGES: ReadonlySet<string> = new Set([
   // 这里登记只是为了 `next` 校验能把它当成一个「登录后可以回跳的站内地址」。
   '/admin',
   '/admin/articles',
+  // 页面在哪张票落地，就在哪张票登记它（#40 落了目标页、#42 落了设置页）：
+  // 不登记的表现是「未登录点进 /admin/settings → 登录后被丢回首页」。
+  // 账号页与备份页由各自的票（#44 / #43）在自己落地时补上。
+  '/admin/targets',
+  '/admin/settings',
 ])
 
 /** 已知路由判定，供 `next` 校验使用（前缀匹配 `:slug` / `:tag` 这类动态段）。 */

@@ -37,6 +37,18 @@ import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackups } from './backup.js'
 import {
+  getProbeIntervalSeconds,
+  getSiteDescription,
+  getSiteTitle,
+  initSettings,
+  listSettings,
+  SETTINGS_SPEC,
+  setSetting,
+  specOf,
+  getSettingRaw,
+  validateSettingValue,
+} from './settings-store.js'
+import {
   countEnabledAdmins,
   countUsers,
   ensureFirstUserFromEnv,
@@ -65,6 +77,7 @@ import {
   aboutPage,
   adminArticlesPage,
   adminOverviewPage,
+  adminSettingsPage,
   adminTargetsPage,
   forbiddenPage,
   homePage,
@@ -86,7 +99,16 @@ const WINDOW_LABEL = '最近 24 小时'
 /** 安全方法不进 L2：它们不改状态（`GET` 全只读是本仓的**设计约束**，不是巧合）。 */
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-const site = { title: config.siteTitle, description: config.siteDescription }
+/**
+ * 站点的呈现信息：**每请求从库里读一次**（`docs/settings-source-decision.md` §6.1）。
+ *
+ * ⚠ 原来是模块加载时求值的 `const site = {...}`，被十几个路由共享 —— 那样标题改完之后
+ * **有的页面变、有的不变**（取决于那个路由何时求值），正是本仓最防的那种静默失败。
+ * 所以这里没有任何缓存：一次单表主键 SELECT 是微秒级，而缓存要引入失效逻辑。
+ */
+function siteOf(): { title: string; description: string } {
+  return { title: getSiteTitle(), description: getSiteDescription() }
+}
 
 /**
  * 概览页的四块摘要（`docs/admin-console-ia-decision.md` §6.1）。
@@ -125,9 +147,10 @@ function buildAdminOverview(): AdminOverview {
     // 「今天是否已备份」看文件名里的日期戳（备份文件就叫 `YYYY-MM-DD.sqlite`）。
     backup: { latest, latestAt, doneToday: latest === `${today}.sqlite` },
     settings: {
-      title: config.siteTitle,
-      description: config.siteDescription,
-      intervalSeconds: Math.round(config.probeIntervalMs / 1000),
+      // 概览页这一块显示的是**当前生效值**，所以走 `settings-store`（真源是数据库）。
+      title: getSiteTitle(),
+      description: getSiteDescription(),
+      intervalSeconds: getProbeIntervalSeconds(),
     },
     // 零管理员：**每次渲染现算** —— 启动日志只在重启时看得到，概览页才是它的常驻位置。
     zeroAdmins: users.length > 0 && countEnabledAdmins() === 0,
@@ -156,7 +179,9 @@ function buildSummary(): StatusSummary {
     incidents: getRecentIncidents(8),
     generatedAt: Date.now(),
     windowLabel: WINDOW_LABEL,
-    probeIntervalSeconds: Math.round(config.probeIntervalMs / 1000),
+    // 面板上写「每 N 秒自动刷新」用的是它 —— 这里读的是**库里的配置值**，
+    // 而不是「刚过去那一轮的间隔」。改完后的一个间隔内两者可能不一致，这是对的（§4 末段）。
+    probeIntervalSeconds: getProbeIntervalSeconds(),
   }
 }
 
@@ -284,6 +309,9 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   // **表为空时**才从 targets.json / TARGETS_JSON 导入一次，此后文件被完全忽略（只打一行警告）。
   initTargets()
   warnTargetsFileIsNoLongerInput()
+  // 设置的首次落值（`docs/settings-source-decision.md` §2）：**库里有行就什么都不做**，
+  // 所以升级不会覆盖用户在网页上改过的任何东西；`.env` 从此只作首次值的来源。
+  initSettings()
   // 首次导入：**库里一篇文章都没有时**才读 content/*.md（与 targets.json、.env 同一条规则）。
   // 之后那些文件就不再是输入 —— 改它们对站点没有任何影响，只由下面这行提醒一次。
   importArticlesIfEmpty()
@@ -402,7 +430,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
             `origin=${req.headers.origin ?? '-'} referer=${req.headers.referer ?? '-'} host=${req.headers.host ?? '-'}`,
         )
         reply.code(403).type('text/html; charset=utf-8')
-        return reply.send(forbiddenPage('origin', site))
+        return reply.send(forbiddenPage('origin', siteOf()))
       }
     }
 
@@ -443,7 +471,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       // 记 path 与失败原因，**不记 token 值**（OWASP 明文要求 token 不进日志）。
       console.warn(`[auth] L3 拒绝：path=${req.url}（token 缺失或不匹配）`)
       reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('csrf', site, req.url))
+      await reply.send(forbiddenPage('csrf', siteOf(), req.url))
     }
   }
 
@@ -461,13 +489,13 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   app.get('/admin', async (req, reply) => {
     if (!currentIsAdmin()) {
       reply.code(403).type('text/html; charset=utf-8')
-      return forbiddenPage('admin', site)
+      return forbiddenPage('admin', siteOf())
     }
     reply.type('text/html; charset=utf-8')
     // `?notice=<key>` 原样交给视图：**闭集判定在 views 里**（未知 key 什么都不渲染），
     // 路由不解释它 —— 否则「哪些 key 有效」会长出第二份名单。
     const query = req.query as { notice?: unknown }
-    return adminOverviewPage(buildAdminOverview(), site, query.notice)
+    return adminOverviewPage(buildAdminOverview(), siteOf(), query.notice)
   })
 
   // ── 管理台 · 文章（#50）──────────────────────────────────
@@ -589,7 +617,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       trash,
       edit,
       { notice: opts.notice, bad: opts.bad ?? null, preview, revisions, uploaded: opts.uploaded ?? null },
-      site,
+      siteOf(),
     )
   }
 
@@ -601,7 +629,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   const adminWriteGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (!currentIsAdmin()) {
       reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('admin', site))
+      await reply.send(forbiddenPage('admin', siteOf()))
       return
     }
     await csrfGuard(req, reply)
@@ -630,7 +658,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   app.get('/admin/articles', async (req, reply) => {
     if (!currentIsAdmin()) {
       reply.code(403).type('text/html; charset=utf-8')
-      return forbiddenPage('admin', site)
+      return forbiddenPage('admin', siteOf())
     }
     const q = req.query as { notice?: unknown; edit?: unknown; uploaded?: unknown }
     reply.type('text/html; charset=utf-8')
@@ -812,7 +840,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   const uploadGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (!currentIsAdmin()) {
       reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('admin', site))
+      await reply.send(forbiddenPage('admin', siteOf()))
       return
     }
     const raw = (req.body as Record<string, unknown> | undefined)?.csrf
@@ -820,7 +848,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     if (!verifyCsrf(config.sessionSecret, readSessionCookie(req.headers.cookie), submitted)) {
       console.warn('[media] L3 拒绝上传：token 缺失或不匹配')
       reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('csrf', site, '/admin/articles'))
+      await reply.send(forbiddenPage('csrf', siteOf(), '/admin/articles'))
     }
   }
 
@@ -884,13 +912,13 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     notice?: unknown
     bad?: string | null
     submitted?: Record<string, string> | null
-  }): string => adminTargetsPage(listAllTargets(), { ...opts, statuses: getLatestStatuses() }, site)
+  }): string => adminTargetsPage(listAllTargets(), { ...opts, statuses: getLatestStatuses() }, siteOf())
 
   app.get('/admin/targets', async (req, reply) => {
     // 资格用闸门刚算出来的那个角色（请求上下文里）—— 不重复查库；拿不到即非管理员 → 403（fail-closed）。
     if (!currentIsAdmin()) {
       reply.code(403).type('text/html; charset=utf-8')
-      return forbiddenPage('admin', site)
+      return forbiddenPage('admin', siteOf())
     }
     const query = req.query as { notice?: unknown }
     reply.type('text/html; charset=utf-8')
@@ -959,13 +987,80 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     return reply.redirect('/admin/targets?notice=target-saved', 302)
   })
 
+  // ── 管理台 · 站点设置（#42）──────────────────────────────
+
+  /**
+   * 设置的 `action` **闭集**（`docs/write-path-auth-decision.md` §5.3 第 5 步）。
+   * 三个字段一次提交（是同一张表单），所以这里只有一个动作。
+   */
+  const SETTINGS_ACTIONS = new Set(['settings-save'])
+
+  /**
+   * 留在 `.env` 里的那些（页面上**只读展示**，`docs/settings-source-decision.md` §0）。
+   *
+   * ⚠ **绝不渲染 `SESSION_SECRET` 的值** —— 只列名字。密钥进不了页面，与它进不进库是同一条纪律。
+   */
+  const envOnlyFacts = (): Array<{ label: string; value: string; note: string }> => [
+    { label: '单次探测超时', value: `${config.probeTimeoutMs} ms`, note: '它决定单次探测的成败判定，改错会让全站误报 —— 留在 .env' },
+    { label: '历史保留天数', value: `${config.retentionDays} 天`, note: '它会**删数据**（超期清理），不是展示参数 —— 留在 .env' },
+    { label: '备份目录 / 保留份数', value: '见「备份」页', note: '它们决定文件写在哪、删几份 —— 留在 .env' },
+    {
+      label: '会话与来源安全参数',
+      value: 'SESSION_SECRET · SESSION_TTL_SECONDS · SESSION_COOKIE_SECURE · SITE_ORIGIN · TRUST_PROXY',
+      note: '安全判据与签名密钥 —— 留在 .env（这里只列名字，不显示值）',
+    },
+  ]
+
+  const buildSettingsPage = (opts: {
+    notice?: unknown
+    bad?: string | null
+    submitted?: Record<string, string> | null
+  }): string => adminSettingsPage(listSettings(), envOnlyFacts(), opts, siteOf())
+
+  app.get('/admin/settings', async (req, reply) => {
+    if (!currentIsAdmin()) {
+      reply.code(403).type('text/html; charset=utf-8')
+      return forbiddenPage('admin', siteOf())
+    }
+    const query = req.query as { notice?: unknown }
+    reply.type('text/html; charset=utf-8')
+    return buildSettingsPage({ notice: query.notice })
+  })
+
+  app.post('/admin/settings', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const form = parseFormBody(req.body)
+    const action = String(form.action ?? '')
+    const back = (bad: string): unknown => {
+      reply.code(400).type('text/html; charset=utf-8')
+      return buildSettingsPage({ bad, submitted: form })
+    }
+    if (!SETTINGS_ACTIONS.has(action)) return back('未知的动作，已拒绝。')
+
+    // 字段校验（第 6 步）：逐键走 `SETTINGS_SPEC` 的区间，**先把三个字段都验完再写**，
+    // 否则「标题存进去了、间隔被拒」会让用户以为整张表都没生效（实际上是半生效）。
+    // 传 `getSettingRaw(spec.key)` 是「不改就不拦」那条例外（库里可能有低于表单下界的值）。
+    const next: Array<{ key: (typeof SETTINGS_SPEC)[number]['key']; value: string }> = []
+    for (const spec of SETTINGS_SPEC) {
+      const raw = String(form[spec.key] ?? '').trim()
+      const bad = validateSettingValue(spec.key, raw, getSettingRaw(spec.key))
+      if (bad) return back(bad)
+      next.push({ key: spec.key, value: raw })
+    }
+    for (const { key, value } of next) setSetting(key, value)
+    console.log(
+      `[settings] 已保存：${next.map((n) => `${n.key}=${n.value}`).join(' · ')}` +
+        `（探测间隔下一轮生效）`,
+    )
+    return reply.redirect('/admin/settings?notice=settings-saved', 302)
+  })
+
   // ── 登录 / 登出 / 改密 ───────────────────────────────────
 
   app.get('/login', async (req, reply) => {
     const query = req.query as { next?: string }
     const next = isSafeNextPath(query.next, isKnownPath) ? (query.next as string) : '/'
     reply.type('text/html; charset=utf-8')
-    return loginPage({ next, noAccounts: countUsers() === 0 }, site)
+    return loginPage({ next, noAccounts: countUsers() === 0 }, siteOf())
   })
 
   app.post('/login', async (req, reply) => {
@@ -976,7 +1071,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     if (!user) {
       // 不区分「用户不存在」「口令错」「账号已停用」——统一一句提示。
       reply.code(401).type('text/html; charset=utf-8')
-      return loginPage({ next, error: '用户名或口令不正确', noAccounts: countUsers() === 0 }, site)
+      return loginPage({ next, error: '用户名或口令不正确', noAccounts: countUsers() === 0 }, siteOf())
     }
 
     setSession(reply, user.id, user.token_version)
@@ -1018,7 +1113,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     const form = parseFormBody(req.body)
     const fail = (notice: string): string => {
       reply.code(400).type('text/html; charset=utf-8')
-      return statusPage(buildSummary(), site, notice)
+      return statusPage(buildSummary(), siteOf(), notice)
     }
 
     if (!verifyPassword(user.username, form.current ?? '')) return fail('当前口令不正确')
@@ -1030,26 +1125,26 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     // 这里用**新版本**重新签发，自己才不会掉线。
     setSession(reply, userId, tokenVersionOf(userId))
     reply.type('text/html; charset=utf-8')
-    return statusPage(buildSummary(), site, '口令已更新。其他设备上的登录已失效。')
+    return statusPage(buildSummary(), siteOf(), '口令已更新。其他设备上的登录已失效。')
   })
 
   // ── 页面 ────────────────────────────────────────────────
 
   app.get('/', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return homePage(listPublishedPosts(), buildSummary(), site)
+    return homePage(listPublishedPosts(), buildSummary(), siteOf())
   })
 
   app.get('/posts', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return postsPage(listPublishedPosts(), listTags(), site)
+    return postsPage(listPublishedPosts(), listTags(), siteOf())
   })
 
   app.get('/tags/:tag', async (req, reply) => {
     const tag = decodeURIComponent((req.params as { tag: string }).tag)
     const posts = listPublishedPosts().filter((p) => p.tags.includes(tag))
     reply.type('text/html; charset=utf-8')
-    return postsPage(posts, listTags(), site, `标签：${tag}`, tag)
+    return postsPage(posts, listTags(), siteOf(), `标签：${tag}`, tag)
   })
 
   app.get('/posts/:slug', async (req, reply) => {
@@ -1058,15 +1153,15 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     const post = getPublishedPost(decodeURIComponent((req.params as { slug: string }).slug))
     if (!post) {
       reply.code(404).type('text/html; charset=utf-8')
-      return notFoundPage(site)
+      return notFoundPage(siteOf())
     }
     reply.type('text/html; charset=utf-8')
-    return postPage(post, site)
+    return postPage(post, siteOf())
   })
 
   app.get('/status', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return statusPage(buildSummary(), site)
+    return statusPage(buildSummary(), siteOf())
   })
 
   /** 给前端自动刷新用的 JSON。
@@ -1078,7 +1173,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   app.get('/about', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return aboutPage(site)
+    return aboutPage(siteOf())
   })
 
   /** 健康检查：**保持匿名 200**（HEALTHCHECK / systemd 都不带凭证）。计数读库（§7），不是读启动时的那份配置。 */
@@ -1086,7 +1181,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   app.setNotFoundHandler(async (_req, reply) => {
     reply.code(404).type('text/html; charset=utf-8')
-    return notFoundPage(site)
+    return notFoundPage(siteOf())
   })
 
   return app

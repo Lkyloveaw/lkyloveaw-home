@@ -249,8 +249,8 @@ export function adminOverviewPage(
 修复：<code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code></p>`
       : '') +
     `<h1>管理台</h1>
-<p class="admin-hint">这一版的写动作<strong>按页逐张接上</strong>：<strong>目标</strong>页已经能增删改
-（真源是数据库）；账号 / 备份 / 设置三页仍然是只读的，各自的票接上时会在这里说明。</p>
+<p class="admin-hint">这一版的写动作<strong>按页逐张接上</strong>：<strong>目标</strong>与<strong>站点设置</strong>两页已经能改
+（真源都是数据库）；<strong>账号</strong>与<strong>备份</strong>两页仍然是只读的，各自的票接上时会在这里说明。</p>
 <div class="stat-strip">
 ${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
 ${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
@@ -422,6 +422,99 @@ ${newForm}
 ${list}`
 
   return layout({ title: '目标 · 管理台', description: site.description, active: 'admin', body }, site)
+}
+
+/** 管理台设置页的一行（`docs/admin-console-ia-decision.md` §6.5）。 */
+export interface AdminSettingRow {
+  key: string
+  label: string
+  /** 当前生效值（**不是** `.env` 里的值 —— 真源是数据库）。 */
+  value: string
+  hint: string
+  kind: 'string' | 'int'
+  min?: number
+  max?: number
+  /** 库里的值坏掉了（空标题 / 不是正整数）：读的时候已经回退默认，页面上要标出来。 */
+  bad: boolean
+  /**
+   * 值**能用但超出表单区间**（`.env` 首次落值来的 3 秒那种）。
+   * 仍按它探测，但要提醒「想改就得守区间」—— 否则用户对着 `3` 拿到 400 会一头雾水。
+   */
+  outOfFormRange: boolean
+}
+
+export interface AdminSettingsOptions {
+  notice?: unknown
+  /** 400 的失败说明（**就地重渲染**时显示）。 */
+  bad?: string | null
+  /** 失败时**用户刚提交的那份表单**（§4.2：保留已填输入）。 */
+  submitted?: Record<string, string> | null
+}
+
+/**
+ * `/admin/settings`（`docs/admin-console-ia-decision.md` §6.5 · `docs/settings-source-decision.md`）。
+ *
+ * 只有三个字段 + 一个保存（map Notes 第 4 条点名的三项）。**没有「恢复默认值」按钮**（§9）：
+ * 设置一旦落库，「恢复默认」在语义上就是「把值设回代码默认」—— 一次普通保存就能做到。
+ *
+ * 页面必须写清两件事，否则用户会以为保存没生效：
+ * 真源已经是数据库（`.env` 只作首次初始值）、改间隔**下一轮生效且不打断正在等的那一轮**。
+ */
+export function adminSettingsPage(
+  rows: AdminSettingRow[],
+  envOnly: Array<{ label: string; value: string; note: string }>,
+  opts: AdminSettingsOptions,
+  site: { title: string; description: string },
+): string {
+  const sub = opts.submitted ?? null
+  // 失败时用**用户刚提交的**值回填（`submitted` 里没有这个键时才用库里的值）。
+  const valueOf = (row: AdminSettingRow): string =>
+    escapeHtml(sub && sub[row.key] !== undefined ? sub[row.key] : row.value)
+
+  const fields = rows
+    .map(
+      (row) => `<div class="form-row">
+<label>${escapeHtml(row.label)}
+<input name="${escapeHtml(row.key)}" value="${valueOf(row)}"${row.kind === 'int' ? ' inputmode="numeric"' : ''}>
+</label>
+</div>
+<p class="stat-sub">${escapeHtml(row.hint)}${
+        row.bad
+          ? '<br><span class="bad-text">库里的值不可用，上面显示的是回退后的默认值。</span>'
+          : row.outOfFormRange
+            ? '<br><span class="bad-text">当前值超出上面的区间（它来自 <code>.env</code> 的首次落值，仍按它探测）—— 想改就必须落回区间内。</span>'
+            : ''
+      }</p>`,
+    )
+    .join('\n')
+
+  const envRows = envOnly
+    .map(
+      (e) =>
+        `<div><dt>${escapeHtml(e.label)}</dt><dd>${escapeHtml(e.value)}` +
+        `<div class="stat-sub">${escapeHtml(e.note)}</div></dd></div>`,
+    )
+    .join('\n')
+
+  const body =
+    renderNotice(opts.notice) +
+    (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
+    `<h1>站点设置</h1>
+<p class="admin-hint">真源是<strong>数据库</strong>：<code>.env</code> 里的 <code>SITE_TITLE</code> /
+<code>SITE_DESCRIPTION</code> / <code>PROBE_INTERVAL_SECONDS</code> <strong>只作为首次启动的初始值</strong>，
+之后改它们不再有任何效果（值不同时启动日志里会有一行警告）。</p>
+<form method="post" action="/admin/settings">${csrfField()}
+<input type="hidden" name="action" value="settings-save">
+${fields}
+<div class="form-actions"><button type="submit">保存</button>
+<span class="stat-sub">标题与描述<strong>下一次请求</strong>就生效；探测间隔
+<strong>从下一轮开始</strong>生效，正在等的那一轮不会被打断。</span></div>
+</form>
+<h2>留在 .env 里的（只读）</h2>
+<p class="admin-hint">这些改错了会删数据、或把人锁在外面 —— 所以它们不放进网页表单，只在这里让你一眼看到。</p>
+<dl class="kv">${envRows}</dl>`
+
+  return layout({ title: '站点设置 · 管理台', description: site.description, active: 'admin', body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */

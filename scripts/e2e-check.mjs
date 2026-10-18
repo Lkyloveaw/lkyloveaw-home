@@ -1008,7 +1008,9 @@ try {
     // （原来这里断言「这一版是只读的」——那句在我把目标页接通后就成了假话，所以跟着改。）
     check(
       '概览页明说哪些页能写、哪些还只读（不许笼统说「只读」）',
-      /目标<\/strong>页已经能增删改/.test(overview.body) && /账号 \/ 备份 \/ 设置三页仍然是只读的/.test(overview.body),
+      // 每接通一页就来改这一行 —— 它保证概览页那句自述**永远是真的**。
+      /目标<\/strong>与<strong>站点设置<\/strong>两页已经能改/.test(overview.body) &&
+        /账号<\/strong>与<strong>备份<\/strong>两页仍然是只读的/.test(overview.body),
       overview.body.match(/这一版的写动作[^<]*/)?.[0] ?? '(没找到那句话)',
     )
 
@@ -1601,6 +1603,133 @@ try {
           allowedMentions.every((a) => mentions.some((m) => m.startsWith(a))) &&
           /config\.targets\.length.*不再是输入/s.test(storeSrc),
         JSON.stringify(mentions),
+      )
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[站点设置进库（#42）：写后读 · 校验就地重渲染 · 下一轮生效 · 只读 403]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admS = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminS = admS.setCookie.split(';')[0]
+    const csrfS = () => csrfFor(adminS)
+    const settingsForm = (over = {}) => ({
+      action: 'settings-save',
+      'site.title': '验收站（改过）',
+      'site.description': '改过的描述',
+      'probe.intervalSeconds': '5',
+      ...over,
+    })
+
+    const pageS = await get('/admin/settings', { cookie: adminS })
+    check('前提：管理员 GET /admin/settings → 200', pageS.status === 200, `got ${pageS.status}`)
+    check('前提：页面写明 `.env` 只作首次初始值', /只作为首次启动的初始值/.test(pageS.body))
+    check(
+      '前提：表单里是**当前生效值**（建站时那个 `SITE_TITLE`）',
+      /name="site\.title" value="验收站"/.test(pageS.body),
+      (pageS.body.match(/name="site\.title"[^>]*/) ?? ['(无)'])[0],
+    )
+    check(
+      '**不渲染 `SESSION_SECRET` 的值**（只列名字）',
+      !pageS.body.includes(SECRET) && /SESSION_SECRET/.test(pageS.body),
+      pageS.body.includes(SECRET) ? '⚠ 页面上出现了密钥原文' : '只列了名字',
+    )
+
+    // ── 与其它写路由**同一张鉴权面** ──
+    const roS = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookieS = roS.setCookie.split(';')[0]
+    check('只读 GET /admin/settings → **403**', (await get('/admin/settings', { cookie: roCookieS })).status === 403)
+    check(
+      '只读 POST /admin/settings → **403**，不写、不重定向',
+      (await postForm('/admin/settings', { cookie: roCookieS, csrf: csrfFor(roCookieS), form: settingsForm() })).status === 403,
+    )
+    check('缺 csrf → **403**（L3）', (await postForm('/admin/settings', { cookie: adminS, form: settingsForm() })).status === 403)
+    check(
+      '跨站来源 → **403**（L2）',
+      (await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), origin: 'http://evil.example.com', form: settingsForm() })).status === 403,
+    )
+    check('未知 action → **400**（闭集）', (await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: { action: 'settings-reset' } })).status === 400)
+
+    // ── ⑫ 的前置：改之前，探测间隔是启动时那个 env 值（3 秒）──
+    /*
+     * ⚠ 观测到的「两轮之间的间隔」= **探测间隔 + 本轮耗时**（`setTimeout` 排在 finally 里）。
+     * 本轮里有一个 1.5 秒超时的目标，所以 3 秒间隔看起来是 ~4.5 秒。
+     * 因此下面**不写死阈值**，而是拿「改动前的实测基线」当参照。
+     */
+    const stamps = () => [...serverLog.matchAll(/\[probe\] (\S+)/g)].map((m) => Date.parse(m[1])).filter(Number.isFinite)
+    const gapsOf = (ts) => ts.slice(1).map((t, i) => t - ts[i])
+    for (let i = 0; i < 40 && stamps().length < 3; i++) await sleep(500)
+    const beforeGaps = gapsOf(stamps())
+    const baseline = beforeGaps[beforeGaps.length - 1]
+    check(
+      '前提：改之前两轮之间的间隔 ≈ 启动时的 env 值（3 秒 + 本轮耗时）',
+      beforeGaps.length > 0 && baseline > 2000 && baseline < 5500,
+      `gaps=${beforeGaps.join(',')}`,
+    )
+
+    // ── ⑧ 保存 → 302 + **紧接着**取首页，`<title>` 就是新值 ──
+    const savedAt = Date.now()
+    const saved = await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: settingsForm() })
+    check('⑧ 保存 → **302** + notice=settings-saved', saved.status === 302 && /notice=settings-saved/.test(saved.location), `${saved.status} ${saved.location}`)
+    const homeS = await get('/', { cookie: adminS })
+    check('⑧ 紧接着 GET `/` 的 `<title>` 就是新值（不是模块加载时冻结的）', /验收站（改过）<\/title>/.test(homeS.body), (homeS.body.match(/<title>[^<]*/) ?? ['(无)'])[0])
+    check('⑧ 描述也立刻生效（页脚与 meta）', homeS.body.includes('改过的描述'))
+    check('⑧ `/api/status` 的 `probeIntervalSeconds` 也读库（面板上「每 N 秒探测」）', JSON.parse((await get('/api/status', { cookie: adminS })).body).probeIntervalSeconds === 5)
+
+    // ── ⑨⑩⑪ 校验失败：400 + **保留输入** + 库不变 ──
+    const emptyTitle = await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: settingsForm({ 'site.title': '' }) })
+    check('⑨ 空标题 → **400**（不是把空标题存进去）', emptyTitle.status === 400 && /不能为空/.test(emptyTitle.body), `got ${emptyTitle.status}`)
+    check('⑨ 失败页**保留了其它字段的输入**', emptyTitle.body.includes('改过的描述'))
+    check('⑨ 库不变：首页标题仍是刚保存的那个', /验收站（改过）<\/title>/.test((await get('/', { cookie: adminS })).body))
+    const longTitle = await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: settingsForm({ 'site.title': '标'.repeat(61) }) })
+    check('⑩ 61 字标题 → **400**，文案给出上限', longTitle.status === 400 && /最多 60 字/.test(longTitle.body), `got ${longTitle.status}`)
+    const lowInterval = await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: settingsForm({ 'probe.intervalSeconds': '3' }) })
+    check('⑪ 间隔 3 → **400**，文案给出区间', lowInterval.status === 400 && /5–86400/.test(lowInterval.body), `got ${lowInterval.status}`)
+    const nonInt = await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: settingsForm({ 'probe.intervalSeconds': '3.5' }) })
+    check('⑪ 间隔非整数 → **400**', nonInt.status === 400 && /必须是整数/.test(nonInt.body), `got ${nonInt.status}`)
+    check('⑪ 这些失败都**没写库**（间隔仍是 5）', JSON.parse((await get('/api/status', { cookie: adminS })).body).probeIntervalSeconds === 5)
+
+    // ── ⑫ 改间隔（5 秒）**下一轮生效**，且**不打断正在等的那一轮** ──
+    /*
+     * 可观测的真话只有两句：
+     * ①「保存时正在等的那一等仍是旧间隔」—— 它可能等满旧值，这是**对的**行为（上面已断言改之前是 3 秒）；
+     * ②「从某一轮起间隔换成新值，且此后一直是新值」。
+     * 另外顺带证明**没有**「保存后立刻多探一轮」——那才是「打断/重排定时器」的形状。
+     */
+    let afterGaps = []
+    for (let i = 0; i < 60; i++) {
+      await sleep(500)
+      afterGaps = gapsOf(stamps().filter((t) => t >= savedAt - 500))
+      if (afterGaps.length >= 2 && afterGaps.some((g) => g >= baseline + 1500)) break
+    }
+    const firstNew = afterGaps.findIndex((g) => g >= baseline + 1500)
+    check('⑫ 保存后**从某一轮起**间隔真的变长了（比改动前至少多 1.5 秒）', firstNew >= 0, `baseline=${baseline} gaps=${afterGaps.join(',')}`)
+    check(
+      '⑫ 而且此后每一轮都是新间隔（换过去就不再回去）',
+      firstNew >= 0 && afterGaps.slice(firstNew).every((g) => g >= baseline + 1500),
+      `baseline=${baseline} gaps=${afterGaps.join(',')}`,
+    )
+    check(
+      '⑫ **没有**「保存后立刻多探一轮」（不打断正在等的那一轮）',
+      afterGaps.every((g) => g >= 1500),
+      `gaps=${afterGaps.join(',')}`,
+    )
+
+    // ── 未登录：回跳目标认得这个页面（否则登录后被丢回首页）──
+    const anonS = await get('/admin/settings')
+    check('未登录 /admin/settings → 302 且带 next', anonS.status === 302 && anonS.location.includes('next=%2Fadmin%2Fsettings'), `${anonS.status} ${anonS.location}`)
+
+    // ── ⑲ 全仓：运行时没有 `config.siteTitle` / `config.siteDescription` / `config.probeIntervalMs` 的读取点 ──
+    {
+      const readers = fs
+        .readdirSync(path.join(ROOT, 'src'))
+        .filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts'))
+        .filter((f) => /config\.(siteTitle|siteDescription|probeIntervalMs)\b/.test(fs.readFileSync(path.join(ROOT, 'src', f), 'utf8')))
+      check(
+        '⑲ 这三个字段只剩 config.ts 的定义与 settings-store 的首次落值在读（别的页面不许再读）',
+        readers.every((f) => ['config.ts', 'settings-store.ts'].includes(f)),
+        readers.join(', '),
       )
     }
   }

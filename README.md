@@ -164,6 +164,21 @@ npm start
 （这一点实测过一次：`http://ops:hunter2@…` 的原文含内网主机名与口令）。
 出口侧另有脱敏（见「接口」一节），但**入口与出口两道都要做**。
 
+## 站点设置（标题 / 描述 / 探测间隔）
+
+**真源是数据库**：登录后在 **管理台 → 站点设置**里改（`/admin/settings`）。
+标题与描述**下一次请求**就生效；探测间隔**从下一轮开始**生效（正在等的那一轮不会被打断）。
+
+`.env` 里的 `SITE_TITLE` / `SITE_DESCRIPTION` / `PROBE_INTERVAL_SECONDS`
+**只作为首次启动的初始值** —— 首次启动会把当前生效值落进 `settings` 表，此后改 env 不再有任何效果
+（值不同时启动日志里会有一行警告，指明真源是数据库）。
+
+**留在 `.env` 的**：`PROBE_TIMEOUT_MS`（决定单次探测的成败判定，改错会让全站误报）、
+`PROBE_RETENTION_DAYS`（**它会删数据**）、`BACKUP_DIR` / `BACKUP_KEEP`（决定备份写在哪、删几份）、
+以及 `SITE_ORIGIN` / `TRUST_PROXY` / 会话安全参数（**会把人锁在外面**）。
+判据是三条都满足才搬进库：只影响渲染或节奏 · 改错了当场看得出来 · 不需要先有另一条通道才能救。
+它们在管理台的站点设置页上有**只读**的一份展示。
+
 ## 备份与恢复
 
 **自动备份**：服务在探测轮次里降频执行「checkpoint + 备份」（默认每 60 轮 ≈ 1 小时），
@@ -331,10 +346,10 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | --- | --- | --- |
 | `PORT` | `3000` | 监听端口 |
 | `DATABASE_PATH` | `./data/availability.sqlite` | 历史库位置（`users` 表也在这个库里） |
-| `PROBE_INTERVAL_SECONDS` | `60` | 探测间隔 |
-| `PROBE_TIMEOUT_MS` | `5000` | 单次请求超时 |
-| `PROBE_RETENTION_DAYS` | `30` | 历史保留天数，超期自动清理 |
-| `SITE_TITLE` / `SITE_DESCRIPTION` | — | 站点标题与描述 |
+| `PROBE_INTERVAL_SECONDS` | `60` | 探测间隔。⚠ **只作首次初始值**，之后在 管理台 → 站点设置 里改 |
+| `PROBE_TIMEOUT_MS` | `5000` | 单次请求超时（**留 `.env`**：它决定成败判定） |
+| `PROBE_RETENTION_DAYS` | `30` | 历史保留天数，超期自动清理（**留 `.env`**：它会删数据） |
+| `SITE_TITLE` / `SITE_DESCRIPTION` | — | 站点标题与描述。⚠ **只作首次初始值**，之后在 管理台 → 站点设置 里改 |
 | `SESSION_SECRET` | **无（必填）** | 会话 cookie 的签名密钥。**没配就拒绝启动** |
 | `SESSION_TTL_SECONDS` | `604800` | 会话存活时间（7 天）。绝对过期，不滑动续期 |
 | `SESSION_COOKIE_SECURE` | `0` | cookie 的 `Secure` 属性。**HTTP 部署时必须保持 0** |

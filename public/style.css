@@ -429,3 +429,7 @@ main { padding-top: 34px; }
 .target-id { color: var(--fg-faint); font-size: 0.8rem; }
 .target-row .form-row { margin-bottom: 8px; }
 .target-row form { margin: 0; }
+
+/* 管理台站点设置页（#42）：值坏掉时的提示 + 只读 env 清单里的说明 */
+.bad-text { color: var(--bad); }
+.settings-form .stat-sub { margin: 0 0 10px; }

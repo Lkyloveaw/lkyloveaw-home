@@ -940,6 +940,174 @@ console.log(JSON.stringify(out))
   fs.rmSync(tdir, { recursive: true, force: true })
 }
 
+// ════════════════════════════════════════════════════
+section('settings: 首次落值 / DB 优先 / 坏值回退')
+// ════════════════════════════════════════════════════
+/*
+ * 与 target 那节同一条理由：`config` 在 import 时读 env 并冻结，所以每个场景都在**子进程**里跑，
+ * 自带 `DATABASE_PATH` / `SITE_TITLE` / `SITE_DESCRIPTION` / `PROBE_INTERVAL_SECONDS`。
+ */
+{
+  const sdir = fs.mkdtempSync(path.join(root, '.unit-settings-'))
+  const sfile = path.join(sdir, 'scenario.mjs')
+  const fileUrl = (rel) => 'file://' + path.join(root, rel).replace(/\\/g, '/')
+
+  fs.writeFileSync(
+    sfile,
+    `
+import Database from 'better-sqlite3'
+const St = await import(${JSON.stringify(fileUrl('dist/settings-store.js'))})
+const scenario = process.argv[2]
+const out = {}
+const rawRows = () => {
+  const db = new Database(process.env.DATABASE_PATH, { readonly: true })
+  const rows = db.prepare('SELECT key, value FROM settings ORDER BY key').all()
+  db.close()
+  return rows
+}
+
+if (scenario === 'start') {
+  // 与启动顺序一致：initSettings() 就是那个「首次落值」的入口
+  St.initSettings()
+  out.rows = rawRows()
+  out.title = St.getSiteTitle()
+  out.description = St.getSiteDescription()
+  out.intervalSeconds = St.getProbeIntervalSeconds()
+  out.list = St.listSettings().map((s) => ({ key: s.key, value: s.value, bad: s.bad, outOfFormRange: s.outOfFormRange }))
+}
+
+if (scenario === 'corrupt') {
+  // 手工把库改坏（手工改库 / 旧版本留下的值都长这样），再读
+  const db = new Database(process.env.DATABASE_PATH)
+  db.prepare("UPDATE settings SET value = 'abc' WHERE key = 'probe.intervalSeconds'").run()
+  db.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('site.unknown', 'x', 1)").run()
+  db.close()
+  St.initSettings()
+  out.intervalSeconds = St.getProbeIntervalSeconds()
+  out.unknownInList = St.listSettings().some((s) => s.key === 'site.unknown')
+  out.listKeys = St.listSettings().map((s) => s.key)
+}
+
+if (scenario === 'zero') {
+  const db = new Database(process.env.DATABASE_PATH)
+  db.prepare("UPDATE settings SET value = '0' WHERE key = 'probe.intervalSeconds'").run()
+  db.close()
+  St.initSettings()
+  out.intervalSeconds = St.getProbeIntervalSeconds()
+  out.intervalMs = St.getProbeIntervalMs()
+}
+
+console.log(JSON.stringify(out))
+`,
+    'utf8',
+  )
+
+  const srun = (scenario, db, env = {}) =>
+    spawnSync(process.execPath, [sfile, scenario], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DATABASE_PATH: db,
+        SESSION_SECRET: 'unit-settings-secret',
+        SITE_TITLE: '',
+        SITE_DESCRIPTION: '',
+        PROBE_INTERVAL_SECONDS: '',
+        ...env,
+      },
+    })
+  const sjson = (r) => {
+    try {
+      return JSON.parse(String(r.stdout).trim().split('\n').pop())
+    } catch {
+      return { __parseError: String(r.stdout).slice(-200) + String(r.stderr).slice(-300) }
+    }
+  }
+
+  const sdb = path.join(sdir, 's1.sqlite')
+
+  // ── ① 空库 + env → 3 行、值取 env ──
+  const first = srun('start', sdb, { SITE_TITLE: '验收标题', SITE_DESCRIPTION: '验收描述', PROBE_INTERVAL_SECONDS: '42' })
+  const firstOut = sjson(first)
+  check('首启落 3 行（白名单就这 3 个键）', firstOut.rows?.length === 3, JSON.stringify(firstOut.rows))
+  check(
+    '首启的三个生效值都取自 env',
+    firstOut.title === '验收标题' && firstOut.description === '验收描述' && firstOut.intervalSeconds === 42,
+    JSON.stringify(firstOut),
+  )
+  check('首启日志说清「已固定为 X」与来源', /已固定为/.test(first.stdout) && /来源：\.env/.test(first.stdout), first.stdout.trim().split('\n').slice(-1)[0])
+  check('三个键一个都不缺', String(firstOut.list.map((s) => s.key)) === 'site.title,site.description,probe.intervalSeconds', JSON.stringify(firstOut.list))
+
+  // ── ② 再启动一次：幂等、且没有第二次落值日志 ──
+  const second = srun('start', sdb, { SITE_TITLE: '验收标题', SITE_DESCRIPTION: '验收描述', PROBE_INTERVAL_SECONDS: '42' })
+  check('二次启动仍 3 行（幂等）', sjson(second).rows?.length === 3)
+  check('二次启动**没有**第二份落值日志', !/已固定为/.test(second.stdout), second.stdout.trim())
+  check('二次启动 env 与库一致 → **不**打「被忽略」的警告（不凭空吓人）', !/已被忽略/.test(second.stderr), second.stderr.trim())
+
+  // ── ③ env 与库不同 → 读库值 + 警告 ──
+  const third = srun('start', sdb, { SITE_TITLE: 'env 里改过的标题', SITE_DESCRIPTION: '验收描述', PROBE_INTERVAL_SECONDS: '99' })
+  const thirdOut = sjson(third)
+  check('**库值优先**：env 改成别的，读出来还是库里那个', thirdOut.title === '验收标题' && thirdOut.intervalSeconds === 42, JSON.stringify(thirdOut))
+  check('并且打出「env 已被忽略」的警告', /已被忽略/.test(third.stderr) && /真源是数据库/.test(third.stderr), third.stderr.trim().slice(0, 180))
+  check('警告里给出「要改去管理台」的落点', /管理台 → 站点设置/.test(third.stderr), third.stderr.trim().slice(-80))
+
+  // ── ④ 再改一次 env：仍然无效（env 确实不再参与）──
+  const fourth = srun('start', sdb, { SITE_TITLE: '第三次改 env', PROBE_INTERVAL_SECONDS: '7' })
+  check('再改 env 仍然无效（库值不动）', sjson(fourth).title === '验收标题' && sjson(fourth).intervalSeconds === 42, JSON.stringify(sjson(fourth)))
+
+  // ── ⑤ 坏值回退默认 + console.error ──
+  const corrupt = srun('corrupt', sdb)
+  const corruptOut = sjson(corrupt)
+  check('库里 `"abc"` → 回退默认 60 秒，不抛', corruptOut.intervalSeconds === 60, JSON.stringify(corruptOut))
+  check('坏值回退时打出 `console.error`（不是静默用 NaN 跑）', /已回退默认值/.test(corrupt.stderr), corrupt.stderr.trim().slice(-160))
+
+  // ── ⑥ 代码不认识的键：忽略 + 警告，且**不进页面清单** ──
+  check('未知键被忽略、不进 `listSettings()`', corruptOut.unknownInList === false && !String(corruptOut.listKeys).includes('unknown'), JSON.stringify(corruptOut.listKeys))
+  check('未知键在启动时警告一次', /不认识的设置键/.test(corrupt.stderr), corrupt.stderr.trim().slice(0, 160))
+
+  // ── ⑦ 库里 0 → 回退默认（不是 0 秒空转）──
+  const zero = sjson(srun('zero', sdb))
+  check('库里 `intervalSeconds = 0` → 回退默认 60（不是 0 秒空转）', zero.intervalSeconds === 60 && zero.intervalMs === 60000, JSON.stringify(zero))
+
+  // ── 写路径的逐键校验（区间只有一个来源）──
+  {
+    const St = await import(mod('dist/settings-store.js'))
+    check('校验：空标题 → 拒', typeof St.validateSettingValue('site.title', '') === 'string')
+    check('校验：60 字标题 → 过', St.validateSettingValue('site.title', '标'.repeat(60)) === null)
+    check('校验：61 字标题 → 拒', typeof St.validateSettingValue('site.title', '标'.repeat(61)) === 'string')
+    check('校验：描述可以为空（0–200）', St.validateSettingValue('site.description', '') === null)
+    check('校验：201 字描述 → 拒', typeof St.validateSettingValue('site.description', '描'.repeat(201)) === 'string')
+    check('校验：间隔 5 与 86400 → 过', St.validateSettingValue('probe.intervalSeconds', '5') === null && St.validateSettingValue('probe.intervalSeconds', '86400') === null)
+    check('校验：间隔 3 → 拒，且文案给出区间', /5–86400/.test(String(St.validateSettingValue('probe.intervalSeconds', '3'))), String(St.validateSettingValue('probe.intervalSeconds', '3')))
+    check('校验：间隔非整数 → 拒', typeof St.validateSettingValue('probe.intervalSeconds', '3.5') === 'string')
+    check('校验：未知键 → 拒', typeof St.validateSettingValue('site.nope', 'x') === 'string')
+  }
+
+  // ── ⑧ 低于**表单**下界的值（来自 .env 的首次落值）照用，不回退 ──
+  /*
+   * 这是落地时踩到的一个真坑：读路径一开始拿**表单区间**（5–86400）当「值坏没坏」的判据，
+   * 于是 `PROBE_INTERVAL_SECONDS=3` 的部署升级后被**静默**改成每 60 秒探一次
+   * （实测：整个 e2e 的探测节奏被它打乱、面板曲线全空）。
+   * 表单区间管的是「有人手打的值」，读路径只管「这个值坏了没有」—— 两件事。
+   */
+  {
+    const low = sjson(srun('start', path.join(sdir, 'low.sqlite'), { PROBE_INTERVAL_SECONDS: '3' }))
+    check('env 里 3 秒（低于表单下界 5）→ **照用 3**，不回退成 60', low.intervalSeconds === 3, JSON.stringify(low.intervalSeconds))
+    check('但页面上会标出「超出表单区间」（想改就得落回区间内）', low.list.some((s) => s.key === 'probe.intervalSeconds' && s.outOfFormRange === true), JSON.stringify(low.list))
+    check('它不算「坏值」（`bad=false`）', low.list.every((s) => s.key !== 'probe.intervalSeconds' || s.bad === false), JSON.stringify(low.list))
+  }
+
+  // ── ⑨ 写路径的「不改就不拦」例外 ──
+  {
+    const St = await import(mod('dist/settings-store.js'))
+    check('校验：间隔仍是库里那个 3（一字不差）→ **放行**（用户只是在改标题）', St.validateSettingValue('probe.intervalSeconds', '3', '3') === null, String(St.validateSettingValue('probe.intervalSeconds', '3', '3')))
+    check('校验：把它从 5 改成 3 → **拒**（要改就必须守区间）', typeof St.validateSettingValue('probe.intervalSeconds', '3', '5') === 'string')
+    check('校验：不改标题时超长也一样放行（原值一字不差）', St.validateSettingValue('site.title', '标'.repeat(61), '标'.repeat(61)) === null)
+  }
+
+  fs.rmSync(sdir, { recursive: true, force: true })
+}
+
 if (failed === 0) {
   console.log(`✅ 全部通过：${passed} 项`)
 } else {

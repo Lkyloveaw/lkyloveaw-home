@@ -216,16 +216,40 @@ function parseTrustProxy(raw: string | undefined): string[] | false {
   return list.length ? list : false
 }
 
+/**
+ * 三个「搬进数据库」的设置项的**代码默认值**（`docs/settings-source-decision.md` §0）。
+ *
+ * 它们是这条链的最后一环：**DB → `.env` → 这里**。首次启动时 `initSettings()` 把
+ * 「当前生效值」（通常是 env，没配就是这三个）落进 `settings` 表，此后 `.env` 不再参与。
+ *
+ * 为什么集中在这里而不是散在 `settings-store.ts`：它们同时是**这个程序的默认行为**
+ * （`config.siteTitle` 等仍从它们取默认），也是「恢复默认值」语义上的那个默认值。
+ */
+export const DEFAULT_SETTINGS = {
+  'site.title': '我的个人站',
+  'site.description': '事情分享，以及内网各业务系统的可用性',
+  'probe.intervalSeconds': '60',
+} as const
+
 export const config = {
   port: num('PORT', 3000),
   host: process.env.HOST?.trim() || '0.0.0.0',
-  siteTitle: process.env.SITE_TITLE?.trim() || '我的个人站',
+  /**
+   * ⚠ 这三个字段现在仍然有值，但**运行时不该再有人读它们**（除 `settings-store` 的首次落值）：
+   * 真源已经是 `settings` 表。呈现层改用 `settings-store` 的 `getSiteTitle()` / `getSiteDescription()` /
+   * `getProbeIntervalMs()` —— 否则「网页上改完标题、有的页面变、有的不变」。
+   */
+  siteTitle: process.env.SITE_TITLE?.trim() || DEFAULT_SETTINGS['site.title'],
   siteDescription:
-    process.env.SITE_DESCRIPTION?.trim() || '事情分享，以及内网各业务系统的可用性',
+    process.env.SITE_DESCRIPTION?.trim() || DEFAULT_SETTINGS['site.description'],
   databasePath: resolveFromRoot(process.env.DATABASE_PATH?.trim() || './data/availability.sqlite'),
   contentDir: resolveFromRoot(process.env.CONTENT_DIR?.trim() || './content'),
   publicDir: resolveFromRoot('./public'),
-  probeIntervalMs: num('PROBE_INTERVAL_SECONDS', 60) * 1000,
+  /**
+   * 探测间隔（毫秒）。与上面两个字段同一条规则：**只作首次落值的来源**。
+   * 运行时读它的是 `settings-store` 的 `getProbeIntervalMs()`（`probe.ts` 每轮重读一次）。
+   */
+  probeIntervalMs: num('PROBE_INTERVAL_SECONDS', Number(DEFAULT_SETTINGS['probe.intervalSeconds'])) * 1000,
   probeTimeoutMs: num('PROBE_TIMEOUT_MS', 5000),
   retentionDays: num('PROBE_RETENTION_DAYS', 30),
   targets: loadTargets(),

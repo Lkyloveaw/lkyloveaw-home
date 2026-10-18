@@ -6,6 +6,7 @@
 import { config, type ProbeTarget } from './config.js'
 import { recordResults, pruneOldProbes, checkpoint, type ProbeResult } from './store.js'
 import { listEnabledTargets } from './targets-store.js'
+import { getProbeIntervalMs } from './settings-store.js'
 import { sweepSessions } from './sessions-store.js'
 import { classifyRuntimeError } from './sanitize.js'
 import { runBackup } from './backup.js'
@@ -169,7 +170,19 @@ export function startProbing(): void {
       // 探测循环是长期驻留的，一次失败绝不能让它退出。
       console.error('[probe] 本轮探测异常：', (err as Error).message)
     } finally {
-      timer = setTimeout(() => void tick(), config.probeIntervalMs)
+      /*
+       * 间隔**每一轮重读一次**（`docs/settings-source-decision.md` §4）：网页上把间隔改成 10 秒，
+       * 不用重启、也不用碰这里的 `timer` —— 下一轮就按新值排。
+       *
+       * ⚠ 语义要说准：**改完不打断正在等的那一轮**。若这一轮刚结束、定时器已经在等 60 秒，
+       * 此刻把间隔改成 10 秒，**下一次探测仍会等满这 60 秒**，之后每次才是 10 秒。
+       * 这是**对**的行为（打断一个已排好的定时器只会让「下次什么时候探」变得不可预测），
+       * 所以设置页上把那句话写在明面上。
+       *
+       * 为什么每轮重读而不是缓存：与目标清单同一条判断（#26 §6）—— 一次单表主键 SELECT 是微秒级，
+       * 而缓存要引入失效逻辑与「改了不生效」这个新的静默失败。
+       */
+      timer = setTimeout(() => void tick(), getProbeIntervalMs())
       timer.unref?.()
     }
   }
