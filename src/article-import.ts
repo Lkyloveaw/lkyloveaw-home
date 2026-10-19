@@ -106,7 +106,9 @@ function buildInline(tokens: MdToken[], warnings: string[]): PMNode[] {
 
       case 'image': {
         const src = String(t.attrGet('src') ?? '')
-        const alt = String(t.attrGet('alt') ?? '')
+        // ⚠ markdown-it 把图片 alt 放在 token.content 里，**不在 attr 里** ——
+        //    写成 attrGet('alt') 的话 alt 永远是空串（#52 落地时实测到并修掉）。
+        const alt = String(t.content || t.attrGet('alt') || '')
         if (!isSafeUrl(src)) {
           warnings.push(`图片地址的协议不安全，已丢图片（保留 alt 文本）：${clip(src)}`)
           pushText(alt)

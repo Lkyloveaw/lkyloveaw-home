@@ -319,6 +319,15 @@ console.log('\n[八、docToMarkdown 往返稳定（#50 的 Markdown 编辑区前
   const codeBack = markdownToDoc(docToMarkdown(code)).doc
   check('代码块往返：内容一字不差（含反引号与星号）', codeBack.textContent.includes('const a = `x` * 2 // 反引号与星号'))
 
+  // 图片（#52 媒体层的落点）：alt 与 src 都要活下来。
+  const imgName = 'a'.repeat(64) + '.png'
+  const imgDoc = markdownToDoc('![图片](/media/' + imgName + ')\n').doc
+  const imgHtml = docToHtml(imgDoc)
+  const imgBack = docToMarkdown(imgDoc).trim()
+  check('图片：导入 → 文档带 image 节点', JSON.stringify(imgDoc.toJSON()).indexOf('image') >= 0, imgBack)
+  check('图片：alt 在导入时不丢（回写成同一个片段）', imgBack === '![图片](/media/' + imgName + ')', imgBack)
+  check('图片：读面渲染成 /media/ 的 img（不是 data URI）', imgHtml.indexOf('/media/' + imgName) >= 0 && imgHtml.indexOf('data:') < 0 && imgHtml.indexOf('alt=') >= 0, imgHtml.trim())
+
   // 合并单元格与列宽**表达不出来** —— 断言这个已知损失是**真的**（而不是「也许没事」）
   const merged = docFromJson({
     type: 'doc',
