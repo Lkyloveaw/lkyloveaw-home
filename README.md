@@ -243,8 +243,19 @@ npm start
 ## 备份与恢复
 
 **自动备份**：服务在探测轮次里降频执行「checkpoint + 备份」（默认每 60 轮 ≈ 1 小时），
-产物在 `BACKUP_DIR`（默认 `./data/backups`），按日期命名，滚动保留 `BACKUP_KEEP` 份（默认 7）。
+产物在 `BACKUP_DIR`（默认 `./data/backups`），**按日期一天一份**，滚动保留 `BACKUP_KEEP` 份（默认 7）。
 备份失败**只记日志、不中断探测**。
+
+一天一份是**三件套**：
+
+| 部分 | 是什么 |
+| --- | --- |
+| `<日期>.sqlite` | 数据库快照（文章、修订、探测历史、账号、会话都在里面） |
+| `<日期>.media/` | 媒体快照（文章配图）。**硬链接**到 `MEDIA_DIR` 里的原文件，所以没变过的图不会在 7 份日备份里重复占空间 |
+| `<日期>.manifest.json` | 清单：每张图的文件名 / 字节数 / 哈希，用来校验快照完整 |
+
+> 升级前的**旧格式只有 `<日期>.sqlite`**：它**照旧滚动、照旧能校验与恢复**，不会因为「缺媒体」被新逻辑删掉；
+> 下一次为那天备份时会**自动补上**媒体快照与清单（数据库文件一字不动）。
 
 ### ⚠ 不要用 `cp` 备份数据库
 
@@ -259,27 +270,32 @@ npm start
 ### 手动操作
 
 ```bash
-node dist/cli/backup.js                  # 立刻备份一次
-node dist/cli/backup.js --list           # 列出备份，并逐个校验能不能用
-node dist/cli/backup.js --verify <file>  # 校验一份备份（恢复前必做）
+node dist/cli/backup.js                   # 立刻备份一次
+node dist/cli/backup.js --list            # 列出备份（数据库判决 + 媒体判决）
+node dist/cli/backup.js --verify <日期>   # 按日期校验：数据库 / 媒体两个判决分开给
+node dist/cli/backup.js --verify <文件>   # 校验一份 .sqlite（兼容旧用法）
+node dist/cli/backup.js --restore <日期>  # 按日期整站恢复（数据库 + 媒体）
 ```
+
+⚠ `--restore` **只能从命令行发起**——没有网页入口。被盗的会话不该能一键覆盖数据。
 
 ### 恢复步骤
 
-1. **停服务**（避免恢复过程中有写入）。
-2. **先校验备份**：`node dist/cli/backup.js --verify <备份文件>`。
+1. **停服务**（恢复过程中不能有写入）。
+2. **先校验**：`node dist/cli/backup.js --verify <日期>`。
    ⚠ **不要跳过这一步**——把一份空库盖到好库上是最常见的恢复事故，而空库「看起来」是正常的文件。
-3. 移走当前主库**以及残留的 `-wal` / `-shm`**：
+3. **恢复**：`node dist/cli/backup.js --restore <日期>`。它会：
+   - 把**当前**数据库（连同残留的 `-wal` / `-shm`）与媒体目录移到
+     `BACKUP_DIR/.restore-<时间戳>/` **留证**（不是删掉），再把快照复制回来；
+   - **备份快照留在原处**（恢复是复制，不是搬走）；
+   - 旧格式（只有 `.sqlite`）也能恢复，但**只恢复数据库**，当前媒体目录一个文件都不动。
+4. 起服务，确认面板/`/api/status` 能看到历史数据。
+5. ⚠ **恢复会把当时的会话一起带回来**：`sessions` 表跟库一起搬，那份备份里当时还活着的会话会重新有效。
+   必要时在 管理台 → 账号 里踢掉全部设备。
 
-   ```bash
-   mv data/availability.sqlite /tmp/availability.broken.sqlite
-   rm -f data/availability.sqlite-wal data/availability.sqlite-shm
-   ```
-
-   ⚠ **必须一起移走**。旧的 `-wal` 配上新的主库，SQLite 会把旧 WAL 当成自己的，
-   实测结果是**读到了另一个库的数据**（不是报错，是静默给错数据）。
-4. 把备份拷回 `DATABASE_PATH` 的位置。
-5. 起服务，确认面板/`/api/status` 能看到历史数据。
+> 旧的 `-wal` / `-shm` 配上新的主库，SQLite 会把旧 WAL 当成自己的，
+> 实测结果是**读到了另一个库的数据**（不是报错，是静默给错数据）。所以恢复**必须把它们一起移走**——
+> `--restore` 已经替你做了这一步。
 
 ### 关于 `-wal` 与 checkpoint
 

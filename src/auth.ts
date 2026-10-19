@@ -62,6 +62,9 @@ export function isKnownPath(pathname: string): boolean {
   if (KNOWN_PAGES.has(pathname)) return true
   if (pathname.startsWith('/posts/')) return true
   if (pathname.startsWith('/tags/')) return true
+  // 媒体（#52）：匿名取图会被闸门 302 到登录页，登录后要**回到那张图**而不是被丢回首页。
+  // 它仍在闸门后（`/media/` 不在 PUBLIC_PATHS 里）—— 这里只是让 `next` 认得它。
+  if (pathname.startsWith('/media/')) return true
   return false
 }
 

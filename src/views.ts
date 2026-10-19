@@ -608,7 +608,7 @@ export function adminBackupsPage(
       : files.length
         ? `<table class="admin-table"><thead><tr><th>产物</th><th>大小</th><th>时间</th></tr></thead>
 <tbody>${rows}</tbody></table>
-<p class="stat-sub">只保留最近 <strong>${opts.backupKeep}</strong> 份，更旧的会被自动删掉（按日期命名，同一天只留一份）。</p>`
+<p class="stat-sub">只保留最近 <strong>${opts.backupKeep}</strong> 份，更旧的会被自动删掉。一天一份 = 数据库 + 媒体快照 + 清单，同一天只留一份。</p>`
         : `<p class="empty">备份目录还是空的 —— 点上面的按钮要一份，或者等探测轮次里的自动备份。</p>`
 
   const body =
@@ -620,7 +620,7 @@ export function adminBackupsPage(
       : '') +
     `<h1>备份</h1>
 <p class="admin-hint">服务在探测轮次里<strong>降频自动备份</strong>（默认每 <code>CHECKPOINT_EVERY_ROUNDS</code> 轮 ≈ 1 小时一次；
-今天已有一份可用的就跳过）。这里可以<strong>手动多要一份</strong>：先做一次 checkpoint、再复制整库、校验产物、滚动清理。</p>
+今天已有一份可用的就跳过）。这里可以<strong>手动多要一份</strong>：先做一次 checkpoint、再复制整库、给媒体做一份硬链接快照、写清单、校验产物、滚动清理。</p>
 <form method="post" action="/admin/backups" class="form-actions">${csrfField()}
 <input type="hidden" name="action" value="backup-now">
 <button type="submit">立即备份一次</button>

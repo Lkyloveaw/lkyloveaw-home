@@ -25,6 +25,9 @@ fs.rmSync(tmp, { recursive: true, force: true })
 fs.mkdirSync(tmp, { recursive: true })
 const DB = path.join(tmp, 'probe.sqlite')
 const BK = path.join(tmp, 'backups')
+// 媒体目录也指到临时目录：备份现在会带一份媒体快照，绝不能读真实 data/。
+const MEDIA = path.join(tmp, 'media')
+fs.mkdirSync(MEDIA, { recursive: true })
 
 const TEST_USER = 'probeuser'
 const TEST_PASS = 'probe-password-1234'
@@ -54,6 +57,7 @@ const child = spawn(process.execPath, ['dist/server.js'], {
     BACKUP_EVERY_ROUNDS: '1',
     BACKUP_DIR: BK,
     BACKUP_KEEP: '3',
+    MEDIA_DIR: MEDIA,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
@@ -103,9 +107,9 @@ try {
   if (gotBackupFile) {
     const bkFile = path.join(BK, fs.readdirSync(BK).find((f) => f.endsWith('.sqlite')))
     const out = execFileSync(process.execPath, ['dist/cli/backup.js', '--verify', bkFile], {
-      cwd: ROOT, encoding: 'utf8', env: { ...process.env, DATABASE_PATH: DB, BACKUP_DIR: BK },
+      cwd: ROOT, encoding: 'utf8', env: { ...process.env, DATABASE_PATH: DB, BACKUP_DIR: BK, MEDIA_DIR: MEDIA },
     })
-    check('产物通过 --verify（表在且有数据）', /✅ 备份可用/.test(out), out.split('\n')[2] || '')
+    check('产物通过 --verify（表在且有数据）', /✅ 数据库判决/.test(out), out.split('\n')[2] || '')
   } else {
     check('产物通过 --verify（表在且有数据）', false, '没有产物可校验')
   }

@@ -1373,6 +1373,11 @@ try {
     // 未登录 → 与文章**同一条**可见性边界，不是一个能白拿图片的口子
     const anonMedia = await fetch(BASE + '/media/' + mediaNameOk, { redirect: 'manual' })
     check('未登录 → **302**（和文章一样要登录）', anonMedia.status === 302, `got ${anonMedia.status}`)
+    check(
+      '未登录取图会**回跳这张图**（`/media/` 是已知路由，登录后不是被丢回首页）',
+      (anonMedia.headers.get('location') ?? '').includes('next=' + encodeURIComponent('/media/' + mediaNameOk)),
+      anonMedia.headers.get('location') ?? '',
+    )
 
     // 名字即安全边界
     const badNames = [

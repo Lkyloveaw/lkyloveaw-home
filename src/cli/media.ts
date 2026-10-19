@@ -4,6 +4,7 @@
  * ```
  * node dist/cli/media.js          只列清单 + 总字节（**预演**，不删任何东西）
  * node dist/cli/media.js --yes    真删
+ * node dist/cli/media.js --force  越过「零引用」保护（配合 --yes 才真删）
  * ```
  *
  * 规矩（逐条来自规格）：
@@ -17,11 +18,12 @@
  * - 草稿与**历史修订**里引用的图也算被引用（user story 38）—— 退回旧版时不能断图。
  */
 import fs from 'node:fs'
-import { imageNamesInDoc, mediaPath, orphanMedia } from '../media.js'
+import { imageNamesInDoc, listMedia, mediaPath, orphanMedia } from '../media.js'
 import { allArticleBodies, closeStore, initStore } from '../store.js'
 
 function main(): void {
   const yes = process.argv.includes('--yes')
+  const force = process.argv.includes('--force')
 
   let bodies: string[]
   try {
@@ -51,6 +53,7 @@ function main(): void {
     return
   }
 
+  const all = listMedia()
   const orphans = orphanMedia(referenced)
   const sizes = orphans.map((name) => {
     try {
@@ -65,12 +68,21 @@ function main(): void {
   console.log(`孤图：**${orphans.length}** 个，合计 ${(totalBytes / 1024).toFixed(1)} KiB`)
   orphans.forEach((name, i) => console.log(`  ${name}  ${((sizes[i] ?? 0) / 1024).toFixed(1)} KiB`))
 
+  // 零引用保护：库读得动但没有引用、媒体目录却有东西 → 先别删（user story 50）。
+  if (referenced.size === 0 && all.length > 0 && !force) {
+    console.error('\n❌ 引用集是空的（库里一篇文章正文都没有），但媒体目录里有 ' + all.length + ' 个文件 —— **拒绝清理**。')
+    console.error('   这可能是「配置指错了库」，而不是「真的没有文章」；照单删就是把图全清掉。')
+    console.error('   如果这确实是全新站点（图传了、还没插进文章），加 `--force` 再跑。')
+    process.exitCode = 1
+    return
+  }
   if (!orphans.length) {
     console.log('\n没有孤图，没什么可清的。')
     return
   }
   if (!yes) {
     console.log('\n这是**预演**：没有删任何东西。确认无误后加 `--yes` 再跑一次。')
+    if (force) console.log('（本次带了 `--force`：零引用保护已越过。）')
     return
   }
 
