@@ -116,7 +116,7 @@ function toPost(row: ArticleRow): Post | null {
  * ⚠ 名字里的「Published」是**纪律的一部分**，不是啰嗦：过滤维度有两个（草稿 / 已删除），
  * 布尔参数会有四种组合、漏传一个就是泄漏。所以出口按**读者**命名 ——
  * 「名字本身在说我是给谁看的，diff 时能一眼审出泄漏」（规格 #48 的出口表）。
- * 管理台的出口叫 `listArticlesForAdmin()`，回收站的那个叫 `listTrashedArticles()`（都还没实现，归 #50/#51）。
+ * 管理台的出口叫 `listArticlesForAdmin()`，回收站的那个叫 `listTrashedArticles()`（#50/#51 已落地）。
  */
 export function listPublishedPosts(): Post[] {
   const posts: Post[] = []

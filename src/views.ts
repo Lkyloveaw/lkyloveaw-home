@@ -860,7 +860,7 @@ ${statusBlock(status)}
     <h2>最近分享</h2>
     <a class="more" href="/posts">全部 →</a>
   </div>
-  ${posts.length ? posts.slice(0, 4).map(postCard).join('\n') : '<p class="empty">还没有文章。在 <code>content/</code> 下放一个 <code>.md</code> 就会出现。</p>'}
+  ${posts.length ? posts.slice(0, 4).map(postCard).join('\n') : '<p class="empty">还没有文章。登录后在 <strong>管理台 → 文章</strong> 里写一篇就会出现。</p>'}
 </section>`
   return layout(
     { title: '首页', description: site.description, active: 'home', body },
@@ -977,7 +977,8 @@ export function aboutPage(site: { title: string; description: string }): string 
   <h1>关于</h1>
   <p>这里记录我自己折腾过的事情，以及内网各业务系统的可用性。</p>
   <h2>怎么加一篇文章</h2>
-  <p>在 <code>content/</code> 下新建一个 <code>.md</code> 文件，开头写几行元信息即可：</p>
+  <p>登录后在 <strong>管理台 → 文章</strong> 里新建即可 —— 写、改、发布、撤下都在网页上，改完立刻生效，不用登服务器。</p>
+  <p>只有在<strong>首次导入</strong>（或跑 <code>node dist/cli/articles.js --reimport</code>）时才会读 <code>content/</code> 下的 <code>.md</code>。它的格式是：</p>
   <pre><code>---
 title: 标题
 date: 2026-01-01

@@ -2,7 +2,7 @@
 
 一个 Fastify + TypeScript 单进程站点：
 
-- **事情分享**：`content/` 下的 Markdown 文件，带 frontmatter，服务端渲染文章列表与详情页；
+- **事情分享**：文章写在网页里（登录后 **管理台 → 文章**），真源是 SQLite；`content/` 下的 Markdown 只在**首次导入**时读一次。服务端渲染文章列表与详情页；
 - **内网业务系统可用性**：服务端按固定间隔探测**库里的目标清单**（首次启动时从 `targets.json` 导入一次），把每次结果写进 SQLite，面板展示当前状态、可用率、延迟、连续可用时长、状态时间线，以及整体可用率曲线与各系统延迟曲线。
 - **自管**：登录后有管理台 —— 目标、账号、备份、站点设置都在网页上管（见「管理台」一节）。
 
@@ -305,14 +305,26 @@ node dist/cli/backup.js --restore <日期>  # 按日期整站恢复（数据库 
 
 ## 写一篇文章
 
+**在网页上写**：登录后进 **管理台 → 文章**（`/admin/articles`）—— 新建 / 编辑 / 发布 / 撤下都在这里，
+**改完立刻生效**（不用重启、不用登服务器）。每次保存留一版**全文快照**（修订历史，可退回）；
+删除先**进回收站**（可还原，只有点「彻底删除」才真删）。
+
+- **正文以结构化文档保存**（不是 Markdown、也不是 HTML），读面按**闭集 schema** 在服务端渲染
+  （`src/article-doc.ts` / `src/article-html.ts`）；schema 里不启用 raw HTML 节点，所以可渲染的标签集是**闭集**。
+- **草稿对读者不存在**：新建默认是草稿 —— 不在任何列表、不在标签页、直链 **404**；但作者能在**管理台内**打开并预览。
+- **slug** 手填（留空用日期生成默认值），**发布后不可改**；与已有文章（含草稿、含回收站里的）撞名 → 400，并给出占用者标题。
+- **图片**：写作区可直接上传（一次一张），拿到可粘贴的 `![图片](/media/<sha256>.<ext>)` 片段。
+
+### `content/` 只是**首次导入**的来源（不再是真源）
+
 > ⚠ **2026-10-17 起，`content/` 下的 Markdown 不再是真源**（票 [#32](https://github.com/Lkyloveaw/lkyloveaw-home/issues/32) / [#54](https://github.com/Lkyloveaw/lkyloveaw-home/issues/54)）：
 > 文章的真源是 SQLite 的 `articles` 表，`content/*.md` **只在「首次导入」时读一次**（库为空时）。
-> **网页写路径还没落地**（[#50](https://github.com/Lkyloveaw/lkyloveaw-home/issues/50) 在做），
-> 在那之前改文章的办法是：改 `content/` 下的文件 → `node dist/cli/articles.js --reimport`。
-> 改完文件**直接重启是没有效果的**（启动时只打一行警告），这不是 bug。
-> 下面这段保留的是**导入格式**的说明 —— 它仍然准确地描述了「一个 `.md` 该怎么写」。
+> 导入之后改文件**没有任何效果**（启动时只打一行警告），这不是 bug。
+> 需要**按文件重导**时走逃生口：`node dist/cli/articles.js --reimport` —— 平时改文章请用网页。
 
-在 `content/` 下放一个 `.md`（**它会在首次导入时被读进库**）：
+下面这段是**导入格式**的说明 —— 它仍然准确地描述「一个 `.md` 该怎么写」：
+
+在 `content/` 下放一个 `.md`：
 
 ```markdown
 ---
@@ -327,15 +339,13 @@ summary: 可选的一句话摘要
 
 文件名形如 `2026-01-01-hello.md` 时，日期前缀会被去掉，slug 为 `hello`。
 
-**导进库之后，正文以结构化文档保存**，读面按**闭集 schema** 在服务端渲染
-（`src/article-doc.ts` / `src/article-html.ts`）。导入器认得的构造见 `src/article-import.ts`：
+导入器认得的构造见 `src/article-import.ts`：
 `##` 标题 · 有序/无序列表 · 围栏代码块（**连语言标注一起**）· 引用块 · GFM 表格 · 行内代码 / 粗体 / 斜体 / 链接 / 图片。
 **认不出的构造会打警告**（`--reimport` 的输出里），不会被静默丢掉。
 
-**`draft: true` 的文章不出现在任何列表里，也（按设计）不能通过直链访问**——
-直接访问 `/posts/<slug>` 会得到 **404**。原因是读面出口只取「已发布且不在回收站」的行：
-`listArticlesForReaders()` 的 `WHERE draft = 0 AND deleted_at IS NULL`，
-而 `getPost()` 只从同一个出口的结果里找。
+**`draft: true` 的文章不出现在任何列表里，也不能通过直链访问**——直接访问 `/posts/<slug>` 会得到 **404**。
+原因是读面出口只取「已发布且不在回收站」的行：`listPublishedPosts()`（内部是 `listArticlesForReaders()` 的
+`WHERE draft = 0 AND deleted_at IS NULL`），而 `getPublishedPost()` 只从同一个出口的结果里找。
 
 > 这条曾经与实现矛盾：旧版 README 写着「不出现在列表里，**但可以通过直链访问**」，
 > 而实测是 404。**实现比文档更严格**，所以改的是文档（2026-10-15 决定）。
@@ -352,6 +362,7 @@ docker compose up -d --build
 
 - **改目标不再需要重启**：登录后在 管理台 → 目标 里改，下一轮探测生效。
   `targets.json` 只在数据库里的 `targets` 表为空时（全新部署的第一次启动）被导入一次，之后完全忽略。
+- **文章也不再来自 `content/`**：真源是同一个 SQLite 的 `articles` 表，`content/` 只在首次导入时读一次（见「写一篇文章」）。
 - 历史数据在宿主机的 `./data/availability.sqlite`
 
 ## 自检
@@ -360,14 +371,14 @@ docker compose up -d --build
 npm run verify        # 下面这一串，一条命令跑完（不含 e2e）
 npm run check:all     # = verify + check:e2e（全量，提交前该跑这个）
 npm run check:unit    # 凭据 / 会话 / 目标 / 设置 / 目录三态等纯函数与子进程断言（245 项，不需要起服务）
-npm run check:media   # 媒体上传、去重、拒绝与磁盘布局（93 项）
-npm run check:article # 文章流水线：解析、预览、发布、回收站（32 项）
+npm run check:media   # 媒体落盘、去重、拒绝、引用提取与孤图判定（35 项）
+npm run check:article # 文章流水线 Markdown→文档→HTML：结构等价、闭集、图片（96 项）
 npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（32 项）
 npm run check:chart   # 曲线几何的交叉断言（40 项）+ 面板 DOM 行为（47 项）
 npm run check:style   # 样式：WCAG 对比度逐对算比值、类名覆盖、两套平面、窄屏与打印（71 项）
-npm run check:backup  # 入口校验、checkpoint、备份与恢复（50 项）+ 探测循环里真的调了备份（10 项）
+npm run check:backup  # 入口校验、checkpoint、备份三件套与恢复（92 项）+ 探测循环里真的调了备份（11 项）
 npm run check:restart # 真杀进程再起：历史与会话是否活过重启（17 项）
-npm run check:e2e     # 真实起服务、真实探测、逐项断言（444 项，需要先 npm run build）
+npm run check:e2e     # 真实起服务、真实探测、逐项断言（485 项，需要先 npm run build）
 ```
 
 ### ⚠ 写安全断言时的一条硬规矩

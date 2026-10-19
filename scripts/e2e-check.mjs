@@ -284,11 +284,18 @@ try {
     const r = await authed(p)
     check(`GET ${p} -> ${want}`, r.status === want, `got ${r.status}`)
   }
-  const tag = await authed('/tags/' + encodeURIComponent('运维'))
-  check('GET /tags/运维 -> 200', tag.status === 200, `got ${tag.status}`)
-  const post = await authed('/posts/why-single-process')
-  check('GET /posts/:slug -> 200', post.status === 200)
-  check('文章渲染出 pre/code', post.body.includes('<pre><code'))
+  // ── 老 URL 契约（研究 §5.1 第 1 条）—— #53 把它从「一次性人工检查」变成常驻断言 ──
+  // 这不是普通路由冒烟：导入自 content/ 的两篇之后，既有 slug 与中文标签必须**一字不差**地继续可用。
+  {
+    const tag = await authed('/tags/' + encodeURIComponent('运维'))
+    check('老 URL：GET /tags/运维 -> 200（中文标签没被编码坏）', tag.status === 200, `got ${tag.status}`)
+    check('老 URL：标签页真的列出了那篇老文章', tag.body.includes('/posts/why-single-process'))
+    const post = await authed('/posts/why-single-process')
+    check('老 URL：GET /posts/why-single-process -> 200', post.status === 200, `got ${post.status}`)
+    check('老 URL：正文真的渲染了（不是空壳）', post.body.includes('<pre><code') && post.body.includes('用 Node 单进程同时做站点和探活'))
+    const second = await authed('/posts/uptime-metrics')
+    check('老 URL：第二篇老文章也在（/posts/uptime-metrics）', second.status === 200, `got ${second.status}`)
+  }
 
   console.log('\n[可用性面板]')
   const st = await authed('/status')

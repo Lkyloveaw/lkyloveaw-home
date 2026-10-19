@@ -1,8 +1,8 @@
 /**
  * 文章运维入口。
  *
- * ⚠ **这个 CLI 不是装饰品**：在 [#50](https://github.com/Lkyloveaw/lkyloveaw-home/issues/50)（网页写路径）
- * 落地之前，它是**唯一的编辑通道** —— 改 `content/*.md`，然后跑 `--reimport`。
+ * ⚠ **平时改文章请用网页**（管理台 → 文章，[#50](https://github.com/Lkyloveaw/lkyloveaw-home/issues/50) 已落地）：
+ * 本 CLI 是**逃生口** —— 真源在库，文件只是导入来源；需要「按文件重导」时才用它。
  *
  * 真源在 SQLite（票 #32）：文件只是**导入的来源**。启动时的首次导入只在「库里一篇文章都没有」时发生，
  * 所以「改了文件但站点没变」是**预期行为**，不是 bug；要让它生效就跑这里的 `--reimport`。
@@ -23,7 +23,7 @@ function usage(): void {
   node dist/cli/articles.js --reimport   按 ${config.contentDir} 重导
 
 为什么需要 --reimport：真源搬进库之后，改文件对站点**没有影响**（启动时的首次导入只在库为空时发生）。
-在网页写路径（#50）落地之前，它是唯一的编辑通道。`)
+平时改文章请用网页（管理台 → 文章）；这个逃生口用于「文件改完要按文件重导」。`)
 }
 
 function main(): void {
