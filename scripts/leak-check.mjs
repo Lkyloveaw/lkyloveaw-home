@@ -8,6 +8,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { assertPortFree } from './lib/port-guard.mjs'
 
 const ROOT = process.cwd()
 const PORT = 3996
@@ -67,6 +68,10 @@ const TEST_PASS = 'leak-password-1234'
 execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--password', TEST_PASS], {
   cwd: ROOT, env: { ...process.env, DATABASE_PATH: DB }, stdio: 'ignore',
 })
+
+// 端口被占时**先失败**：否则下面的 /healthz 等待会凑到别人起的服务上，
+// 然后对着另一个库登录 —— 症状是「登录 401 / timeline=0」，与产品 bug 无法区分。
+await assertPortFree(PORT, 'leak-check（端口 3996）')
 
 const child = spawn(process.execPath, ['dist/server.js'], {
   cwd: ROOT,

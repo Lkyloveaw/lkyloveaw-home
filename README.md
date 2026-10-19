@@ -26,6 +26,16 @@ node dist/cli/passwd.js --user alice --password '至少八位的口令'
 口令要求 ≥ 8 位，用 bcrypt（cost=12）哈希后存进 SQLite。**没有邮件找回、没有注册页**——
 CLI 是唯一的救援通道，忘记口令时也用它重置。
 
+> ⚠ **CLI 建的账号默认是「只读」**（最小权限）。管理台（`/admin`）需要**管理员**，所以要再跑一次：
+>
+> ```bash
+> node dist/cli/passwd.js --user alice --role admin
+> ```
+>
+> 只读账号能看全部只读面、能改自己的口令，但**管理台整块进不去**：顶栏不渲染入口，直访得 403。
+> 用下面那两个环境变量建的**首个**账号例外 —— 零账号首启时它直接就是管理员
+> （否则全新部署开箱就没人能进管理台）。
+
 也可以让服务在启动时自动建首个账号，把下面两项写进环境变量（**仅在库里一个账号都没有时生效**）：
 
 ```bash
@@ -49,13 +59,64 @@ node dist/cli/passwd.js --user alice --enable            # 重新启用
 改口令、重置口令、`--revoke-sessions` 都会递增该账号的**凭据代次**（`users.token_version`），
 使**已签发的全部 cookie 立即失效**。登录后也可以直接在面板上自助改密。
 
-### ⚠ 登出**不是**吊销
+### 登出 = 服务端**真吊销**（这是对旧行为的修订）
 
-会话是**签名 cookie**，服务端不存状态。所以：
+会话仍是**签名 cookie**，但服务端现在有一张 `sessions` 表，记录每一枚已签发的 cookie：
 
-- 「登出」只让**当前这个浏览器**忘掉 cookie；
-- **已经泄漏或被复制走的 cookie，在过期（默认 7 天）之前依然有效**；
-- 想让某个账号的所有会话立刻作废，只能用 `--revoke-sessions`（或改口令）。
+- 「登出」把**这一条会话行**标成已吊销 —— 那串 token 就算被人复制走，**下一个请求就失效**；
+- 同一账号在**其它设备**上的会话**不受影响**（登出只吊销当前这一枚）；
+- 想让某个账号的**全部**会话立刻作废：`--revoke-sessions`，或改口令（改口令会级联吊销）；
+- 停用账号**不**级联吊销会话行，但闸门每请求都查 `enabled`，所以它**下一个请求**就被挡在门外。
+
+> ⚠ **升级须知**：这批改动上线的那一刻，**既有 cookie 全部失效**（旧 cookie 里没有 `sid`，
+> 查不到会话行），所有人需要重新登录一次。这是设计，不是故障。
+
+## 管理台（网页自管）
+
+登录后顶栏会出现**管理**一项（**只对管理员渲染**：只读用户看不到它，直访任一管理台地址得 **403**）。
+它替换了以前「改文件 + 重启 + 跑 CLI」的三件事：**目标清单**、**站点设置**、**备份**，外加**账号**管理。
+
+| 页面 | 能做什么 | 明确不做 |
+| --- | --- | --- |
+| `/admin`（概览） | 四块摘要：目标启用/总数、账号总数与管理员数、最近一次备份、当前站点设置；零管理员会在这里告警 | 不渲染目标明细（详情去目标页，不造第二份真相） |
+| `/admin/targets` | 新增 / 编辑（名称、URL、分组、期望状态码、超时）/ 停用 / 启用；「删除」两岔：**没有任何历史**才真删，否则只停用 | 不让改 `id`（它是历史库的关联键）；不做「连历史一起删」 |
+| `/admin/accounts` | 新增（**默认只读**）/ 改角色 / 停用 / 启用 / 重置口令 | 不做删除账号；不做会话管理 UI（看设备 / 踢单台） |
+| `/admin/backups` | 列出产物（名 / 大小 / 时间）、「立即备份一次」、只读展示 `BACKUP_DIR` / `BACKUP_KEEP` | 不做下载 / 恢复 / 单份删除 —— 整库含口令哈希，恢复属 SSH 上的操作 |
+| `/admin/settings` | 改标题 / 描述 / 探测间隔；只读展示留在 `.env` 的那些参数 | 不搬会删数据或会锁人的配置（判据见上面「站点设置」一节） |
+
+**几条一致的规矩**：
+
+- **真源都是 SQLite**。改完立刻生效（探测间隔是「下一轮生效」），不需要重启；
+- 成功 → `302` 回同一页并带一句 `?notice=<键>`（闭集，不认识的键不渲染）；
+  失败 → **`400` 就地重渲染**并保留你填的内容（口令字段**永不回填**），**不用重定向表达失败**；
+- **三类破坏性动作要勾一个确认框**（不用 JS `confirm()`，禁用 JS 也拦得住）：**重置口令 · 停用账号 · 降级角色**。
+  确认框写的是后果，不是「确定吗」；服务端独立校验那个勾；
+- 账号有两个守卫，**网页与 CLI 共用同一个函数**：①不能改自己的角色、不能停用自己；
+  ②不能把**启用中的管理员**减到零（最后一个人不许降级 / 停用）；
+- 角色变更**不踢会话**：降级或提权在**下一个请求**就生效（角色不进 cookie）。
+
+> ⚠ **恢复备份会让当时的会话复活**：`sessions` 表跟库一起搬，所以把一份旧备份盖回来，
+> 那份备份里「当时还活着」的会话会重新有效。这句话也写在备份页上。
+
+## 从旧版升级（这一批改了什么）
+
+这一批把站点从「改文件 + 重启 + CLI」推到网页自管，**升级时会有几件事发生**，提前知道就不会当成故障：
+
+1. **`SITE_ORIGIN` 变成必填**（写路径的来源白名单）。**没配就拒绝启动** ——
+   先把它加进 `.env`（写浏览器地址栏里那个 origin，不带路径与结尾斜杠）再升级。
+2. **既有 cookie 全部失效**：旧 cookie 里没有 `sid`，查不到会话行。所有人重新登录一次。
+3. **`users.role` 列会自动补上，并把既有账号一次性升为管理员**（否则升级完没人能进管理台）。
+   之后新建账号默认**只读**。
+4. **`targets.json` 与 `SITE_TITLE` / `SITE_DESCRIPTION` / `PROBE_INTERVAL_SECONDS` 变成「首次初始值」**：
+   升级后第一次启动会把当前生效值落进库，此后改 `.env` 不再有效（值不同时启动日志有一行警告）。
+   **目标清单从此在 管理台 → 目标 里改**。
+5. 新增 `data/media/`（文章配图）。Docker 里它与数据库同在一个 volume。
+
+**升级前先备一份**（不需要停服）：
+
+```bash
+node dist/cli/backup.js
+```
 
 ## 本机运行
 
@@ -280,14 +341,17 @@ docker compose up -d --build
 ## 自检
 
 ```bash
-npm run verify        # typecheck + docker + unit + leak + chart + backup + restart
-npm run check:all     # = verify + check:e2e（全量）
-npm run check:unit    # 凭据与会话的纯函数断言（86 项，不需要起服务）
+npm run verify        # 下面这一串，一条命令跑完（不含 e2e）
+npm run check:all     # = verify + check:e2e（全量，提交前该跑这个）
+npm run check:unit    # 凭据 / 会话 / 目标 / 设置 / 目录三态等纯函数与子进程断言（245 项，不需要起服务）
+npm run check:media   # 媒体上传、去重、拒绝与磁盘布局（93 项）
+npm run check:article # 文章流水线：解析、预览、发布、回收站（32 项）
 npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（32 项）
-npm run check:chart   # 曲线几何的交叉断言 + 面板行为（61 项）
-npm run check:backup  # 入口校验、checkpoint、备份与恢复，含探测循环集成（60 项）
+npm run check:chart   # 曲线几何的交叉断言（40 项）+ 面板 DOM 行为（47 项）
+npm run check:style   # 样式：WCAG 对比度逐对算比值、类名覆盖、两套平面、窄屏与打印（71 项）
+npm run check:backup  # 入口校验、checkpoint、备份与恢复（50 项）+ 探测循环里真的调了备份（10 项）
 npm run check:restart # 真杀进程再起：历史与会话是否活过重启（17 项）
-npm run check:e2e     # 真实起服务、真实探测、逐项断言（152 项，需要先 npm run build）
+npm run check:e2e     # 真实起服务、真实探测、逐项断言（444 项，需要先 npm run build）
 ```
 
 ### ⚠ 写安全断言时的一条硬规矩
@@ -356,6 +420,7 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | `SITE_ORIGIN` | **无（必填）** | 写路径的来源白名单（逗号分隔多值）。**没配就拒绝启动**；写浏览器地址栏里那个 origin，不带路径与结尾斜杠 |
 | `TRUST_PROXY` | 关 | 反向代理 CIDR（逗号分隔）。**不许填 `true`**（会拒绝启动）——本仓的判定不读 `X-Forwarded-*` |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | — | 首个账号，**仅当库里没有任何账号时生效** |
+| `MEDIA_DIR` | `./data/media` | 上传媒体的落盘目录（文章配图）。Docker 里与数据库同在一个 volume |
 | `BACKUP_DIR` | `./data/backups` | 备份目录。默认与数据库同目录，两种部署方式都不用加挂载 |
 | `BACKUP_KEEP` | `7` | 滚动保留几份 |
 | `CHECKPOINT_EVERY_ROUNDS` | `60` | 每几轮探测做一次 checkpoint（0 = 关闭） |
@@ -387,8 +452,10 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 
 新增内部字段**默认不会出网**——要出网必须在投影里显式加一行。见 [ADR 0003](docs/adr/0003-public-contract-is-not-internal-structure.md)。
 | `/login` | 匿名 | 登录页（GET 表单 / POST 校验） |
-| `/logout` | 已登录 | 登出（POST；只清本机 cookie） |
-| `/password` | 已登录 | 自助改密（POST） |
+| `/logout` | 已登录 | 登出（POST）：**吊销这一条会话行** + 清本机 cookie |
+| `/password` | 已登录 | 自助改密（POST）：改完会重签当前浏览器，其它设备掉线 |
+| `/admin` | **管理员** | 管理台概览（只读用户直访得 **403**） |
+| `/admin/targets` · `/admin/accounts` · `/admin/backups` · `/admin/settings` | **管理员** | 四个子页，GET 看、POST 改（`action` 闭集；动作见「管理台」一节） |
 | `/healthz` | **匿名** | 健康检查。**必须保持匿名**，否则 HEALTHCHECK / systemd 会误判服务不健康 |
 | `/style.css`、`/status.js`、`/chart-path.js`、`/favicon.ico` | 匿名 | 静态资源。**登录页自己要用，必须放行** |
 
@@ -416,14 +483,27 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 
 ```
 src/
-  config.ts    环境变量与目标清单
-  content.ts   Markdown 读取与解析
-  store.ts     SQLite 历史存储与聚合
-  probe.ts     探测引擎
-  charts.ts    内联 SVG 曲线
-  views.ts     服务端 HTML 渲染
-  server.ts    路由与启动
-public/        样式与面板数值刷新脚本
-content/       文章
-targets.json   被监控的系统清单（**只在首次启动、表为空时导入一次**）
+  config.ts         环境变量、首次初始值与启动期断言（SESSION_SECRET / SITE_ORIGIN 缺失即拒绝启动）
+  content.ts        Markdown 读取与解析
+  store.ts          SQLite 历史存储与聚合
+  probe.ts          探测引擎
+  charts.ts         内联 SVG 曲线
+  views.ts          服务端 HTML 渲染（含两套平面 plane-data / plane-prose）
+  server.ts         路由与启动
+  users.ts          账号、角色与「最后管理员」守卫（网页与 CLI 共用）
+  session.ts        签名 cookie 与载荷
+  sessions-store.ts sessions 表的读写（登出吊销、改密级联、过期清理）
+  auth.ts           闸门判定与到期时的 302/401 分流
+  csrf.ts           写路径的 L2 来源校验与 L3 会话派生 token
+  targets-store.ts  targets 表与首次导入
+  settings-store.ts settings 表与首次落值（DB → env → 代码默认）
+  backup.ts         checkpoint + 在线备份 + 产物校验 + 滚动清理
+  media.ts          媒体落盘与去重
+  article-*.ts      文章：解析 / 渲染 / 导入 / 规则
+  sanitize.ts       文章 HTML 的白名单清洗
+  public-summary.ts /api/status 的白名单投影
+  cli/              运维命令行（passwd / backup / articles / media）
+public/             样式、面板数值刷新脚本、图表路径
+content/            文章
+targets.json        被监控系统清单（**只在首次启动、targets 表为空时导入一次**）
 ```

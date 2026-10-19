@@ -4,6 +4,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { csrfToken } from '../dist/csrf.js'
 import path from 'node:path'
+import { assertPortFree } from './lib/port-guard.mjs'
 
 const PORT = 3997
 const BASE = `http://127.0.0.1:${PORT}`
@@ -100,6 +101,10 @@ const targets = [
   { id: 'bad', name: '状态码不符', url: 'https://example.com/', group: 'G1', expectStatus: [999] },
   { id: 'dead', name: '不可达', url: 'http://10.255.255.1/', group: 'G2', timeoutMs: 1500 },
 ]
+
+// 端口被占时**先失败**：否则下面的 /healthz 等待会凑到别人起的服务上，
+// 然后对着另一个库登录 —— 症状是「登录 401 / timeline=0」，与产品 bug 无法区分。
+await assertPortFree(PORT, 'e2e-check（端口 3997）')
 
 const child = spawn(process.execPath, ['dist/server.js'], {
   cwd: ROOT,
@@ -1982,6 +1987,140 @@ try {
     // ── 未登录：回跳目标认得这个页面 ──
     const anonA = await get('/admin/accounts')
     check('未登录 /admin/accounts → 302 且带 next', anonA.status === 302 && anonA.location.includes('next=%2Fadmin%2Faccounts'), `${anonA.status} ${anonA.location}`)
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[收口①：管理台统一鉴权面（五个页面 × 六种请求）]')
+  // ══════════════════════════════════════════════════════════
+  /*
+   * 这一节把散在各票里的「每个页面各写一遍」收成**一张矩阵**：五个管理台页面 × 六种请求。
+   * 它回答的不是「某一页的某个动作对不对」（那是各票自己的事），而是
+   * **这些页面是不是真的共用同一条鉴权面** —— 只要有一页漏了某一层，这里就红。
+   *
+   * 用**不存在的 action** 当载荷是有意的：守卫必须排在 action 闭集**之前** ——
+   * 否则未授权的调用方能从 400 / 403 的差别里探出「这个 action 存不存在」。
+   */
+  {
+    const admM = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminM = admM.setCookie.split(';')[0]
+    const roM = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
+    const roCookieM = roM.setCookie.split(';')[0]
+    // 四个**有写路由**的子页。/admin（概览）单独验：它**故意没有 POST 路由**。
+    const WRITE_PAGES = ['/admin/targets', '/admin/accounts', '/admin/backups', '/admin/settings']
+    const BODY = { action: 'matrix-probe-does-not-exist', id: 'matrix' }
+
+    // ── 概览页：只有 GET（四张卡都是摘要，写动作全在子页）──
+    check('/admin：管理员 GET → 200', (await get('/admin', { cookie: adminM })).status === 200)
+    check('/admin：只读 GET → **403**', (await get('/admin', { cookie: roCookieM })).status === 403)
+    const anonOverview = await postForm('/admin', { form: BODY })
+    check(
+      '/admin：匿名 POST → **302 到登录页**（闸门比路由先判）',
+      anonOverview.status === 302 && anonOverview.location.startsWith('/login'),
+      `${anonOverview.status} ${anonOverview.location}`,
+    )
+    check(
+      '/admin：**没有写路由** —— 只读与管理员 POST 都是 **404**（不是 403/400：它本来就不接受写）',
+      (await postForm('/admin', { cookie: roCookieM, csrf: csrfFor(roCookieM), form: BODY })).status === 404 &&
+        (await postForm('/admin', { cookie: adminM, csrf: csrfFor(adminM), form: BODY })).status === 404,
+    )
+
+    for (const p of WRITE_PAGES) {
+      check(`${p}：管理员 GET → 200`, (await get(p, { cookie: adminM })).status === 200)
+      check(`${p}：只读 GET → **403**（不是 404、也不是只读视图）`, (await get(p, { cookie: roCookieM })).status === 403)
+      const anon = await postForm(p, { form: BODY })
+      check(
+        `${p}：匿名 POST → **302 到登录页**（不是 400 / 403：先认身份，再谈别的）`,
+        anon.status === 302 && anon.location.startsWith('/login'),
+        `${anon.status} ${anon.location}`,
+      )
+      check(
+        `${p}：只读 POST → **403**（不是 400 —— 未授权的人不该看到 action 闭集存不存在）`,
+        (await postForm(p, { cookie: roCookieM, csrf: csrfFor(roCookieM), form: BODY })).status === 403,
+      )
+      check(`${p}：管理员 POST 缺 csrf → **403**（L3）`, (await postForm(p, { cookie: adminM, form: BODY })).status === 403)
+      check(
+        `${p}：管理员 POST 跨站来源 → **403**（L2）`,
+        (await postForm(p, { cookie: adminM, csrf: csrfFor(adminM), origin: 'http://evil.example.com', form: BODY })).status === 403,
+      )
+      check(
+        `${p}：管理员带齐凭据 + 不存在的 action → **400**（闭集只对已授权的人生效）`,
+        (await postForm(p, { cookie: adminM, csrf: csrfFor(adminM), form: BODY })).status === 400,
+      )
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[收口②：并发写同一路由（主键兜底 · 最后写入生效）]')
+  // ══════════════════════════════════════════════════════════
+  /*
+   * 单进程单 SQLite 下，「并发」不来自多线程，而来自**同一瞬间到达的两个 HTTP 请求**：
+   * 事件循环会在 `await` 处交错。这里验两件真实会发生的事：
+   *  ① 两个请求同时新增**同一个 id** —— 唯一裁判必须是主键约束（不是"先查再插"，那是 TOCTOU）；
+   *  ② 两个请求同时改**同一份设置** —— 两个都成功、最终值必是其中之一，库与页面不能对不上。
+   */
+  {
+    const admC = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminC = admC.setCookie.split(';')[0]
+    const csrfC = () => csrfFor(adminC)
+    const Database = (await import('better-sqlite3')).default
+    const dbRows = (sql, ...args) => {
+      const conn = new Database(TEST_DB)
+      try {
+        return conn.prepare(sql).all(...args)
+      } finally {
+        conn.close()
+      }
+    }
+
+    // ① 同一 id 并发新增
+    const raceBody = {
+      action: 'target-create',
+      id: 'race-id',
+      name: '并发探针',
+      url: BASE + '/healthz',
+      group: '并发',
+      expectStatus: '200',
+      timeoutMs: '',
+    }
+    const raced = await Promise.all([
+      postForm('/admin/targets', { cookie: adminC, csrf: csrfC(), form: raceBody }),
+      postForm('/admin/targets', { cookie: adminC, csrf: csrfC(), form: raceBody }),
+    ])
+    const statuses = raced.map((r) => r.status).sort()
+    check(
+      '并发新增**同一个 id**：恰好一个 302、一个 400（唯一裁判是主键约束，不是"先查再插"）',
+      String(statuses) === '302,400',
+      statuses.join(','),
+    )
+    check(
+      '400 那条说的是「id 已存在」',
+      /id 已存在/.test(raced.find((r) => r.status === 400)?.body ?? ''),
+      (raced.find((r) => r.status === 400)?.body.match(/id 已存在[^<]*/) ?? ['(没找到)'])[0],
+    )
+    const raceRows = dbRows(`SELECT id FROM targets WHERE id = 'race-id'`)
+    check('库里**恰好一行**（没有半条、也没有两条）', raceRows.length === 1, `rows=${raceRows.length}`)
+
+    // ② 同一份设置并发写入（两个不同的标题）
+    const writeTitle = (t) =>
+      postForm('/admin/settings', {
+        cookie: adminC,
+        csrf: csrfC(),
+        form: { action: 'settings-save', 'site.title': t, 'site.description': '并发写', 'probe.intervalSeconds': '5' },
+      })
+    const both = await Promise.all([writeTitle('并发甲'), writeTitle('并发乙')])
+    check('并发改设置：两个都 **302**（都不是失败）', both.every((r) => r.status === 302), both.map((r) => r.status).join(','))
+    const titleRows = dbRows(`SELECT value FROM settings WHERE key = 'site.title'`)
+    check(
+      '并发改设置：库里**只有一行** `site.title`，且值必是其中一个（没有中间态）',
+      titleRows.length === 1 && ['并发甲', '并发乙'].includes(titleRows[0].value),
+      JSON.stringify(titleRows),
+    )
+    const homeAfter = (await get('/', { cookie: adminC })).body
+    check(
+      '并发改设置：页面渲染的就是库里那个值（页面与库一致，不留"显示旧值"的窗口）',
+      homeAfter.includes(titleRows[0].value),
+      titleRows[0].value,
+    )
   }
 
   // ══════════════════════════════════════════════════════════

@@ -8,6 +8,7 @@
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { assertPortFree } from './lib/port-guard.mjs'
 
 const ROOT = process.cwd()
 const PORT = 3993
@@ -116,6 +117,8 @@ let cookie = ''
 try {
   // ── 第一次启动 ──
   console.log('\n[第一次启动：产生历史与会话]')
+  // 只在**第一次**起服务前检查端口：后面几次重启是我们自己杀掉的旧实例，不该再拦。
+  await assertPortFree(PORT, 'restart-check（端口 3993）')
   first = start()
   check('服务启动', await waitUp(), first._log.slice(-200))
   const l1 = await login()

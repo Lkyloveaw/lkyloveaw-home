@@ -8,6 +8,7 @@
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { assertPortFree } from './lib/port-guard.mjs'
 
 const ROOT = process.cwd()
 const PORT = 3995
@@ -32,6 +33,10 @@ execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--pa
 })
 
 const targets = [{ id: 'ok', name: '可用', url: 'https://example.com/', expectStatus: [200] }]
+
+// 端口被占时**先失败**：否则下面的 /healthz 等待会凑到别人起的服务上，
+// 然后对着另一个库登录 —— 症状是「登录 401 / timeline=0」，与产品 bug 无法区分。
+await assertPortFree(PORT, 'probe-integration-check（端口 3995）')
 
 const child = spawn(process.execPath, ['dist/server.js'], {
   cwd: ROOT,
@@ -61,6 +66,19 @@ try {
   for (let i = 0; i < 40; i++) {
     try { if ((await fetch(BASE + '/healthz')).ok) break } catch {}
     await sleep(250)
+  }
+  /*
+   * `/healthz` 只能证明"这个端口上有东西在听"，证明不了"那是我起的这个"。
+   * 本脚本只配了 1 个目标，所以目标数就是它的身份指纹 —— 数不对就说明撞上了别人起的服务，
+   * 再往下每条断言都会对着别的库，结论毫无意义（#45 那次「登录 401 / timeline=0」就是这个签名）。
+   */
+  {
+    const hz = await (await fetch(BASE + '/healthz')).json().catch(() => null)
+    check(
+      '起的是**我这一份**服务（`/healthz` 的目标数 = 本脚本配的 1）',
+      hz?.ok === true && hz?.targets === 1,
+      JSON.stringify(hz),
+    )
   }
 
   // 轮询等备份出现，而不是固定 sleep：每轮要真去 fetch example.com，
