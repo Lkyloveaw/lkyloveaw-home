@@ -1019,14 +1019,13 @@ try {
     check('「管理」被标成当前页（aria-current）', /aria-current="page"[^>]*>管理</.test(overview.body))
     check('概览页有四块摘要卡', (overview.body.match(/class="stat"/g) || []).length >= 4)
     check('概览页**不渲染目标列表**（不造第二份真相）', !/ledger\.internal\.example/.test(overview.body))
-    // #40 之后这句话必须**是真的**：目标页已经能写，其余三页仍只读。
-    // （原来这里断言「这一版是只读的」——那句在我把目标页接通后就成了假话，所以跟着改。）
+    // 这条断言的**形状**跟着 #63 改了：不再钉「四页 + 四个名字」。
+    // 那种写法每加一页就得回来改一次（#50 加文章页时漏了，于是那句自述假了一整轮）；
+    // 现在钉的是**不含计数的那句话** —— 页数再变，它也不会变成假话。
     check(
-      '概览页明说四页都能写（自述必须是真话）',
-      // 每接通一页就来改这一行 —— 它保证概览页那句自述**永远是真的**。
-      /四页<strong>都能写<\/strong>/.test(overview.body) &&
-        /<strong>目标<\/strong> \/ <strong>站点设置<\/strong> \/ <strong>备份<\/strong> \/ <strong>账号<\/strong>/.test(overview.body),
-      overview.body.match(/这一版的写动作[^<]*/)?.[0] ?? '(没找到那句话)',
+      '概览页自述不说谎：「每一页都能写」，且不写死页数',
+      /<strong>这里每一页都能写<\/strong>/.test(overview.body) && !/四页|五页|六页/.test(overview.body),
+      overview.body.match(/这里每一页[^<]*/)?.[0] ?? '(没找到那句话)',
     )
 
     // ── 只读：**先断言同一响应里另外 4 项在**，再断言「管理」不在 ──

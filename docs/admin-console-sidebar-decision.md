@@ -223,6 +223,10 @@ map Notes 第 12 条定的是「栏宽约 1120px（侧栏占 220–240px，正�
 
 ## 7. 实现落点（交给 61 切分，本票不动手）
 
+> ✅ **已交付**：[#62](https://github.com/Lkyloveaw/lkyloveaw-home/issues/62)（提交 `8980b06`）+ #63（收口，本票）。
+> **未发现与本文不符之处** —— 契约照原样落到了地上。两处**文案/文档**落点（`CONTEXT.md` 管理台词条、
+> 概览页自述）在 #63 里清掉了。下表保持原样，作为当时的清单留档。
+
 | 文件 | 改动 |
 | --- | --- |
 | `src/views.ts` | `LayoutOptions` 加 `adminSection?: AdminSection`；`layout()` 加**那一个分支**；新增侧栏片段（组表：运维 = overview/targets/accounts/backups/settings，内容 = articles）；六个页面函数各自的 `layout()` 调用补上自己的 `adminSection`（290 / 453 / 546 / 644 / 787 / 1395 六行）。`nav()` / `planeOf()` / `forbiddenPage()` **不动** |
@@ -245,15 +249,31 @@ map Notes 第 12 条定的是「栏宽约 1120px（侧栏占 220–240px，正�
 | 4 | 已登录 | `GET /`、`GET /status`、`GET /posts` | 响应里**没有** `.admin-side`（侧栏只在管理台内部：map Notes 第 3 条） |
 | 5 | 管理员已登录 | `GET /admin` | 顶栏「管理」**仍**带 `aria-current="page"`（§1.1：这条不动） |
 | 6 | 管理员已登录 | `GET /admin/articles?edit=<某篇>` | 侧栏仍渲染，且高亮**文章**（不是「概览」）—— 文章页的编辑态同属这一个模块 |
-| 7 | — | `npm run check:style` | 全绿：新 token 进了 `NON_COLOR`，六个类名都有 CSS 定义，`:root` 仍然恰好两个 |
+| 7 | — | `npm run check:style` | 全绿：新 token 进了 `NON_COLOR`，六个类名都有 CSS 定义，`:root` 仍**恰好一个**（#60 之后就是「一个」；本文起草时写的「两个」已按事实改） |
 | 8 | — | `npm run check:e2e` | 全绿（含上面 1–6 条） |
 
 **断言质量要求**（沿用既有原则）：第 1 条必须**逐路由**比 `href` 与当前路径，不能只断言「页面里有
 `aria-current`」—— 后者在「六个模块全都标成当前项」这种坏实现下恒真。
 第 3 / 4 条必须先证明前提成立（同一响应是 403 / 是那个页面），否则「没有侧栏」在空响应上恒真。
 
-⚠ **目视未验**：≤720px 折行后的可用性（会不会挤成三行、组标签是否碍事）**规则可断言、眼睛没验过** ——
-这条与 map 的迷雾条目一致，等侧栏真的落地才锐利，本票不宣称它好看。
+✅ **目视已验（#62）**：≤720px 折行后的可用性，用 CDP `Emulation.setDeviceMetricsOverride` 精确设视口
+（`--window-size` 在 Windows 上会被夹到约 500px，那样拍出的「390px 溢出」是**裁切**、不是溢出）：
+360 / 390 / 500 / 700 / 721 / 1100 六个宽度 × 两页 `scrollWidth == innerWidth` **全部成立**；
+断点正好在 720/721 翻；**390px 观感：不挤**（组标签各占一行、字号小且淡，代价约 40px 垂直 —— 这是 §4 定的形状）。
+截图：`.theme-preview-shots/cdp-targets-390.png`（未跟踪，随时可删）。
+
+### 8.1 落地回填（2026-10-19 · #62 + #63）
+
+| # | 落在哪 |
+| --- | --- |
+| 1 | `scripts/e2e-check.mjs` 管理台外壳段：六个路由各两条（有侧栏 + 当前项**恰好一个且 `href` 等于路径**） |
+| 2 | 同段：六个模块名 + 两个组标签；`!/\d/` 断言「侧栏里一个数字都没有」（= 不带计数） |
+| 3 | 同段：只读 `GET /admin/targets` → 403 且无 `.admin-side` |
+| 4 | 同段：`/`、`/status`、`/about`、`/posts` 都无 `.admin-side`（比本文多覆盖 `/about`） |
+| 5 | 同段：顶栏「管理」仍带 `aria-current="page"` |
+| 6 | 同段：文章编辑态（`?edit=uptime-metrics`）高亮「文章」 |
+| 7 | `scripts/style-check.mjs` 新段「管理台侧栏：契约落在地上了吗」9 条（分支 / 地标名 / 六个值 / **只在当前项**贴 `aria-current` / 720 折行两条 / 打印两条 / `minmax(0,1fr)`）→ 63 项 |
+| 8 | `npm run verify` **10 段全绿（678 项）** + `npm run check:e2e` **522/522** |
 
 ---
 

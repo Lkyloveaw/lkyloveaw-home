@@ -333,8 +333,8 @@ export function adminOverviewPage(
 修复：<code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code></p>`
       : '') +
     `<h1>管理台</h1>
-<p class="admin-hint">四页<strong>都能写</strong>：<strong>目标</strong> / <strong>站点设置</strong> / <strong>备份</strong> / <strong>账号</strong>
-（目标与设置的真源是数据库；账号与备份动的是库里的行与磁盘上的产物）。</p>
+<p class="admin-hint"><strong>这里每一页都能写</strong>（面板是只读的，这里不是）——
+目标与设置的真源是数据库，账号与备份动的是库里的行与磁盘上的产物，文章改的是内容库。</p>
 <div class="stat-strip">
 ${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
 ${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
