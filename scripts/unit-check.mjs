@@ -358,16 +358,6 @@ section('CLI: dist 下存在且可执行（回归：防止放进 scripts/）')
 }
 
 // ════════════════════════════════════════════════════
-// 清理。Windows 上 sqlite 句柄可能还没释放（EPERM），失败不应让整体判负——
-// 沙箱目录有固定前缀，可由 .gitignore 兜底，且下次运行会新建一个。
-try {
-  fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
-} catch {
-  console.log(`\n（提示：沙箱目录未能删除，可手动清理：${sandbox}）`)
-}
-
-console.log(`\n${'─'.repeat(60)}`)
-// ════════════════════════════════════════════════════
 section('sessions: 判定表 24 用例（docs/session-revoke-decision.md §5）')
 // ════════════════════════════════════════════════════
 // ⚠ 这张表在产出它的那次会话里**一行都没实测过**（那次没有命令通道，文档 §11 末尾承认了）。
@@ -1182,6 +1172,23 @@ console.log(JSON.stringify({
   check('`listBackups()` 仍是**升序**（`pruneBackups()` 靠它删最旧的）', String(full.ascending) === '2026-01-01.sqlite,2026-02-01.sqlite,2026-03-01.sqlite', JSON.stringify(full.ascending))
 
   fs.rmSync(bdir, { recursive: true, force: true })
+}
+
+console.log(`\n${'─'.repeat(60)}`)
+
+// ════════════════════════════════════════════════════
+// 清理。**必须留在最后**：下面已经没有了，但上面那几节都还在用沙箱里的那个库
+// （`process.env.DATABASE_PATH` = `sandbox/u.sqlite`）。
+//
+// ⚠ 2026-10-19 真机（Linux）跑出来的：这段清理原来夹在文件**中间**，
+// 后面几节会 `new Database(config.databasePath)` → 目录已被删 → TypeError，整套当场中断。
+// Windows 上因为「删不掉正在被 sqlite 打开的目录」而侥幸通过 —— 所以这个 bug 只在 Linux 上现形。
+// 别把它挪回中间。
+// （失败不应让整体判负：沙箱有固定前缀，可由 `.gitignore` 兜底，下次运行会新建一个。）
+try {
+  fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+} catch {
+  console.log(`（提示：沙箱目录未能删除，可手动清理：${sandbox}）`)
 }
 
 if (failed === 0) {

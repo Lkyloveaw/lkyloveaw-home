@@ -1,8 +1,40 @@
-# 部署环境事实：内网开发服务器 `10.0.0.226`
+# 部署环境事实：开发服务器
 
 本文件记录**目标部署机器**的实测事实，供后续会话直接引用，避免重复探测、也避免把「静态推断」当「已验证」。
 
-采集时间：2026-10-15。采集方式：SSH 登入后实跑命令（不是推断）。
+> ## 0. 2026-10-19 起：开发服务器 = `root@hw.hyacinthus.cn`
+>
+> 用户在这一天通知「开发服务器设置为 `root@hw.hyacinthus.cn`」。**下面 §1–§10 是旧机 `10.0.0.226` 的存档**，
+> 它的登录方式（错位的 `id_ed25519.bak`）、Docker 29.5.1、nvm Node 24 —— **在新机上一个都不适用**。
+>
+> **新机实测（2026-10-19，SSH 登入实跑，不是推断）**
+>
+> | 项 | 实测值 |
+> | --- | --- |
+> | 登录 | `ssh root@hw.hyacinthus.cn`（**免密可用**，不需要旧机那把密钥） |
+> | DNS | `hw.hyacinthus.cn` → `124.70.160.90`（华为云 ECS） |
+> | hostname | `hcss-ecs-66f5` |
+> | 系统 | Ubuntu 24.04.4 LTS（kernel 6.8） |
+> | CPU / 内存 | **2 核 / 1.7 GiB**（比旧机 4 GiB 小，别并行跑重活） |
+> | 磁盘 | `/dev/vda1` 40G，用 3.5G，**剩 35G**（比旧机的 14G 宽裕） |
+> | Node | **没有预装**；本次装了 **NodeSource Node 22.23.3 → `/usr/bin/node`**（npm 10.9.9），满足 `engines: >=22` |
+> | Docker | **没有** → 部署方式只剩**裸机 systemd**（票 #19 里「由用户拍板」那张对比表被机器裁掉了） |
+> | 工具链 | git / rsync / curl / systemctl / gcc / make / python3 齐；**`sqlite3` CLI 没有** |
+> | 端口 | 22 + 华为云 uniagent（29338/29339）+ resolved；**3000 / 80 都空闲** |
+> | 应用目录 | `/opt`、`/srv` 都是空的，没有既有应用 |
+> | 出口 | `registry.npmjs.org` 200、`github.com` 200 ✅ |
+> | **入向** | ⚠ **云安全组把 80 与 3000 都挡着**：机器上 `ss` 能看到监听，外网仍连不上。要用浏览器看，得先在华为云控制台放行端口（或用 SSH 隧道） |
+>
+> **两条教训（这台机上不存在，别再照搬旧机的坑）**：
+> - 旧机「`ssh 'node -v'` 给 18」是因为 Node 在 nvm 里、非交互式不加载 `.bashrc`。
+>   新机 Node 装在 `/usr/bin/node`，**systemd 与 ssh 都直接拿到 22** —— 不需要 `Environment=PATH=` 那套弯路了。
+> - 旧机的 Docker 属主问题（`backup-checkpoint-decision.md` §4）在裸机上**不适用**（无容器 → 无跨 UID 错配）。
+>
+> **部署形状（本文件后续会话可照抄）**：`/opt/personal-wiki` 放代码与数据（`data/` 由默认路径生成），
+> `git` 不进部署产物、用 **tar over ssh 同步工作树**（仓库有未推送提交，不为了部署去 push），
+> `npm ci` + `npm run build` 在机器上跑，`systemd` 单元托管，`SESSION_SECRET` 写进 `/opt/personal-wiki/.env`。
+
+采集时间：2026-10-15（旧机 `10.0.0.226`）。采集方式：SSH 登入后实跑命令（不是推断）。
 
 票：<https://github.com/Lkyloveaw/personal-wiki/issues/12>（本文件由「实现批次怎么切」的会话顺带采集）
 
@@ -177,7 +209,18 @@ ssh -i ~/.ssh/id_ed25519.bak -o IdentitiesOnly=yes root@10.0.0.226
 
 ---
 
-## 10. 尚未验证的部分
+## 10. 尚未验证的部分（旧机 10.0.0.226 的存档）
+
+> ✅ **2026-10-19：这些在新机 `hw.hyacinthus.cn` 上已经全部验过了**（裸机 systemd 路线）。
+> 实测结果写在 §0 与票 [#19](https://github.com/Lkyloveaw/lkyloveaw-home/issues/19)，要点：
+> - `npm ci` **跑过**：但 `better-sqlite3` 没有匹配 Node 22.23.3 的预编译包 → 回退 `node-gyp` →
+>   拉 `nodejs.org` 的 Node 头文件 **ETIMEDOUT**（该机到 nodejs.org 不通）→ 解药是
+>   **`npm_config_nodedir=/usr/include/node`**（NodeSource 的 deb 自带头文件），随后编译通过。
+> - systemd 单元**已写**（`/etc/systemd/system/personal-wiki.service`，`WorkingDirectory=/opt/personal-wiki`，
+>   `ExecStart=/usr/bin/node …`）；**真重启过一次**：20 秒回来、服务自启、`/healthz` 匿名 200、探测轮自动续跑。
+> - 端口快照：3000 / 80 在机器上**都空闲**，但**云安全组把两个都挡着**（外网连不上）—— 要用浏览器看必须先放行。
+> - 顺手抓到一条**只在 Linux 现形**的仓内 bug：`scripts/unit-check.mjs` 的沙箱清理夹在文件中间，
+>   后面的小节会去开已被删掉的库 → `TypeError`，整套中断（Windows 上因为「删不掉正在被打开的目录」而侥幸通过）。已修。
 
 - **本文件只做环境采集，没有部署任何东西**。站点仍是一个 `initial commit`，代码一行没落地。
 - `npm ci` 在这台机器上**尚未实际执行过**（Node 24 + 有编译器，理论上无障碍，但未实测）。
