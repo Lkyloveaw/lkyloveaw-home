@@ -93,6 +93,8 @@ section('token 表：只有一份，且不再跟随系统深浅')
   const NON_COLOR = new Set([
     'radius', 'wrap', 'font', 'mono',
     'font-data', 'font-prose', 'fs-data', 'lh-data', 'fs-prose', 'lh-prose', 'measure-prose',
+    // 管理台宽栏与侧栏宽（#59 §3）。**漏加这两个就会红**：它们会被数成第 14、15 个「颜色」。
+    'wrap-admin', 'side-w',
   ])
 
   const rootBody = blockAfter(css, css.indexOf(':root {'))
@@ -254,6 +256,47 @@ section('两套平面：数据面终端化 / 正文面纸感化')
   check('`layout()` 把平面写进 `<body class="plane-…">`', /plane-\$\{planeOf\(opts\.active\)\}/.test(views))
   check('登录页自带 `plane-data`（它不走 `layout()`）', /<body class="login-body plane-data">/.test(views))
   check('导航分隔符是**服务端输出**的 `nav-sep`（不是伪元素 —— 分隔符不该可点）', /class="nav-sep" aria-hidden="true"/.test(views) && /\.nav-sep\s*\{/.test(css))
+}
+
+// ════════════════════════════════════════════════════
+section('管理台侧栏：契约落在地上了吗（#59 定稿 · #62 实现）')
+// ════════════════════════════════════════════════════
+{
+  // 「侧栏只在管理台内部」是靠这个分支，不是靠自觉：`adminSection` 没传时 layout() 与改动前一字不差。
+  check(
+    '`layout()` 里有那个分支：`adminSection` 存在时 main 挂上 `admin-shell`',
+    /opts\.adminSection[\s\S]{0,160}class="wrap admin-shell"/.test(views),
+  )
+  check(
+    '侧栏是 `<nav class="admin-side">` 且带可分辨的地标名（页头已有一个未标签的 `<nav>`）',
+    /<nav class="admin-side" aria-label="管理台导航">/.test(views),
+  )
+  check(
+    '六个模块各传了自己的 `adminSection`（六个值，一个不多一个不少）',
+    ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((s) =>
+      new RegExp(`adminSection: '${s}'`).test(views),
+    ),
+  )
+  // 当前项的判据：**只有** `key === section` 那一支才输出 `aria-current`（不是无条件贴上去）
+  check(
+    '当前项只在 `key === section` 时带 `aria-current="page"`',
+    /key === section \? ' aria-current="page"' : ''/.test(views),
+  )
+
+  const narrow = mediaBlock('(max-width: 720px)')
+  check('720px 断点里侧栏折成横排并允许换行（不横向滚动）', /\.admin-side\s*\{[^}]*flex-wrap:\s*wrap/s.test(narrow))
+  check('720px 断点里组标签各起一行（`flex-basis: 100%`）', /\.admin-side-group-label\s*\{[^}]*flex-basis:\s*100%/s.test(narrow))
+
+  const printBody = globalThis.__printBody
+  check(
+    '打印时侧栏整块隐藏、外壳退回单列',
+    /\.admin-side[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.admin-shell\s*\{[^}]*display:\s*block/s.test(printBody),
+  )
+  check(
+    '栏宽两个非颜色 token 都在（`:root` 里，且是 px 值）',
+    /--wrap-admin\s*:\s*\d+px/.test(css) && /--side-w\s*:\s*\d+px/.test(css),
+  )
+  check('内容列用的是 `minmax(0, 1fr)`（宽表不会把网格撑出容器）', /grid-template-columns:\s*var\(--side-w\)\s+minmax\(0,\s*1fr\)/.test(css))
 }
 
 // ════════════════════════════════════════════════════

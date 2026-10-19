@@ -1049,6 +1049,71 @@ try {
     check('只读 GET /admin → **403**（不是 404，也不是只读视图）', roAdmin.status === 403, `got ${roAdmin.status}`)
     check('403 页明说「需要管理员权限」', /需要管理员权限/.test(roAdmin.body))
 
+    // ── 管理台侧栏（#59 定稿 · #62 实现）：六页都有、当前项恰好一个且指向当前路径 ──
+    // 契约：`docs/admin-console-sidebar-decision.md` §2/§4。
+    // ⚠ 每一条都**先证明前提**：先断言「这一页确实有侧栏」，再断言「当前项恰好一个」——
+    //    否则后者在「整页没渲染出来」时也恒真（那是空断言，本文件反复踩过的坑）。
+    const sidebarOf = (html) => (html.match(/<nav class="admin-side"[\s\S]*?<\/nav>/) ?? [''])[0]
+    const currentIn = (nav) => [...nav.matchAll(/<a href="([^"]+)" aria-current="page">/g)].map((m) => m[1])
+    const ADMIN_PAGES = ['/admin', '/admin/targets', '/admin/accounts', '/admin/backups', '/admin/settings', '/admin/articles']
+    for (const route of ADMIN_PAGES) {
+      const page = await get(route, { cookie: adminCookie })
+      const nav = sidebarOf(page.body)
+      const current = currentIn(nav)
+      check(
+        `${route}：管理台页**有侧栏**，且恰好一项是当前项`,
+        page.status === 200 && nav.length > 0 && current.length === 1,
+        `status=${page.status} 当前项=${JSON.stringify(current)}`,
+      )
+      check(
+        `${route}：当前项指向**这个路径**（不是永远指着概览）`,
+        current.length === 1 && current[0] === route,
+        JSON.stringify(current),
+      )
+    }
+
+    const sideNav = sidebarOf((await get('/admin', { cookie: adminCookie })).body)
+    check(
+      '侧栏：六个模块名 + 两个组标签都在',
+      ['概览', '目标', '账号', '备份', '设置', '文章'].every((t) => sideNav.includes(`>${t}<`)) &&
+        sideNav.includes('>运维<') &&
+        sideNav.includes('>内容<'),
+    )
+    check('侧栏条目**不带计数**（#58 Notes 10：侧栏里一个数字都没有）', !/\d/.test(sideNav))
+
+    const roTargets = await get('/admin/targets', { cookie: roCookie })
+    check(
+      '只读 GET /admin/targets → 403，且**没有**侧栏（403 不长侧栏：#59 §5）',
+      roTargets.status === 403 && !roTargets.body.includes('class="admin-side"'),
+      `got ${roTargets.status}`,
+    )
+
+    for (const p of ['/', '/status', '/about', '/posts']) {
+      const page = await get(p, { cookie: adminCookie })
+      check(
+        `${p}**没有**侧栏（侧栏只在管理台内部）`,
+        page.status === 200 && !page.body.includes('class="admin-side"'),
+        `got ${page.status}`,
+      )
+    }
+
+    check(
+      '顶栏「管理」**仍**带 aria-current（侧栏没有把它抢走；两个 current 是 #59 §10 的有意为之）',
+      /aria-current="page"[^>]*>管理</.test((await get('/admin', { cookie: adminCookie })).body),
+    )
+
+    // 文章页的**编辑态**同属「文章」这一个模块：拿列表里第一条真实 slug 进去看
+    const listHtml = (await get('/admin/articles', { cookie: adminCookie })).body
+    const slugMatch = listHtml.match(/\/admin\/articles\?edit=([^"&]+)/)
+    const editPath = slugMatch ? `/admin/articles?edit=${slugMatch[1]}` : '/admin/articles?edit='
+    const editPage = await get(editPath, { cookie: adminCookie })
+    const editCurrent = currentIn(sidebarOf(editPage.body))
+    check(
+      '文章页（含编辑态）高亮的是「文章」，不是「概览」',
+      editPage.status === 200 && editCurrent.length === 1 && editCurrent[0] === '/admin/articles',
+      `路径=${editPath} 当前项=${JSON.stringify(editCurrent)}`,
+    )
+
     // ── 未登录 → 302 → /login?next=/admin，登录后回跳 ──
     const anon = await get('/admin')
     check(

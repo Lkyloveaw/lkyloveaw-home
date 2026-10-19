@@ -60,11 +60,25 @@ export function formatUptime(uptime: number | null): string {
   return uptime == null ? '暂无数据' : `${(uptime * 100).toFixed(2)}%`
 }
 
+/**
+ * 管理台的**六个模块**（`docs/admin-console-sidebar-decision.md` §1）。
+ *
+ * 它是**另一根轴**，不是把 `active` 拆成六个值：`active` 管「顶栏哪一项亮」与「属于哪个平面」，
+ * 六页共用同一个 `active: 'admin'`；模块只回答「侧栏哪一项高亮」。拆开会让一个字段有两种读法。
+ */
+export type AdminSection = 'overview' | 'targets' | 'accounts' | 'backups' | 'settings' | 'articles'
+
 export interface LayoutOptions {
   title: string
   description: string
   /** 高亮哪个导航项。**可省**：403 这类页面不属于任何一个导航项。 */
   active?: 'home' | 'posts' | 'status' | 'about' | 'admin'
+  /**
+   * 管理台的哪个模块。**只有它存在时才长侧栏** —— 首页 / 面板 / 403 / 登录页都不传，
+   * 所以那些页面的渲染结果**逐字节不变**（「侧栏只在管理台内部」不是靠自觉，是靠这个分支）。
+   * ⚠ 忘了传的后果是「这一页没有侧栏」：肉眼可见，且 e2e 逐路由断言「侧栏里恰好一项高亮且指向当前路径」。
+   */
+  adminSection?: AdminSection
   body: string
   bodyClass?: string
 }
@@ -107,9 +121,50 @@ function nav(active: LayoutOptions['active']): string {
     .join('')
 }
 
+/**
+ * 侧栏的两组（`docs/admin-console-sidebar-decision.md` §2）。分组与顺序写死在这里：
+ * 它是**信息架构**，不是数据 —— 「运维 5 项 / 内容 1 项」是 #59 定下的决定，不是运行时算出来的。
+ */
+const SIDEBAR_GROUPS: ReadonlyArray<[string, ReadonlyArray<[AdminSection, string, string]>]> = [
+  [
+    '运维',
+    [
+      ['overview', '/admin', '概览'],
+      ['targets', '/admin/targets', '目标'],
+      ['accounts', '/admin/accounts', '账号'],
+      ['backups', '/admin/backups', '备份'],
+      ['settings', '/admin/settings', '设置'],
+    ],
+  ],
+  ['内容', [['articles', '/admin/articles', '文章']]],
+]
+
+/**
+ * 管理台的左侧导航。
+ *
+ * **条目不带计数 / 徽标**（map #58 Notes 10）：只有标签 + href + 当前项标记 ——
+ * 计数会造出第二份真相，而概览页已经有那一份。
+ * 当前项用 `aria-current="page"`，与顶栏同一判据：不引入第二套「哪一项是当前项」的表示法。
+ */
+function adminSidebar(section: AdminSection): string {
+  return `<nav class="admin-side" aria-label="管理台导航">${SIDEBAR_GROUPS.map(
+    ([label, items]) =>
+      `<div class="admin-side-group"><span class="admin-side-group-label">${label}</span>${items
+        .map(
+          ([key, href, text]) => `<a href="${href}"${key === section ? ' aria-current="page"' : ''}>${text}</a>`,
+        )
+        .join('')}</div>`,
+  ).join('')}</nav>`
+}
+
 export function layout(opts: LayoutOptions, site: { title: string; description: string }): string {
   // 平面 + 页面自带的 bodyClass（登录页不走 `layout()`，它自己在 `<body>` 上写 plane-data）。
   const bodyClass = [`plane-${planeOf(opts.active)}`, opts.bodyClass].filter(Boolean).join(' ')
+  // 管理台：正文列**之前**长出侧栏（`docs/admin-console-sidebar-decision.md` §2）。
+  // `adminSection` 没传时这里与改动前**一字不差** —— 首页 / 分享 / 面板 / 403 / 登录都不受影响。
+  const main = opts.adminSection
+    ? `<main class="wrap admin-shell">${adminSidebar(opts.adminSection)}<div class="admin-main">${opts.body}</div></main>`
+    : `<main class="wrap">${opts.body}</main>`
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -128,7 +183,7 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
     <form class="logout-form" method="post" action="/logout">${csrfField()}<button type="submit">登出</button></form>
   </div>
 </header>
-<main class="wrap">${opts.body}</main>
+${main}
 <footer class="site-footer">
   <div class="wrap">
     <span>${escapeHtml(site.description)}</span>
@@ -287,7 +342,7 @@ ${card('备份', backupValue, backupDetail, '/admin/backups')}
 ${card('站点设置', d.settings.title, `${d.settings.description} · 每 ${d.settings.intervalSeconds}s 探测`, '/admin/settings')}
 </div>`
 
-  return layout({ title: '管理台', description: site.description, active: 'admin', body }, site)
+  return layout({ title: '管理台', description: site.description, active: 'admin', adminSection: 'overview', body }, site)
 }
 
 /** 管理台目标页的一行（`docs/admin-console-ia-decision.md` §6.2）。 */
@@ -450,7 +505,7 @@ ${rows.length ? '' : '<p class="empty">库里还没有目标。用下面的表�
 ${newForm}
 ${list}`
 
-  return layout({ title: '目标 · 管理台', description: site.description, active: 'admin', body }, site)
+  return layout({ title: '目标 · 管理台', description: site.description, active: 'admin', adminSection: 'targets', body }, site)
 }
 
 /** 管理台设置页的一行（`docs/admin-console-ia-decision.md` §6.5）。 */
@@ -543,7 +598,7 @@ ${fields}
 <p class="admin-hint">这些改错了会删数据、或把人锁在外面 —— 所以它们不放进网页表单，只在这里让你一眼看到。</p>
 <dl class="kv">${envRows}</dl>`
 
-  return layout({ title: '站点设置 · 管理台', description: site.description, active: 'admin', body }, site)
+  return layout({ title: '站点设置 · 管理台', description: site.description, active: 'admin', adminSection: 'settings', body }, site)
 }
 
 /** 备份页的一行（`docs/admin-console-ia-decision.md` §6.4 · `docs/settings-source-decision.md` §5）。 */
@@ -641,7 +696,7 @@ ${listing}
 <p class="notice notice-warn">⚠ <strong>恢复一份旧备份会让那份备份里「当时还活着」的会话重新有效</strong>：
 <code>sessions</code> 表跟着库一起被搬回去了。恢复属于 SSH 操作，做之前想清楚这一点。</p>`
 
-  return layout({ title: '备份 · 管理台', description: site.description, active: 'admin', body }, site)
+  return layout({ title: '备份 · 管理台', description: site.description, active: 'admin', adminSection: 'backups', body }, site)
 }
 
 /** 账号页的一行（`docs/admin-console-ia-decision.md` §6.3）。 */
@@ -784,7 +839,7 @@ ${newForm}
 <h2>现有账号（${rows.length}）</h2>
 ${table}`
 
-  return layout({ title: '账号 · 管理台', description: site.description, active: 'admin', body }, site)
+  return layout({ title: '账号 · 管理台', description: site.description, active: 'admin', adminSection: 'accounts', body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
@@ -1392,5 +1447,5 @@ ${trashSection}
 ${editForm}
 ${revisions}`
 
-  return layout({ title: '文章 · 管理台', description: site.description, active: 'admin', body }, site)
+  return layout({ title: '文章 · 管理台', description: site.description, active: 'admin', adminSection: 'articles', body }, site)
 }

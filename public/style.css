@@ -34,6 +34,11 @@
   --on-accent: #fff8ee;
   --radius: 10px;
   --wrap: 900px;
+  /* 管理台宽栏与侧栏宽（`docs/admin-console-sidebar-decision.md` §3）：
+     1140 = 20（内边距）+ 220（侧栏）+ 20（栏距）+ 860（今天的正文列）+ 20（内边距）
+     —— 所以「正文不被压缩」是**算出来的**，不是感觉。两个都是非颜色 token。 */
+  --wrap-admin: 1140px;
+  --side-w: 220px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
     "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
@@ -446,6 +451,27 @@ main { padding-top: 34px; }
 .btn-danger { border-color: var(--bad); color: var(--bad); }
 .admin-hint { color: var(--fg-faint); font-size: 0.86rem; }
 
+/* ---------- 管理台左侧导航（#59 定稿 · #62 实现） ----------
+   栏宽算术见 `:root` 的 `--wrap-admin`。⚠ 内容列必须 `minmax(0, 1fr)`：
+   `.admin-table` 是 width:100% 的宽表，写 `1fr`（= `minmax(auto, 1fr)`）会让 min-content
+   把网格撑出容器 —— 症状是整页横滚，而 720px 断点那条「表格自己滚」的断言管不了它。 */
+.admin-shell {
+  max-width: var(--wrap-admin);
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+/* 网格子项默认 `min-width: auto`，宽表照样能把列撑大 —— 这条是上面那句 minmax 的另一半 */
+.admin-main { min-width: 0; }
+.admin-side { display: flex; flex-direction: column; gap: 14px; }
+.admin-side-group { display: flex; flex-direction: column; gap: 2px; }
+.admin-side-group-label { color: var(--fg-faint); font-size: 0.76rem; letter-spacing: 0.08em; padding: 0 8px; }
+.admin-side a { color: var(--fg-dim); padding: 5px 8px; border-left: 2px solid transparent; font-size: 0.9rem; }
+.admin-side a:hover { color: var(--fg); text-decoration: none; }
+/* 当前项：与顶栏同一判据（`aria-current`）；配色只用已断言的那几对（fg/bg-soft + accent 当左边框） */
+.admin-side a[aria-current="page"] { color: var(--fg); background: var(--bg-soft); border-left-color: var(--accent); }
+
 /* 管理台文章页（#50）：列表表格 + 正文文本框 + 草稿预览 */
 .admin-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-bottom: 24px; }
 .admin-table th { text-align: left; color: var(--fg-faint); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
@@ -548,6 +574,11 @@ main { padding-top: 34px; }
   .prose { max-width: none; }
   .plane-prose .hero h1 { font-size: 1.75rem; }
   .plane-prose .post-header h1 { font-size: 1.6rem; }
+  /* 管理台侧栏折成横向条目条（#59 §4）：不用 JS，组标签各起一行 —— 分组这条 IA 决定在窄屏也活着 */
+  .admin-shell { grid-template-columns: minmax(0, 1fr); }
+  .admin-side { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  .admin-side-group { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+  .admin-side-group-label { flex-basis: 100%; }
 }
 
 @media (max-width: 560px) {
@@ -581,10 +612,12 @@ main { padding-top: 34px; }
     background: #ffffff; color: #000000;
     font-size: 11pt; line-height: 1.5;
   }
-  .site-header, .site-footer, .logout-form, .site-nav, .live-tag,
+  .site-header, .site-footer, .logout-form, .site-nav, .admin-side, .live-tag,
   .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis { display: none !important; }
   main { padding-top: 0; }
   .wrap { max-width: none; padding: 0; }
+  /* 侧栏藏掉之后，管理台外壳退回单列（否则打印出来的正文仍只占右边那一列） */
+  .admin-shell { display: block; max-width: none; }
   .prose { max-width: none; }
   .card, .stat, .target-card, .post-card, .target-row, .cell-strip, .chart { break-inside: avoid; }
   .post-card, .card, .stat, .target-card { border: 1px solid #bbbbbb; }
