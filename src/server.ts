@@ -66,7 +66,7 @@ import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCook
 import { createSession, revokeSession } from './sessions-store.js'
 import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin } from './auth.js'
 import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, currentUserId, verifyCsrf } from './csrf.js'
-import { docToMarkdown, markdownToDoc } from './article-import.js'
+import { docToMarkdown } from './article-import.js'
 import { docToHtml } from './article-html.js'
 import { docFromJson } from './article-doc.js'
 import {
@@ -581,8 +581,8 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
           date: sub?.date ?? row.date,
           tags: sub?.tags ?? parseTagList(row.tags).join(', '),
           summary: sub?.summary ?? (row.summary ?? ''),
-          // 没有提交内容时，把库里的**文档 JSON 还原成 Markdown**（`docToMarkdown` 的用处就在这）
-          markdown: sub?.body_md ?? docToMarkdown(docFromJson(JSON.parse(row.body))),
+          // 编辑器的初次内容 = 库里的**文档 JSON 原文**；400 回填时用用户刚提交的那份。
+          bodyJson: sub?.body_json ?? row.body,
           draft: row.draft === 1,
           isNew: false,
           trashed: row.deletedAt !== null,
@@ -613,7 +613,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
           date: sub?.date ?? todayStamp(),
           tags: sub?.tags ?? '',
           summary: sub?.summary ?? '',
-          markdown: sub?.body_md ?? '',
+          bodyJson: sub?.body_json ?? '',
           draft: true,
           isNew: true,
           trashed: false,
@@ -756,7 +756,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     // 新建 / 保存：**校验 → 转文档 → 落库**
     const title = String(form.title ?? '').trim()
     const slug = String(form.slug ?? '').trim()
-    const markdown = String(form.body_md ?? '')
+    const bodyJsonRaw = String(form.body_json ?? '')
     const summary = String(form.summary ?? '').trim()
     const date = String(form.date ?? '').trim() || todayStamp()
     const { tags, rejected } = normalizeTags(form.tags)
@@ -778,8 +778,16 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       return back('标签名不合法：' + rejected.join('、') + '（标签名就是 URL，不能含 /）', slug || undefined)
     }
 
-    const { doc, warnings } = markdownToDoc(markdown)
-    const bodyJson = JSON.stringify(doc.toJSON())
+    // 正文是**文档 JSON**（#34/#57）：编辑器把 hidden 字段同步成它。畸形输入 → 400（不是 500）。
+    let bodyJson: string
+    try {
+      const doc = docFromJson(JSON.parse(bodyJsonRaw))
+      // 用 schema **归一化**：TipTap 的额外属性（link.target/rel、image.width/height、cell.align…）
+      // 在这里被丢掉 —— 存进库的永远是闭集 schema 认的那一份。
+      bodyJson = JSON.stringify(doc.toJSON())
+    } catch (err) {
+      return back('正文不是合法的文档 JSON：' + (err as Error).message, slug || undefined)
+    }
     const size = validateBodySize(bodyJson)
     if (!size.ok) return back(size.reason, slug || undefined)
 
@@ -795,7 +803,6 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       draft: existing ? existing.draft : 1,
       now: Date.now(),
     })
-    if (warnings.length) console.warn('[articles] 转换告警：' + warnings.slice(0, 3).join('；'))
     console.log('[articles] ' + result + ' ' + slug + (existing ? '' : '（新建，默认草稿）'))
     const notice = action === 'article-create' ? 'article-created' : 'article-saved'
     return reply.redirect('/admin/articles?edit=' + encodeURIComponent(slug) + '&notice=' + notice, 302)
@@ -891,7 +898,12 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       console.log('[media] ' + (saved.created ? '已保存' : '已存在') + ' ' + saved.name)
       // 回跳带上文件名 —— 它的形状**受 `isSafeMediaName` 校验**，所以它不是「URL 里的自由文本」。
       const notice = saved.created ? 'media-uploaded' : 'media-duplicate'
-      return reply.redirect('/admin/articles?notice=' + notice + '&uploaded=' + encodeURIComponent(saved.name), 302)
+      // 从编辑面发起的上传要**回到那个编辑面**，编辑器才会把这张图插进正文（#57）。
+      // ⚠ slug 先确认它真是一篇文章、再进 URL —— 不把请求体里的自由文本拼进回跳。
+      const editRaw = (req.body as Record<string, unknown> | undefined)?.edit_slug
+      const editSlug = typeof editRaw === 'string' ? editRaw : ((editRaw as { value?: string } | undefined)?.value ?? '')
+      const backTo = editSlug && getArticleForAdmin(editSlug) ? '?edit=' + encodeURIComponent(editSlug) + '&' : '?'
+      return reply.redirect('/admin/articles' + backTo + 'notice=' + notice + '&uploaded=' + encodeURIComponent(saved.name), 302)
     } catch (err) {
       // 类型不对 / 空文件 / 超限 —— 全都在 `saveMedia` 里判掉，这里只负责**显眼地**说出去。
       console.warn('[media] 拒绝：' + (err as Error).message)

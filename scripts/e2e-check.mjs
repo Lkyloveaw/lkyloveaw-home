@@ -1092,7 +1092,36 @@ try {
     const csrf = () => csrfFor(admin)
     const SLUG = 'e2e-写路径探针'
     const TITLE = 'e2e 写路径探针标题'
-    const MD = '# 一级标题\n\n正文**加粗**与 `代码`。\n\n- 甲\n- 乙\n'
+    // ⚠ #57 起正文是**文档 JSON**（编辑器写的就是它）：夹具直接造 JSON，不再过 Markdown。
+    const docJson = (text) =>
+      JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] }] })
+    const RICH = JSON.stringify({
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: '一级标题' }] },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '正文' },
+            { type: 'text', marks: [{ type: 'bold' }], text: '加粗' },
+            { type: 'text', text: '与 ' },
+            { type: 'text', marks: [{ type: 'code' }], text: '代码' },
+            { type: 'text', text: '。' },
+          ],
+        },
+        {
+          type: 'bulletList',
+          content: [
+            { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: '甲' }] }] },
+            { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: '乙' }] }] },
+          ],
+        },
+      ],
+    })
+    const RICH2 = JSON.stringify({
+      type: 'doc',
+      content: [...JSON.parse(RICH).content, { type: 'paragraph', content: [{ type: 'text', text: '新增一段。' }] }],
+    })
 
     // 前置：管理台文章页在
     const list0 = await get('/admin/articles', { cookie: admin })
@@ -1103,7 +1132,7 @@ try {
     const created = await postForm('/admin/articles', {
       cookie: admin,
       csrf: csrf(),
-      form: { action: 'article-create', slug: SLUG, title: TITLE, date: '2026-03-01', tags: '探针, 验收', summary: '', body_md: MD },
+      form: { action: 'article-create', slug: SLUG, title: TITLE, date: '2026-03-01', tags: '探针, 验收', summary: '', body_json: RICH },
     })
     check('① 新建 → 302（PRG，刷新不重复提交）', created.status === 302, `got ${created.status}`)
     check('① 回跳到编辑面并带 notice', /edit=.*notice=article-created/.test(created.location), created.location)
@@ -1119,7 +1148,10 @@ try {
     // ③ 但在管理台里能打开，且**正文被还原成 Markdown**（docToMarkdown 的用处）
     const editPage = await get('/admin/articles?edit=' + encodeURIComponent(SLUG), { cookie: admin })
     check('③ ?edit= 能打开草稿', editPage.status === 200 && editPage.body.includes(TITLE))
-    check('③ **正文回填**（文档 JSON 还原成了 Markdown）', editPage.body.includes('# 一级标题') && editPage.body.includes('**加粗**'))
+    check('③ **正文回填**（hidden 里是文档 JSON，编辑器直接吃它）', editPage.body.includes('id="article-body-json"') && editPage.body.includes('一级标题') && editPage.body.includes('加粗'))
+      check('③ 编辑页挂了编辑器挂载点（#article-editor）', editPage.body.includes('id="article-editor"'))
+      check('③ 编辑页引用了打包产物 /article-editor.js', editPage.body.includes('src="/article-editor.js"'))
+      check('③ 禁 JS 时有说明而不是空表单（noscript）', /<noscript>/.test(editPage.body))
     check('③ 草稿在管理台内**有预览**（读者看不到）', /article-preview/.test(editPage.body) && /一级标题/.test(editPage.body))
     check('③ slug 对已有文章是只读的（发布后不可改）', /name="slug"[^>]*readonly/.test(editPage.body))
 
@@ -1127,7 +1159,7 @@ try {
     const saved = await postForm('/admin/articles', {
       cookie: admin,
       csrf: csrf(),
-      form: { action: 'article-save', orig_slug: SLUG, slug: SLUG, title: TITLE + '（改过）', date: '2026-03-01', tags: '探针', summary: '', body_md: MD + '\n新增一段。\n' },
+      form: { action: 'article-save', orig_slug: SLUG, slug: SLUG, title: TITLE + '（改过）', date: '2026-03-01', tags: '探针', summary: '', body_json: RICH2 },
     })
     check('④ 保存 → 302 + notice', saved.status === 302 && /notice=article-saved/.test(saved.location), saved.location)
     const stillDraft = await get('/posts/' + encodeURIComponent(SLUG), { cookie: admin })
@@ -1160,7 +1192,7 @@ try {
     const dup = await postForm('/admin/articles', {
       cookie: admin,
       csrf: csrf(),
-      form: { action: 'article-create', slug: SLUG, title: '撞名的那篇', date: '2026-03-02', tags: '', summary: '', body_md: LONG },
+      form: { action: 'article-create', slug: SLUG, title: '撞名的那篇', date: '2026-03-02', tags: '', summary: '', body_json: docJson(LONG) },
     })
     check('⑦ 撞名 → **400**', dup.status === 400, `got ${dup.status}`)
     check('⑦ 文案给出占用者标题', dup.body.includes(TITLE), '没看到占用者标题')
@@ -1171,7 +1203,7 @@ try {
     const badTag = await postForm('/admin/articles', {
       cookie: admin,
       csrf: csrf(),
-      form: { action: 'article-create', slug: SLUG + '-2', title: '标签不合法', date: '2026-03-03', tags: 'a/b', summary: '', body_md: '正文' },
+      form: { action: 'article-create', slug: SLUG + '-2', title: '标签不合法', date: '2026-03-03', tags: 'a/b', summary: '', body_json: docJson('正文') },
     })
     check('⑧ 标签含 `/` → 400', badTag.status === 400, `got ${badTag.status}`)
     check('⑧ 文案说明为什么', /标签名/.test(badTag.body))
@@ -1225,7 +1257,7 @@ try {
     const dupTrashed = await postForm('/admin/articles', {
       cookie: admin,
       csrf: csrf(),
-      form: { action: 'article-create', slug: SLUG, title: '想抢这个 slug', date: '2026-03-04', tags: '', summary: '', body_md: '正文' },
+      form: { action: 'article-create', slug: SLUG, title: '想抢这个 slug', date: '2026-03-04', tags: '', summary: '', body_json: docJson('正文') },
     })
     check('⑬ 回收站里的 slug **仍被占用**（撞名 400）', dupTrashed.status === 400, `got ${dupTrashed.status}`)
     check('⑬ 文案**明说它在回收站里**', /回收站/.test(dupTrashed.body))
@@ -1234,7 +1266,7 @@ try {
     const editTrashed = await postForm('/admin/articles', {
       cookie: admin,
       csrf: csrf(),
-      form: { action: 'article-save', orig_slug: SLUG, slug: SLUG, title: '偷改回收站里的文章', date: '2026-03-01', tags: '', summary: '', body_md: '不该写进去' },
+      form: { action: 'article-save', orig_slug: SLUG, slug: SLUG, title: '偷改回收站里的文章', date: '2026-03-01', tags: '', summary: '', body_json: docJson('不该写进去') },
     })
     check('⑭ 对回收站里的文章「保存」→ **400**（不许悄悄还原）', editTrashed.status === 400, `got ${editTrashed.status}`)
     check('⑭ 文案告诉用户先还原', /先还原/.test(editTrashed.body))
@@ -1285,9 +1317,9 @@ try {
     }
     const revForm = (action, extra) => ({ action, orig_slug: RSLUG, slug: RSLUG, date: '2026-03-05', tags: '', summary: '', ...extra })
 
-    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-create', { title: '第一版标题', body_md: '第一版正文' }) })
-    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-save', { title: '第二版标题', body_md: '第二版正文' }) })
-    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-save', { title: '第三版标题', body_md: '第三版正文' }) })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-create', { title: '第一版标题', body_json: docJson('第一版正文') }) })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-save', { title: '第二版标题', body_json: docJson('第二版正文') }) })
+    await postForm('/admin/articles', { cookie: admin, csrf: csrf(), form: revForm('article-save', { title: '第三版标题', body_json: docJson('第三版正文') }) })
     check('⑲ 保存三次 → 三条修订（**新建那次也留了**）', revCount() === 3, `n=${revCount()}`)
 
     const revPage = await get('/admin/articles?edit=' + encodeURIComponent(RSLUG), { cookie: admin })
@@ -1310,8 +1342,8 @@ try {
     })
     check('㉑ 退回 → 302 + notice', reverted.status === 302 && /notice=article-reverted/.test(reverted.location), reverted.location)
     const afterRevert = await get('/admin/articles?edit=' + encodeURIComponent(RSLUG), { cookie: admin })
-    const textarea = (afterRevert.body.match(/name="body_md"[^>]*>([\s\S]*?)<\/textarea>/) || [])[1] ?? ''
-    check('㉑ **当前正文等于那一版**', textarea.includes('第一版正文') && !textarea.includes('第三版正文'), textarea.slice(0, 40))
+    const hiddenVal = (afterRevert.body.match(/name="body_json"[^>]*value="([^"]*)"/) || [])[1] ?? ''
+    check('㉑ **当前正文等于那一版**', hiddenVal.includes('第一版正文') && !hiddenVal.includes('第三版正文'), hiddenVal.slice(0, 60))
     check('㉒ **退回本身也留了一条修订**（条数 +1）', revCount() === beforeRevert + 1, `${beforeRevert} → ${revCount()}`)
     check('㉓ **退回不删任何版本**（第三版仍在列表里）', /第三版标题/.test(afterRevert.body))
 
@@ -1345,6 +1377,91 @@ try {
   }
 
   // ══════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[富文本编辑器（#57）：文档 JSON 写路径 · 合并单元格/列宽往返 · 禁 JS 说明]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const admE = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
+    const adminE = admE.setCookie.split(';')[0]
+    const csrfE = () => csrfFor(adminE)
+
+    // 打包产物：**匿名**也能取到 —— 它在 PUBLIC_PATHS 里；精确路径白名单漏加＝编辑器不出来。
+    const bundle = await get('/article-editor.js')
+    check('打包产物 /article-editor.js 匿名可取（精确路径白名单生效）', bundle.status === 200 && bundle.body.includes('ProseMirror'), 'status=' + bundle.status)
+
+    // 合并单元格 + 列宽：这是选「文档 JSON」而不是 Markdown 的**理由**（GFM 表达不了）。
+    const MSLUG = 'e2e-合并单元格'
+    const MERGED = JSON.stringify({
+      type: 'doc',
+      content: [
+        {
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableHeader', attrs: { colspan: 2, rowspan: 1, colwidth: [120, 80] }, content: [{ type: 'paragraph', content: [{ type: 'text', text: '合并表头' }] }] },
+                { type: 'tableHeader', attrs: { colspan: 1, rowspan: 1, colwidth: null }, content: [{ type: 'paragraph', content: [{ type: 'text', text: '第三列' }] }] },
+              ],
+            },
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableCell', attrs: { colspan: 1, rowspan: 2, colwidth: null }, content: [{ type: 'paragraph', content: [{ type: 'text', text: '跨两行' }] }] },
+                { type: 'tableCell', attrs: { colspan: 1, rowspan: 1, colwidth: null }, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'b1' }] }] },
+                { type: 'tableCell', attrs: { colspan: 1, rowspan: 1, colwidth: null }, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'c1' }] }] },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    const mCreated = await postForm('/admin/articles', { cookie: adminE, csrf: csrfE(), form: { action: 'article-create', slug: MSLUG, title: '合并单元格探针', date: '2026-03-10', tags: '', summary: '', body_json: MERGED } })
+    check('合并单元格：新建（草稿）→ 302', mCreated.status === 302, 'got ' + mCreated.status)
+    await postForm('/admin/articles', { cookie: adminE, csrf: csrfE(), form: { action: 'article-publish', orig_slug: MSLUG } })
+    const mPage = await get('/posts/' + encodeURIComponent(MSLUG), { cookie: adminE })
+    check('合并单元格：读面 200', mPage.status === 200, 'got ' + mPage.status)
+    check('合并单元格：渲染出 colspan="2"', mPage.body.includes('colspan="2"'))
+    check('合并单元格：渲染出 rowspan="2"', mPage.body.includes('rowspan="2"'))
+    check('列宽：渲染出 colgroup 与 width: 120px', mPage.body.includes('<colgroup>') && mPage.body.includes('width: 120px'))
+    const mEdit = await get('/admin/articles?edit=' + encodeURIComponent(MSLUG), { cookie: adminE })
+    const mHidden = (mEdit.body.match(/name="body_json"[^>]*value="([^"]*)"/) || [])[1] ?? ''
+    check('合并单元格：编辑面回填的 JSON 仍带 colspan 与 colwidth', mHidden.includes('colspan') && mHidden.includes('colwidth'), mHidden.slice(-80))
+
+    // 从编辑面发起的上传 → 回到该编辑面，且挂载点带 data-uploaded-name（编辑器据此把图插进正文）
+    const { createHash } = await import('node:crypto')
+    const pngE = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 3)])
+    const upNameE = createHash('sha256').update(pngE).digest('hex') + '.png'
+    const B = '----e2eEditUpload'
+    const field = (name, value) => Buffer.from('--' + B + '\r\nContent-Disposition: form-data; name="' + name + '"\r\n\r\n' + value + '\r\n')
+    const upE = await fetch(BASE + '/admin/articles/media', {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie: adminE, origin: BASE, 'content-type': 'multipart/form-data; boundary=' + B },
+      body: Buffer.concat([
+        field('csrf', csrfE()),
+        field('edit_slug', MSLUG),
+        Buffer.from('--' + B + '\r\nContent-Disposition: form-data; name="file"; filename="x.png"\r\nContent-Type: image/png\r\n\r\n'),
+        pngE,
+        Buffer.from('\r\n--' + B + '--\r\n'),
+      ]),
+    })
+    const upELoc = upE.headers.get('location') || ''
+    check('编辑面里上传 → 回到该编辑面（带 edit= 与 uploaded=）', upE.status === 302 && upELoc.includes('edit=') && upELoc.includes('uploaded=' + upNameE), upELoc)
+    const upEPage = await get(upELoc, { cookie: adminE })
+    check('编辑面挂载点带 data-uploaded-name（编辑器会把图插进正文）', upEPage.body.includes('data-uploaded-name="' + upNameE + '"'))
+
+    // 畸形 JSON → 400，且**正文回填**（不静默丢内容）
+    const badJson = await postForm('/admin/articles', { cookie: adminE, csrf: csrfE(), form: { action: 'article-create', slug: MSLUG + '-bad', title: '坏 JSON', date: '2026-03-11', tags: '', summary: '', body_json: '{不是 JSON' } })
+    check('畸形文档 JSON → **400**（不是 500）', badJson.status === 400, 'got ' + badJson.status)
+    check('畸形 JSON 的文案说清是正文的问题', /文档 JSON/.test(badJson.body))
+    check('畸形 JSON 也**回填**（正文不丢）', badJson.body.includes('{不是 JSON'))
+
+    // schema 不合法（空 doc）→ 400：nodeFromJSON 只管类型名，check() 才管内容模型
+    const emptyDoc = await postForm('/admin/articles', { cookie: adminE, csrf: csrfE(), form: { action: 'article-create', slug: MSLUG + '-empty', title: '空文档', date: '2026-03-12', tags: '', summary: '', body_json: '{"type":"doc","content":[]}' } })
+    check('内容模型不合法（空 doc）→ 400（check() 真的在跑）', emptyDoc.status === 400, 'got ' + emptyDoc.status)
+  }
+
   console.log('\n[媒体服务（#52）：登录可见 · 名字即安全边界 · 长缓存]')
   // ══════════════════════════════════════════════════════════
   {

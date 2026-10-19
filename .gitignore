@@ -18,6 +18,9 @@ data/
 .DS_Store
 Thumbs.db
 
+# 编辑器打包产物（ADR 0006：由 npm run build 生成，不进 git）
+public/article-editor.js
+
 # 日志
 *.log
 npm-debug.log*

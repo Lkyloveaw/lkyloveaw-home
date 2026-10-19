@@ -468,9 +468,26 @@ main { padding-top: 34px; }
 .admin-table th { text-align: left; color: var(--fg-faint); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .admin-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .article-form { display: block; margin-bottom: 18px; }
-.article-body { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88rem;
-  line-height: 1.6; padding: 10px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg-soft); color: var(--fg); resize: vertical; }
+/* 写作区富文本编辑器（#57）：只服务编辑面；读面仍是服务端渲染，禁 JS 也能读。 */
+.article-editor { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-soft);
+  color: var(--fg); min-height: 320px; max-height: 70vh; overflow: auto; }
+.article-editor .ProseMirror { min-height: 300px; padding: 10px 12px; outline: none; }
+.article-editor .ProseMirror p { margin: 0 0 0.6em; }
+.article-editor .ProseMirror table { border-collapse: collapse; width: 100%; margin: 0.6em 0; }
+.article-editor .ProseMirror th, .article-editor .ProseMirror td { border: 1px solid var(--border);
+  padding: 4px 8px; vertical-align: top; }
+.article-editor .ProseMirror th { background: var(--bg-card); text-align: left; }
+.article-editor .ProseMirror img { max-width: 100%; height: auto; }
+.article-editor .ProseMirror blockquote { border-left: 3px solid var(--border); margin: 0.6em 0;
+  padding-left: 12px; color: var(--fg-dim); }
+.article-editor .ProseMirror pre { background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; overflow: auto; }
+.article-editor .ProseMirror code { font-family: var(--mono); font-size: 0.9em; }
+.article-editor .ProseMirror-selectednode { outline: 2px solid var(--accent); }
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.editor-toolbar button { font: inherit; font-size: 0.82rem; padding: 4px 8px; border: 1px solid var(--border);
+  background: var(--bg-card); color: var(--fg); border-radius: 6px; cursor: pointer; }
+.editor-toolbar button:hover { border-color: var(--accent); }
 .article-preview { padding: 12px 16px; }
 
 /* 修订历史（#51）：列表 + 逐版全文 */

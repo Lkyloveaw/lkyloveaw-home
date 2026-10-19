@@ -309,6 +309,8 @@ node dist/cli/backup.js --restore <日期>  # 按日期整站恢复（数据库 
 **改完立刻生效**（不用重启、不用登服务器）。每次保存留一版**全文快照**（修订历史，可退回）；
 删除先**进回收站**（可还原，只有点「彻底删除」才真删）。
 
+- **写作区是富文本编辑器**（TipTap，[ADR 0006](docs/adr/0006-frontend-build-step-for-richtext.md)）：工具栏含表格（**合并单元格 / 列宽**）与图片。
+  **写需要 JS**；读面一直不需要（仍是服务端渲染）。打包产物由 `npm run build` 生成，闸门白名单里登记为 `/article-editor.js`。
 - **正文以结构化文档保存**（不是 Markdown、也不是 HTML），读面按**闭集 schema** 在服务端渲染
   （`src/article-doc.ts` / `src/article-html.ts`）；schema 里不启用 raw HTML 节点，所以可渲染的标签集是**闭集**。
 - **草稿对读者不存在**：新建默认是草稿 —— 不在任何列表、不在标签页、直链 **404**；但作者能在**管理台内**打开并预览。
@@ -373,12 +375,13 @@ npm run check:all     # = verify + check:e2e（全量，提交前该跑这个）
 npm run check:unit    # 凭据 / 会话 / 目标 / 设置 / 目录三态等纯函数与子进程断言（245 项，不需要起服务）
 npm run check:media   # 媒体落盘、去重、拒绝、引用提取与孤图判定（35 项）
 npm run check:article # 文章流水线 Markdown→文档→HTML：结构等价、闭集、图片（96 项）
+npm run check:editor  # 编辑面：打包产物新鲜度 + 闸门白名单 + 编辑器/读面 schema 对齐（35 项）
 npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（32 项）
 npm run check:chart   # 曲线几何的交叉断言（40 项）+ 面板 DOM 行为（47 项）
 npm run check:style   # 样式：WCAG 对比度逐对算比值、类名覆盖、两套平面、窄屏与打印（71 项）
 npm run check:backup  # 入口校验、checkpoint、备份三件套与恢复（92 项）+ 探测循环里真的调了备份（11 项）
 npm run check:restart # 真杀进程再起：历史与会话是否活过重启（17 项）
-npm run check:e2e     # 真实起服务、真实探测、逐项断言（485 项，需要先 npm run build）
+npm run check:e2e     # 真实起服务、真实探测、逐项断言（501 项，需要先 npm run build）
 ```
 
 ### ⚠ 写安全断言时的一条硬规矩
@@ -530,7 +533,8 @@ src/
   sanitize.ts       文章 HTML 的白名单清洗
   public-summary.ts /api/status 的白名单投影
   cli/              运维命令行（passwd / backup / articles / media）
-public/             样式、面板数值刷新脚本、图表路径
-content/            文章
+editor/           写作区富文本编辑器（TipTap 源码；esbuild 打包成 public/article-editor.js）
+public/             样式、面板数值刷新脚本、图表路径、编辑器打包产物（构建生成，不进 git）
+content/            文章（**只在首次导入 / --reimport 时读**；真源是库里的 articles 表）
 targets.json        被监控系统清单（**只在首次启动、targets 表为空时导入一次**）
 ```

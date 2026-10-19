@@ -217,7 +217,7 @@ export const NOTICE_TEXT: Record<string, string> = {
   'article-restored': '已还原。',
   'article-purged': '已彻底删除（连同它的全部修订）。',
   'article-reverted': '已退回那一版（退回本身也留了一条修订）。',
-  'media-uploaded': '图片已上传。把下面那段 Markdown 粘进正文即可。',
+  'media-uploaded': '图片已上传 —— 编辑器加载时会把它插进正文末尾。',
   'media-duplicate': '这张图之前传过，用的是同一个 URL（没有产生第二个文件）。',
   'media-rejected': '这个文件不是支持的图片（只收 png / jpeg / webp / gif；SVG 一律拒绝）。',
   'media-too-big': '图片超过 8 MiB，先压缩再传。',
@@ -1168,7 +1168,7 @@ export interface AdminArticleListItem {
   tags: string[]
 }
 
-/** 编辑面要的一份表单数据。**`markdown` 是库里的文档 JSON 还原出来的**（`docToMarkdown`）。 */
+/** 编辑面要的一份表单数据。**`bodyJson` 是库里的文档 JSON 原文**（编辑器直接吃它）。 */
 export interface AdminArticleForm {
   slug: string
   title: string
@@ -1176,7 +1176,11 @@ export interface AdminArticleForm {
   /** 逗号分隔的原始串（照用户上次输入的样子回填）。 */
   tags: string
   summary: string
-  markdown: string
+  /**
+   * 正文的**文档 JSON 原文**（字符串）。它同时是「初次内容」与「400 回填」的载体 ——
+   * 编辑器读它、写回它，所以失败重渲染时正文一个字都不会丢。
+   */
+  bodyJson: string
   draft: boolean
   /** 新建时 slug 可填；已有文章**只读**（发布后不可改，`article-rules.ts` 的规矩）。 */
   isNew: boolean
@@ -1214,9 +1218,9 @@ export interface AdminRevisionItem {
  *
  * 一页两态：**列表**，或列表 + 展开的编辑面（`?edit=<slug>`）。
  *
- * ⚠ **失败时正文必须回填** —— 调用方把用户刚提交的 Markdown 放回 `edit.markdown`，
- * 这一页只负责原样渲染。票面原话：一篇三千字因为 slug 重名被打回、正文却空了，
- * 是这个页面能犯的**最贵**的一次错。
+ * ⚠ **失败时正文必须回填** —— 调用方把用户刚提交的**文档 JSON** 放回 `edit.bodyJson`，
+ * 这一页只负责原样渲染（编辑器从 hidden 字段读它）。票面原话：一篇三千字因为 slug 重名被打回、
+ * 正文却空了，是这个页面能犯的**最贵**的一次错。
  *
  * 草稿预览**在同一页面、同一鉴权**下渲染 —— **不在 `/posts/*` 下开任何预览入口**。
  */
@@ -1275,9 +1279,13 @@ export function adminArticlesPage(
 <div class="form-row">
 <label>摘要 <input name="summary" value="${escapeHtml(edit.summary)}" placeholder="留空则从正文派生"></label>
 </div>
-<textarea name="body_md" rows="22" class="article-body" spellcheck="false">${escapeHtml(edit.markdown)}</textarea>
+<input type="hidden" name="body_json" id="article-body-json" value="${escapeHtml(edit.bodyJson)}">
+<noscript><p class="notice notice-bad">写作区需要 JavaScript：富文本编辑器不会加载。
+请在浏览器里开启 JS 后再写（<strong>读文章一直不需要 JS</strong>）。</p></noscript>
+<div id="article-editor" class="article-editor"${opts.uploaded ? ' data-uploaded-name="' + escapeHtml(opts.uploaded.name) + '"' : ''}></div>
+<script src="/article-editor.js" defer></script>
 <div class="form-actions"><button type="submit">保存</button>
-<span class="stat-sub">正文写 Markdown；保存后刷新不重复提交。</span></div>
+<span class="stat-sub">保存后刷新不重复提交。（写作区需要 JS；读面不需要。）</span></div>
 </form>
 ${
   edit.isNew
@@ -1359,12 +1367,13 @@ ${trash
     (opts.uploaded
       ? `<div class="card">
 <p><img src="/media/${escapeHtml(opts.uploaded.name)}" alt="" class="upload-preview"></p>
-<p class="stat-sub">把这段粘进正文（alt 可以改成你想要的说明）：</p>
+<p class="stat-sub">编辑器加载时会把它<strong>插进正文末尾</strong>；下面这行是 Markdown 逃生口（<code>--reimport</code>）用的片段。</p>
 <pre class="media-snippet">${escapeHtml(opts.uploaded.snippet)}</pre>
 </div>`
       : '') +
     // 上传表单：**原生表单**，所以禁用 JS 也能传（规格 user story 3）。
     `<form method="post" action="/admin/articles/media" enctype="multipart/form-data" class="form-actions">${csrfField()}
+<input type="hidden" name="edit_slug" value="${escapeHtml(edit?.slug ?? '')}">
 <input type="file" name="file" accept="image/png,image/jpeg,image/webp,image/gif" required>
 <button type="submit">上传图片</button>
 <span class="stat-sub">一次一张 · png/jpeg/webp/gif · 最大 8 MiB · 同一张图重复上传不会产生第二个文件</span>

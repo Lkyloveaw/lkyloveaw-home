@@ -10,8 +10,12 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
+# public/ 与 scripts/ 在 build 阶段就要在：
+#   编辑器产物（public/article-editor.js）由 `npm run build` 生成，而构建脚本在 scripts/ 下。
 COPY tsconfig.json ./
 COPY src ./src
+COPY public ./public
+COPY scripts ./scripts
 RUN npm run build
 
 # ---------- 运行期 ----------
@@ -25,7 +29,8 @@ RUN npm ci --omit=dev --no-audit --no-fund \
  && rm -rf /root/.npm
 
 COPY --from=build /app/dist ./dist
-COPY public ./public
+# ⚠ 从 build 阶段取 public：编辑器产物是在那里生成的，宿主机上不一定有。
+COPY --from=build /app/public ./public
 
 # 挂载点：SQLite 历史库
 RUN mkdir -p /app/data

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "noEmit": true,
+    // 浏览器端由 esbuild 打包：用 Bundler 解析（允许无扩展名 import），不要 NodeNext 的 .js 后缀要求。
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src/editor/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
