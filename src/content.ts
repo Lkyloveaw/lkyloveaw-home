@@ -3,7 +3,7 @@
  *
  * 真源是 SQLite 的 `articles` 表（票 #32 定下的）。`content/*.md` 只在**首次导入**时读一次
  * ——此后改文件对站点**没有任何影响**（启动时只打一行警告）。这不是「暂时」的状态：
- * 编辑入口归网页（#50），在它落地之前，改文章靠 `src/cli/articles.js --reimport` 这个**逃生口**。
+ * 编辑入口归网页（#50 已落地）；`src/cli/articles.js --reimport` 只是**按文件重导的逃生口**。
  *
  * 本文件里有两类东西，别混：
  *
@@ -293,7 +293,7 @@ export function importArticlesIfEmpty(): ImportSummary | null {
 /**
  * **逃生口**：忽略「库为空」这个前提，按文件重导。
  *
- * 它是 #50 落地之前**唯一的编辑通道**：改 `content/*.md` → 跑 `node dist/cli/articles.js --reimport`。
+ * 它是**逃生口**（#50 落地后网页才是常用通道）：改 `content/*.md` → 跑 `node dist/cli/articles.js --reimport`。
  * 只 upsert，**不删**库里多出来的行（删是回收站的语义，归 #51）；
  * 没改动的文章不会写库、也不会堆一条重复修订（见 `upsertArticleWithRevision`）。
  */
