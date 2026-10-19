@@ -8,7 +8,9 @@
  * 输出里逐对打印比值，所以「估」这件事从此没有藏身处。
  *
  * 另外钉住四条跨文件事实（都是"改了这边、忘了那边"就会静默坏掉的形状）：
- *  1. **只有一份 token 表**：`:root` 恰好两个（暗色定义 + light 覆盖），且每个颜色 token 都被覆盖；
+ *  1. **只有一份 token 表**：全站**恰好一个** `:root`（#60 定稿 = B 暖色纸墨 · 浅色单套），
+ *     13 个颜色 token 全在里面，且**没有** `prefers-color-scheme` 块（深色模式已去掉）；
+ *     颜色值只出现在唯一的 `:root` 与打印块两处；
  *  2. **服务端渲染的类名都有 CSS 定义**（沿用 #21 §5 的跨文件断言思路）；
  *  3. **两套平面**（数据面 / 正文面）真的落在 `<body>` 上，且 CSS 真的按平面换排版；
  *  4. **窄屏断点与打印样式存在且内容对**；打印块不在 `:root` 上改 token（那条纪律连打印也不破）。
@@ -76,37 +78,42 @@ const contrast = (fg, bg) => {
 }
 
 // ════════════════════════════════════════════════════
-section('token 表：只有一份，light 覆盖完整')
+section('token 表：只有一份，且不再跟随系统深浅')
 // ════════════════════════════════════════════════════
 {
   const rootCount = (css.match(/:root\s*\{/g) ?? []).length
-  check('全站 `:root` 恰好两个（暗色定义 + light 覆盖），没有第三处', rootCount === 2, `实际 ${rootCount}`)
+  check('全站 `:root` 恰好一个（#60 定稿：B 暖色纸墨 · 浅色单套）', rootCount === 1, `实际 ${rootCount}`)
 
-  const darkIdx = css.indexOf(':root {')
-  const darkBody = blockAfter(css, darkIdx)
-  const lightBody = blockAfter(css, css.indexOf('@media (prefers-color-scheme: light)'))
-  const dark = parseTokens(darkBody)
-  const light = parseTokens(lightBody)
+  // 「深色模式去掉」是一条**决定**（#60），不是一次偶然。这条断言把它钉住：
+  // 日后顺手加回一个媒体块，等于让「产品到底是哪一套」重新有两个答案。
+  // ⚠ 断言的是**规则**（`@media … prefers-color-scheme`），不是这串字：注释里提它不犯规。
+  check('CSS 里没有 `@media (prefers-color-scheme …)` 块（不再跟随系统深/浅）', !/@media[^{]*prefers-color-scheme/.test(css))
 
-  // 非颜色 token（排版与形状）：两种配色下都一样，所以**不该**出现在 light 覆盖里
+  // 非颜色 token（排版与形状）：它们与配色无关，但同样只该住在这一处
   const NON_COLOR = new Set([
     'radius', 'wrap', 'font', 'mono',
     'font-data', 'font-prose', 'fs-data', 'lh-data', 'fs-prose', 'lh-prose', 'measure-prose',
   ])
-  const colorKeys = Object.keys(dark).filter((k) => !NON_COLOR.has(k))
-  const missing = colorKeys.filter((k) => !(k in light))
-  check(
-    `每个颜色 token 都在 light 里被覆盖（${colorKeys.length} 个）`,
-    missing.length === 0,
-    missing.length ? '缺：' + missing.join(', ') : colorKeys.join(', '),
-  )
-  const drifted = Object.keys(light).filter((k) => NON_COLOR.has(k))
-  check('light 覆盖里**没有**混进排版/形状 token（它们与配色无关）', drifted.length === 0, drifted.join(', '))
 
+  const rootBody = blockAfter(css, css.indexOf(':root {'))
+  const tokens = parseTokens(rootBody)
+  const colorKeys = Object.keys(tokens).filter((k) => !NON_COLOR.has(k))
+  const missingShape = [...NON_COLOR].filter((k) => !(k in tokens))
+  check(`唯一的 :root 里有 ${colorKeys.length} 个颜色 token（一份完整的主题）`, colorKeys.length === 13, colorKeys.join(', '))
+  check('排版/形状 token 也在同一个 :root 里（不能只剩颜色）', missingShape.length === 0, missingShape.join(', '))
+
+  // 颜色值只许出现在两处：唯一的 `:root`，以及打印块（打印把它就地改成纯纸面，改在 body 上）。
+  // 别处再写死一个颜色 = 第二份真相，而那份真相没有任何断言盯着。
   const printBody = mediaBlock('print')
+  const countColorDefs = (text) => (text.match(/--[\w-]+\s*:\s*#[0-9a-fA-F]{3,8}\s*;/g) ?? []).length
+  const inRoot = countColorDefs(rootBody)
+  const inPrint = countColorDefs(printBody)
+  const all = countColorDefs(css)
+  check('颜色 token 只定义在唯一的 :root 与打印块两处', all === inRoot + inPrint, `全站 ${all} · :root ${inRoot} · 打印 ${inPrint}`)
+
   check('打印块**不在 `:root` 上**改 token（改在 `body` 上，全站仍只有一份 `:root`）', /body\s*\{/.test(printBody) && !/:root/.test(printBody))
 
-  globalThis.__tokens = { dark, light }
+  globalThis.__tokens = tokens
   globalThis.__printBody = printBody
 }
 
@@ -114,7 +121,7 @@ section('token 表：只有一份，light 覆盖完整')
 section('对比度：逐对算出 WCAG 比值（AA 正文线 4.5:1）')
 // ════════════════════════════════════════════════════
 {
-  const { dark, light } = globalThis.__tokens
+  const tokens = globalThis.__tokens
   const NW = 4.5 // 正文（normal text）的门槛
 
   /** 实际用到的对。`use` 是"谁在用"，写不清用途的对不该进这张表。 */
@@ -147,26 +154,23 @@ section('对比度：逐对算出 WCAG 比值（AA 正文线 4.5:1）')
    */
   const ALLOWED = {}
 
-  for (const mode of ['dark', 'light']) {
-    const tokens = mode === 'dark' ? dark : { ...dark, ...light }
-    console.log(`\n  ── ${mode === 'dark' ? '暗色（默认）' : '浅色（prefers-color-scheme: light）'} ──`)
-    for (const [fgKey, bgKey, use] of PAIRS) {
-      const fg = tokens[fgKey]
-      const bg = tokens[bgKey]
-      if (!fg || !bg || !fg.startsWith('#') || !bg.startsWith('#')) {
-        check(`${mode}: ${fgKey} on ${bgKey} 能算（token 是纯色）`, false, `${fg} / ${bg}`)
-        continue
-      }
-      const r = contrast(fg, bg)
-      const key = `${fgKey}/${bgKey}`
-      const allowed = ALLOWED[key]
-      const ok = r >= NW || Boolean(allowed)
-      check(
-        `${mode}: ${fgKey} on ${bgKey} = ${r.toFixed(2)}:1${ok ? '' : ' （不达标）'}`,
-        ok,
-        `${use} · ${fg} on ${bg}${allowed ? ' · 已登记的取舍：' + allowed : ''}`,
-      )
+  console.log('\n  ── B 暖色纸墨（全站唯一一套：浅色，不再有另一套要算） ──')
+  for (const [fgKey, bgKey, use] of PAIRS) {
+    const fg = tokens[fgKey]
+    const bg = tokens[bgKey]
+    if (!fg || !bg || !fg.startsWith('#') || !bg.startsWith('#')) {
+      check(`${fgKey} on ${bgKey} 能算（token 是纯色）`, false, `${fg} / ${bg}`)
+      continue
     }
+    const r = contrast(fg, bg)
+    const key = `${fgKey}/${bgKey}`
+    const allowed = ALLOWED[key]
+    const ok = r >= NW || Boolean(allowed)
+    check(
+      `${fgKey} on ${bgKey} = ${r.toFixed(2)}:1${ok ? '' : ' （不达标）'}`,
+      ok,
+      `${use} · ${fg} on ${bg}${allowed ? ' · 已登记的取舍：' + allowed : ''}`,
+    )
   }
   console.log(
     '\n  （注：`--unknown` 是**填充色**不是文字色 —— 它画的是"无数据"的点/格，不进上面这张表。）',

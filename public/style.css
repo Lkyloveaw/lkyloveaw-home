@@ -1,9 +1,14 @@
-/* 个人站样式：单文件、无预处理器。深色为默认（内网运维面板多在暗环境看），浅色走 prefers-color-scheme。
+/* 个人站样式：单文件、无预处理器。
  *
- * 整站风格 = **B+C 混合**（map Notes 第 6 条）：
+ * 配色 = **B 暖色纸墨 · 浅色单套**（[#60](https://github.com/Lkyloveaw/lkyloveaw-home/issues/60) 定稿，
+ * 决定与差异清单见 `docs/theme-decision.md`）：米白纸 + 暖墨字 + 赭石强调。
+ * **全站只有这一套**，不跟随 `prefers-color-scheme` —— 定稿时明确「把深色模式去掉」
+ * （此前是暗色为默认 + light 覆盖；那条路连同它的 `@media` 块一起删了）。
+ *
+ * 整站风格 = **B+C 混合**：
  *   · 数据面（面板 / 管理台 / 登录）→ **终端等宽化**：等宽字体、tabular 数字、紧凑行高；
  *   · 正文面（首页 / 分享 / 文章 / 关于）→ **纸感阅读化**：大字号、宽行距、约 68ch 的窄栏。
- * 两套平面只换**排版**，颜色仍走下面这一份 token 表（`:root` 暗色 + light 覆盖，**没有第二套变量表**）。
+ * 两套平面只换**排版**，颜色仍走下面这一份 token 表（**恰好一个 `:root`**，全站唯一一份）。
  * 平面由 `views.ts` 的 `layout()` 落在 `<body class="plane-data|plane-prose">` 上。
  *
  * 颜色 token 的对比度是**算出来的**，不是估的：`npm run check:style` 会把每一对实际用到的
@@ -11,21 +16,22 @@
  */
 
 :root {
-  --bg: #0f1115;
-  --bg-soft: #161a21;
-  --bg-card: #1a1f27;
-  --border: #262c37;
-  --fg: #e6e9ef;
-  --fg-dim: #9aa4b2;
-  /* 最弱的一档文字。#6b7480 实测只有 3.49–3.99:1（不过 AA），已按要求调到达标（≥4.5）。 */
-  --fg-faint: #7d8794;
-  --accent: #5b9dff;
-  --ok: #35c46b;
-  --warn: #e8b13a;
-  --bad: #f2564d;
-  --unknown: #4a5260;
-  /* 主按钮上的文字（accent 作底）。白字在亮蓝上只有 2.72:1，所以用"深字压亮底"。 */
-  --on-accent: #0f1115;
+  --bg: #f6efe2;         /* 米白纸 */
+  --bg-soft: #efe4d1;    /* 纸上的浅底块（code / 输入框 / notice） */
+  --bg-card: #fffaf0;    /* 卡片比纸更亮一点，才浮得起来 */
+  --border: #dbceb6;
+  --fg: #2b2318;         /* 暖墨 */
+  --fg-dim: #5d5343;
+  /* 最弱的一档文字。它当**文字**用时三种底（bg / bg-card / bg-soft）都要 ≥ 4.5:1；当边框用不需要。 */
+  --fg-faint: #6f6452;
+  --accent: #8f3f18;     /* 赭石：链接 / 当前项 / 主按钮底 */
+  /* 状态三色在**纸**上要扛得住，所以都往深里压（荧光色压在米白上会糊）。 */
+  --ok: #3f6b2f;
+  --warn: #7a5510;
+  --bad: #a32b1f;
+  --unknown: #cdc0a6;    /* 填充色（无数据格），不是文字色 */
+  /* 主按钮上的文字：亮赭石底压白字过不了 AA，所以按钮底用深赭石、字用暖白。 */
+  --on-accent: #fff8ee;
   --radius: 10px;
   --wrap: 900px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
@@ -41,29 +47,6 @@
   --lh-prose: 1.85;
   --measure-prose: 68ch;
 }
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f7f8fa;
-    --bg-soft: #ffffff;
-    --bg-card: #ffffff;
-    --border: #e3e6ec;
-    --fg: #1c2027;
-    --fg-dim: #5b6472;
-    /* 原 #8a929e 在浅底上只有 2.96–3.14:1（不过 AA），已调到达标。 */
-    --fg-faint: #656d7a;
-    /* 原 #1f6feb 在 --bg 上 4.36:1（差一点）；#1a66d8 两个底都过。 */
-    --accent: #1a66d8;
-    /* 原 #1a9e56 / #b57d0a 在浅底上只有 3.26–3.56:1（状态文字不过 AA），已调深。 */
-    --ok: #137a43;
-    --warn: #8a5f06;
-    --bad: #cf2f26;
-    --unknown: #b9bfc9;
-    /* 浅色下 accent 更暗，白字反而够（5.34:1）—— 与暗色相反，但两边都达标。 */
-    --on-accent: #ffffff;
-  }
-}
-
 * { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -581,7 +564,7 @@ main { padding-top: 34px; }
 }
 
 /* ── 打印样式 ──────────────────────────────────────────────
-   打印时**不是暗色**：把 token 就地改成纸面（黑字白底、边框变浅灰），
+   屏幕已经是纸色（B 暖色纸墨），但**打印仍要纯纸面**：黑字白底最省墨、对比最大，
    并去掉一切"只在屏幕上成立"的东西（粘性页头、导航、登出表单、按钮、提示语）。
    改在 `body` 上而不是 `:root` —— 全站只有一份 `:root`，这条纪律连打印也不破。 */
 @media print {

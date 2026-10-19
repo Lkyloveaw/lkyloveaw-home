@@ -209,4 +209,8 @@ scripts/prototype-dev.js           开发启动器（无 .env 时生成临时密
 - ~~**不定**配色 token 的全局推行方式~~ ✅ **已定并已执行**（#45）：全站**一份** token 表
   （`:root` 两处：暗色定义 + light 覆盖），面板与正文面只差**排版**，不差配色；
   「两套东西暂时并存」到此结束。整站统一落在 `public/style.css` + `<body class="plane-…">` 上。
+  > **已修订（2026-10-19 · [#60](https://github.com/Lkyloveaw/lkyloveaw-home/issues/60)）**：
+  > 仍是**一份** token 表，但现在是**一处** `:root`（**浅色单套** = B 暖色纸墨）——
+  > `prefers-color-scheme` 覆盖连同「暗色为默认」一起删掉了（用户定稿时要求去掉深色模式）。
+  > 取值与决定见 `docs/theme-decision.md`；「两套平面只差排版、不差配色」这条**没变**。
 - 本票**不改** `status.js` 的行为契约，只改它渲染所依赖的标记（并已用 panel-check 证明没改坏）。
