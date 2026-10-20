@@ -66,6 +66,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 页脚贴底（2026-10-20 用户要求）：文章短的时候，页脚不该浮在画面中间。
+   body 撑满一屏、`main` 吃掉剩余高度、页脚自然沉到最下端 —— 长文章时与以前完全一样。
+   ⚠ 登录页排除在外：它自己就是 `min-height: 100vh` 的居中块（`.login-body`），
+   套进来会把登录卡顶到上面去。 */
+body:not(.login-body) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+body:not(.login-body) > main {
+  flex: 1 0 auto;
+}
+
 /* 两套平面：只换排版。`layout()` 按导航项决定平面（面板/管理台 = data，其余 = prose），
    登录页自己写在 `<body class="login-body plane-data">` 上。 */
 body.plane-data {
@@ -632,6 +645,8 @@ main { padding-top: 34px; }
     --on-accent: #ffffff;
     background: #ffffff; color: #000000;
     font-size: 11pt; line-height: 1.5;
+    /* 纸上不需要「撑满一屏」：留着 flex + 100vh 会多印一页空白 */
+    display: block; min-height: 0;
   }
   .site-header, .site-footer, .logout-form, .site-nav, .admin-side, .live-tag,
   .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis { display: none !important; }

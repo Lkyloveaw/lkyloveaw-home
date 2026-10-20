@@ -253,6 +253,10 @@ section('两套平面：数据面终端化 / 正文面纸感化')
   check('正文面收窄栏宽（`.prose` 用 `var(--measure-prose)`）', /\.prose\s*\{[^}]*max-width:\s*var\(--measure-prose\)/s.test(css))
   // 只收窄不居中 = 左右留白不对称（`.wrap` 900 与 `.prose`/`.post` 68ch 都贴左边，差恒为 262px）。
   check('窄栏在画布里居中（`.prose` 与 `.post` 都有 `margin-inline: auto`）', /\.prose\s*\{[^}]*margin-inline:\s*auto/s.test(css) && /\.post\s*\{[^}]*margin-inline:\s*auto/s.test(css))
+  // 页脚贴底（2026-10-20 用户要求）：短文章时页脚不该浮在画面中间。
+  check('页脚贴底：body 是撑满一屏的 flex 列，`main` 吃掉剩余高度', /body:not\(\.login-body\)\s*\{[^}]*display:\s*flex[^}]*min-height:\s*100vh/s.test(css) && /body:not\(\.login-body\)\s*>\s*main\s*\{[^}]*flex:\s*1 0 auto/s.test(css))
+  check('登录页被排除在贴底布局之外（它自己是 100vh 居中块）', /body:not\(\.login-body\)/.test(css))
+  check('打印时不留「撑满一屏」（否则多印一页空白）', /@media print[\s\S]*?body\s*\{[^}]*display:\s*block/s.test(css))
   // TipTap 的单元格里包着一层 <p>，`.prose p` 的下边距会**加到每一行上**（文字贴格子沿、表凭空变高）。
   // 两侧都要清：读面 `.prose` 与编辑面 `.ProseMirror`（2026-10-20 真机上量出来的）。
   check(
