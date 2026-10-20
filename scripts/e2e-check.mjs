@@ -2320,7 +2320,7 @@ try {
   }
 
   // ══════════════════════════════════════════════════════════
-  console.log('\n[两套平面（#45）：数据面终端化 / 正文面纸感化 · 站内框架]')
+  console.log('\n[iOS 化（#70）：一套字阶与三态主题 · 站内框架]')
   // ══════════════════════════════════════════════════════════
   {
     const admP = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
@@ -2341,20 +2341,9 @@ try {
       [home, statusPage, posts, about, adminPage, login].every((r) => r.status === 200),
       [home, statusPage, posts, about, adminPage, login].map((r) => r.status).join(','),
     )
-    check('首页 = **正文面**（`plane-prose`）', /plane-prose/.test(bodyClassOf(home.body)), bodyClassOf(home.body))
-    check('分享列表 = 正文面', /plane-prose/.test(bodyClassOf(posts.body)), bodyClassOf(posts.body))
-    check('关于 = 正文面', /plane-prose/.test(bodyClassOf(about.body)), bodyClassOf(about.body))
-    check('面板 = **数据面**（`plane-data`）', /plane-data/.test(bodyClassOf(statusPage.body)), bodyClassOf(statusPage.body))
-    check('管理台 = 数据面', /plane-data/.test(bodyClassOf(adminPage.body)), bodyClassOf(adminPage.body))
-    check(
-      '登录页不走 `layout()`，但自己在 `<body>` 上写了 `plane-data`',
-      /login-body plane-data/.test(bodyClassOf(login.body)),
-      bodyClassOf(login.body),
-    )
-    check(
-      '两套平面**各有一份**（不是全站都变成同一种）',
-      /plane-prose/.test(bodyClassOf(home.body)) && /plane-data/.test(bodyClassOf(statusPage.body)),
-    )
+    const bodyClasses = [home, posts, about, statusPage, adminPage].map((r) => bodyClassOf(r.body)).join(' | ')
+    check('五个页面的 `<body>` 都不再带平面类（#68：平面已退役）', !bodyClasses.includes('plane-'), bodyClasses)
+    check('登录页的 `<body>` 只有 `login-body`（不再有 plane-data）', bodyClassOf(login.body) === 'login-body', bodyClassOf(login.body))
 
     // 站内框架（nav）：`/` 分隔的条目，分隔符是服务端的 span（不是伪元素）
     // 分隔符数 = 条目数 − 1（动态算，不写死 3）：只读 4 项、管理员 5 项 —— 两种情况都验。
@@ -2374,8 +2363,22 @@ try {
     // 样式表真的被引用、且两套平面的规则在里面（不是只在源码里）
     const css = await get('/style.css')
     check('`/style.css` 可取（200 + text/css）', css.status === 200 && css.type.includes('text/css'), `${css.status} ${css.type}`)
-    check('样式表里有两套平面的选择器', /body\.plane-data/.test(css.body) && /body\.plane-prose/.test(css.body))
+    check('样式表里没有平面选择器（#68）', !css.body.includes('plane-'))
     check('样式表里有窄屏断点与打印块', /@media \(max-width: 720px\)/.test(css.body) && /@media print/.test(css.body))
+
+    // ── 主题三态（#67 / #70）：meta + boot 顺序 + picker + 无 JS 降级 ──
+    const metaTag = '<meta name="color-scheme" content="light dark">'
+    check('两个外壳都带 `<meta name="color-scheme" content="light dark">`', home.body.split(metaTag).length === 2 && login.body.split(metaTag).length === 2)
+    check('boot 脚本在 stylesheet 之前（layout 外壳）', home.body.indexOf("localStorage.getItem('theme')") > 0 && home.body.indexOf("localStorage.getItem('theme')") < home.body.indexOf('/style.css'))
+    check('boot 脚本在 stylesheet 之前（登录外壳）', login.body.indexOf("localStorage.getItem('theme')") > 0 && login.body.indexOf("localStorage.getItem('theme')") < login.body.indexOf('/style.css'))
+    const picker = '<select data-theme-select aria-label="主题">'
+    check('页头与登录页各有一个三态 picker（三项 + 中文标签）', home.body.split(picker).length === 2 && login.body.split(picker).length === 2 && ['system', 'light', 'dark'].every((v) => home.body.includes('<option value="' + v + '">')))
+    check('SSR 默认「跟随系统」：`<html>` 上没有 `data-theme`', !home.body.includes('data-theme=') && !login.body.includes('data-theme='))
+    const noScript = '<noscript><style>[data-theme-select] { display: none }</style></noscript>'
+    check('无 JS 时 picker 隐藏（两个外壳都有 `<noscript>` 规则）', home.body.split(noScript).length === 2 && login.body.split(noScript).length === 2)
+    check('主题脚本不监听 matchMedia、不写 cookie', !home.body.includes('matchMedia') && !home.body.includes('document.cookie'))
+    check('样式表里三态只切 `color-scheme`（两块都不含颜色 token）', css.body.includes(':root[data-theme="light"] { color-scheme: light; }') && css.body.includes(':root[data-theme="dark"] { color-scheme: dark; }'))
+    check('颜色 token 都是 `light-dark()`（抽查 bg / label / accent）', ['--bg: light-dark(', '--label: light-dark(', '--accent: light-dark('].every((t) => css.body.includes(t)))
   }
 } finally {
   child.kill('SIGTERM')

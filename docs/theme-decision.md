@@ -1,5 +1,10 @@
 # 主题定稿：B 暖色纸墨，且只有浅色一套
 
+> ⚠ **已被取代**（2026-10-20）：本文的「B 暖色纸墨 · 浅色单套」已由
+> [#67](https://github.com/Lkyloveaw/lkyloveaw-home/issues/67)（17 色 `light-dark()` + 三态，
+> `docs/ios-theme-architecture-decision.md`）与 [#68](https://github.com/Lkyloveaw/lkyloveaw-home/issues/68)
+> （组件与导航）取代。本文件保留，作为「主题是怎么选的」的过程记录，**不再是实现依据**。
+
 本文件是「主题三选一」这张票的产出（map：[管理台长出左侧导航，整站配色三选一](https://github.com/Lkyloveaw/lkyloveaw-home/issues/58)）。
 
 票：<https://github.com/Lkyloveaw/lkyloveaw-home/issues/60>

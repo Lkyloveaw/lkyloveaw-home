@@ -115,18 +115,16 @@ Markdown 表达不了合并单元格与列宽（而那两个是要的），HTML 
 不再需要「回概览再点卡片」。**整块只有管理员可用**：只读用户顶栏看不到入口，直接访问得 403。
 它不是「面板的附属」——面板（系统可用性）是所有人可见的只读面，管理台是写面。
 
-**数据面（data plane）** — 面板 / 管理台 / 登录这三个**面向操作**的页面，排版走**终端等宽化**
-（等宽字体、tabular 数字、紧凑行高）。落在 `<body class="plane-data">` 上。
+**iOS 字阶（type ramp）** — 全站**一套**字号与行高：10 个字号 token（`--fs-large` … `--fs-caption`）+
+4 个行高 token（`--lh-tight` / `--lh-title` / `--lh-ui` / `--lh-prose`），都在唯一的 `:root` 里。
+长文用 `--lh-prose`（CJK 1.85），组件用 `--lh-ui`；等宽只留给 `code` / `pre` / `.mono`。
+「数据面 / 正文面」两套平面已在 [#68](https://github.com/Lkyloveaw/lkyloveaw-home/issues/68) 退役。
 
-**正文面（prose plane）** — 首页 / 分享 / 文章 / 关于这四个**面向阅读**的页面，排版走**纸感阅读化**
-（大字号、宽行距、约 68ch 窄栏）。落在 `<body class="plane-prose">` 上。
-两个平面**只差排版，不差配色** —— 全站只有**一份**颜色 token（**一个** `:root`，见下面的**主题**）。
-平面由 `views.ts` 的 `layout()` **按导航项推出来**（`status`/`admin` → 数据面），不逐页手写。
-
-**主题（theme）** — 一份**完整的颜色 token 取值**（13 个），**不含排版**。全站只有一套：
-**B 暖色纸墨 · 浅色**（米白纸 + 暖墨 + 赭石，见 `docs/theme-decision.md`）。
-它**不跟随 `prefers-color-scheme`** —— 深色模式在 [#60](https://github.com/Lkyloveaw/lkyloveaw-home/issues/60) 定稿时被明确去掉。
-换主题 = 换 `:root` 里那 13 个值 + 重跑 `npm run check:style`（对比度是**算出来的**，不是估的）。
+**主题（theme）** — 一份**完整的颜色 token 取值**（**17 个**），**不含排版**。
+浅色与深色并排写在**同一行** `light-dark(浅, 深)` 里，由 `color-scheme` 二选一；
+三态（跟随系统 / 浅 / 深）只切 `:root` 的 `color-scheme`，**不复制 token**。
+页头的 `<select>` 切换三态，偏好存 localStorage 的 `theme` 键（缺省 = 跟随系统）。
+换主题 = 改 `:root` 里那 17 个值 + 重跑 `npm run check:style`（对比度与打印灰阶是**算出来的**，不是估的）。
 
 ## 写路径
 
@@ -166,7 +164,7 @@ Markdown 表达不了合并单元格与列宽（而那两个是要的），HTML 
 ## 刻意不做的选择
 
 - **不做前后端分离**：内容页 + 一个面板，独立扩缩容与并行开发都用不上，代价是多一套构建与联调。
-- **不做运行时主题切换，也不做深色模式**：只做**选型**（挑定一套就写死），偏好持久化与「未登录访客跟随谁」
-  都不存在；深色在 #60 定稿时被去掉，站点现在只有浅色一套。
+- **不做运行时自定义主题**（换色、换字体、每用户主题）：只做 system / light / dark 三态；
+  颜色与字阶仍然是**一套**写死的 token（见 [#67](https://github.com/Lkyloveaw/lkyloveaw-home/issues/67) / [#68](https://github.com/Lkyloveaw/lkyloveaw-home/issues/68)）。
 - **不引图表库**：曲线是服务端渲染的内联 SVG，禁用 JS 也能看，且不需要第二个构建产物。
 - **不用时序数据库**：每天几万行、保留 30 天，SQLite 单文件足够，还省掉一个容器。

@@ -1,57 +1,73 @@
 /* 个人站样式：单文件、无预处理器。
  *
- * 配色 = **B 暖色纸墨 · 浅色单套**（[#60](https://github.com/Lkyloveaw/lkyloveaw-home/issues/60) 定稿，
- * 决定与差异清单见 `docs/theme-decision.md`）：米白纸 + 暖墨字 + 赭石强调。
- * **全站只有这一套**，不跟随 `prefers-color-scheme` —— 定稿时明确「把深色模式去掉」
- * （此前是暗色为默认 + light 覆盖；那条路连同它的 `@media` 块一起删了）。
+ * 配色 = **一套 Apple iOS 语义色**（#67 定稿，`docs/ios-theme-architecture-decision.md`）：
+ * 17 个颜色 token 全部写成 `light-dark(浅, 深)`，由 `color-scheme` 二选一；三态（跟随系统 / 浅 / 深）
+ * 只切 `:root` 的 `color-scheme`，**不复制 token**。全站只有这一份 token 表（恰好一个 `:root`）。
  *
- * 整站风格 = **B+C 混合**：
- *   · 数据面（面板 / 管理台 / 登录）→ **终端等宽化**：等宽字体、tabular 数字、紧凑行高；
- *   · 正文面（首页 / 分享 / 文章 / 关于）→ **纸感阅读化**：大字号、宽行距、约 68ch 的窄栏。
- * 两套平面只换**排版**，颜色仍走下面这一份 token 表（**恰好一个 `:root`**，全站唯一一份）。
- * 平面由 `views.ts` 的 `layout()` 落在 `<body class="plane-data|plane-prose">` 上。
+ * 排版 = **一套 iOS 字阶**（#65 的字阶映射 + #68 的组件映射）：10 个字号 + 4 个行高 token；
+ * 等宽只留给 `code` / `pre` / `.mono`（以及 id、slug 这类代码性文本）。全站不再按「数据面 / 正文面」换字体。
  *
- * 颜色 token 的对比度是**算出来的**，不是估的：`npm run check:style` 会把每一对实际用到的
- * 前景/背景的 WCAG 比值打出来并断言 ≥ 4.5:1（见该脚本里的 PAIRS 表）。改色请改这里、不要改脚本去迁就。
+ * 颜色与字阶的对比度是**脚本算出来的**，不是估的：`npm run check:style` 把每一对前景/背景的
+ * WCAG 比值打出来并断言（文字 19 对 ×2 模式 ≥4.5:1、非文字 12 对 ×2 模式 ≥3:1，见脚本的 PAIRS 表）。
+ * 改色请改 `:root`、不要改脚本去迁就。
+ *
+ * 打印：`@media print` 在 `body` 上把 17 个 token 全改灰阶 + `color-scheme: light`；
+ * 状态格带改**图案**（实心 / 斜线 / 斜网格 / 空心），因为 `--ok` / `--bad` 打印都是 #000。
  */
 
 :root {
-  --bg: #f6efe2;         /* 米白纸 */
-  --bg-soft: #efe4d1;    /* 纸上的浅底块（code / 输入框 / notice） */
-  --bg-card: #fffaf0;    /* 卡片比纸更亮一点，才浮得起来 */
-  --border: #dbceb6;
-  --fg: #2b2318;         /* 暖墨 */
-  --fg-dim: #5d5343;
-  /* 最弱的一档文字。它当**文字**用时三种底（bg / bg-card / bg-soft）都要 ≥ 4.5:1；当边框用不需要。 */
-  --fg-faint: #6f6452;
-  --accent: #8f3f18;     /* 赭石：链接 / 当前项 / 主按钮底 */
-  /* 状态三色在**纸**上要扛得住，所以都往深里压（荧光色压在米白上会糊）。 */
-  --ok: #3f6b2f;
-  --warn: #7a5510;
-  --bad: #a32b1f;
-  --unknown: #cdc0a6;    /* 填充色（无数据格），不是文字色 */
-  /* 主按钮上的文字：亮赭石底压白字过不了 AA，所以按钮底用深赭石、字用暖白。 */
-  --on-accent: #fff8ee;
-  --radius: 10px;
+  color-scheme: light dark;
+
+  /* iOS 语义色：17 个，浅深并排。--scrim 是唯一的 rgba 例外（遮罩不进对比度表）。 */
+  --bg: light-dark(#f2f2f7, #000000);
+  --bg-card: light-dark(#ffffff, #1c1c1e);
+  --bg-elev: light-dark(#f2f2f7, #2c2c2e);
+  --fill: light-dark(#e4e4e7, #2b2b2e);
+  --fill-strong: light-dark(#d1d1d6, #3a3a3c);
+  --label: light-dark(#000000, #ffffff);
+  --label-2: light-dark(#5f5f63, #9f9fa5);
+  --label-3: light-dark(#7c7c82, #8e8e93);
+  --separator: light-dark(#c6c6c8, #38383a);
+  --border-strong: light-dark(#7c7c82, #8e8e93);
+  --accent: light-dark(#0062cc, #409cff);
+  --on-accent: light-dark(#ffffff, #000000);
+  --ok: light-dark(#1b7a2f, #30d158);
+  --warn: light-dark(#a35a00, #ff9f0a);
+  --bad: light-dark(#c1271b, #ff6961);
+  --unknown: light-dark(#c4c4c6, #5a5a5e);
+  --scrim: light-dark(rgba(0, 0, 0, .38), rgba(0, 0, 0, .55));
+
+  /* 形状 / 栏宽 / 字体 */
+  --radius: 12px;
   --wrap: 900px;
-  /* 管理台宽栏与侧栏宽（`docs/admin-console-sidebar-decision.md` §3）：
-     1140 = 20（内边距）+ 220（侧栏）+ 20（栏距）+ 860（今天的正文列）+ 20（内边距）
-     —— 所以「正文不被压缩」是**算出来的**，不是感觉。两个都是非颜色 token。 */
+  /* 1140 = 20（内边距）+ 220（侧栏）+ 20（栏距）+ 860（正文列）+ 20（内边距） */
   --wrap-admin: 1140px;
   --side-w: 220px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
     "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
-  /* 两套排版语言（只有排版，没有颜色） */
-  --font-data: var(--mono);
-  --font-prose: var(--font);
-  --fs-data: 15px;
-  --lh-data: 1.6;
-  --fs-prose: 17px;
+
+  /* iOS 字阶（#65 §2.3）：字号与行高分家 —— 组件用 --lh-ui，长文用 --lh-prose。 */
+  --fs-large: 34px;
+  --fs-title1: 28px;
+  --fs-title2: 22px;
+  --fs-title3: 20px;
+  --fs-headline: 17px;
+  --fs-body: 17px;
+  --fs-callout: 16px;
+  --fs-subhead: 15px;
+  --fs-footnote: 13px;
+  --fs-caption: 12px;
+  --lh-tight: 1.25;
+  --lh-title: 1.3;
+  --lh-ui: 1.55;
   --lh-prose: 1.85;
   --measure-prose: 68ch;
 }
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
@@ -59,10 +75,10 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--fg);
+  color: var(--label);
   font-family: var(--font);
-  font-size: 16px;
-  line-height: 1.7;
+  font-size: var(--fs-callout);
+  line-height: var(--lh-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -79,20 +95,6 @@ body:not(.login-body) > main {
   flex: 1 0 auto;
 }
 
-/* 两套平面：只换排版。`layout()` 按导航项决定平面（面板/管理台 = data，其余 = prose），
-   登录页自己写在 `<body class="login-body plane-data">` 上。 */
-body.plane-data {
-  font-family: var(--font-data);
-  font-size: var(--fs-data);
-  line-height: var(--lh-data);
-  font-variant-numeric: tabular-nums;
-}
-body.plane-prose {
-  font-family: var(--font-prose);
-  font-size: var(--fs-prose);
-  line-height: var(--lh-prose);
-}
-
 .wrap { width: 100%; max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
 
 a { color: var(--accent); text-decoration: none; }
@@ -100,19 +102,19 @@ a:hover { text-decoration: underline; }
 
 code, pre, .mono { font-family: var(--mono); }
 code {
-  background: var(--bg-soft);
-  border: 1px solid var(--border);
+  background: var(--fill);
+  border: 1px solid var(--separator);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 0.88em;
 }
 pre {
-  background: var(--bg-soft);
-  border: 1px solid var(--border);
+  background: var(--fill);
+  border: 1px solid var(--separator);
   border-radius: var(--radius);
   padding: 14px 16px;
   overflow-x: auto;
-  font-size: 0.875rem;
+  font-size: var(--fs-footnote);
   line-height: 1.6;
 }
 pre code { background: none; border: 0; padding: 0; }
@@ -122,10 +124,10 @@ pre code { background: none; border: 0; padding: 0; }
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 
-/* ---------- 页头 / 页脚（站内框架：两套平面共用，所以走"终端化的 chrome"） ---------- */
+/* ---------- 页头 / 页脚（站内框架） ---------- */
 
 .site-header {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--separator);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
   position: sticky; top: 0; z-index: 10;
@@ -135,8 +137,8 @@ pre code { background: none; border: 0; padding: 0; }
   gap: 16px; min-height: 58px; flex-wrap: wrap;
 }
 .brand {
-  font-family: var(--font-data); font-weight: 650; color: var(--fg);
-  font-size: 0.98rem; letter-spacing: 0.02em;
+  font-family: var(--font); font-weight: 600; color: var(--label);
+  font-size: var(--fs-headline); letter-spacing: 0;
 }
 .brand:hover { text-decoration: none; color: var(--accent); }
 
@@ -144,54 +146,46 @@ pre code { background: none; border: 0; padding: 0; }
    不是一个可点的伪元素 —— 点分隔符不该跳转到相邻页面）。 */
 .site-nav {
   display: flex; align-items: center; flex-wrap: wrap;
-  font-family: var(--font-data); font-size: 0.88rem;
+  font-size: var(--fs-subhead);
 }
-.site-nav a { color: var(--fg-dim); padding: 5px 0; }
-.site-nav a:hover { color: var(--fg); text-decoration: none; }
+.site-nav a { color: var(--label-2); padding: 5px 0; }
+.site-nav a:hover { color: var(--label); text-decoration: none; }
 .site-nav a[aria-current="page"] { color: var(--accent); }
-.nav-sep { color: var(--fg-faint); padding: 0 9px; user-select: none; }
+.nav-sep { color: var(--label-3); padding: 0 9px; user-select: none; }
 
 .site-footer {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--separator);
   margin-top: 56px; padding: 22px 0 30px;
-  color: var(--fg-faint); font-size: 0.85rem;
-  font-family: var(--font-data);
+  color: var(--label-2); font-size: var(--fs-footnote);
 }
 
 main { padding-top: 34px; }
 
 /* ---------- 通用 ---------- */
 
-/* 正文面：纸感阅读化 —— 字号更大、行距更宽、栏宽收窄到约 68ch（长行是阅读的主要敌人）。
-   这些规则挂在 `.plane-prose` 下，所以数据面（面板/管理台）不会被顺手改掉。 */
-.plane-prose .hero h1 { font-size: 2.1rem; margin: 0 0 8px; letter-spacing: -0.015em; }
-.plane-prose .lede { font-size: 1.05rem; }
-.plane-prose .section { margin-bottom: 46px; }
-.plane-prose .section h1 { font-size: 1.7rem; }
-.plane-prose .post-card h2 { font-size: 1.18rem; }
-.plane-prose .summary { font-size: 1rem; }
+/* 正文：iOS Body 17 / --lh-prose 1.85，栏宽收窄到约 68ch（长行是阅读的主要敌人）。 */
 
-.hero h1 { font-size: 1.9rem; margin: 0 0 6px; letter-spacing: -0.01em; }
-.lede { color: var(--fg-dim); margin: 0 0 4px; }
+.hero h1 { font-size: var(--fs-large); line-height: var(--lh-title); margin: 0 0 8px; letter-spacing: -0.02em; }
+.lede { color: var(--label-2); font-size: var(--fs-body); margin: 0 0 4px; }
 .section { margin-bottom: 40px; }
-.section h1 { font-size: 1.55rem; margin: 0 0 18px; }
+.section h1 { font-size: var(--fs-title2); line-height: var(--lh-title); margin: 0 0 18px; }
 .section-head {
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 12px; margin-bottom: 14px;
 }
-.section-head h1, .section-head h2 { margin: 0; font-size: 1.12rem; }
-.more { font-size: 0.86rem; color: var(--fg-dim); }
+.section-head h1, .section-head h2 { margin: 0; font-size: var(--fs-headline); line-height: var(--lh-title); }
+.more { font-size: var(--fs-subhead); color: var(--label-2); }
 .more:hover { color: var(--accent); }
 .empty {
-  color: var(--fg-faint); background: var(--bg-soft);
-  border: 1px dashed var(--border); border-radius: var(--radius);
+  color: var(--label-2); background: var(--fill);
+  border: 1px dashed var(--separator); border-radius: var(--radius);
   padding: 18px; margin: 0;
 }
-.back { margin-top: 32px; font-size: 0.9rem; }
+.back { margin-top: 32px; font-size: var(--fs-subhead); }
 
 .card {
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--separator);
   border-radius: var(--radius);
   padding: 18px 20px;
 }
@@ -199,37 +193,36 @@ main { padding-top: 34px; }
 .mini-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .incident-name { font-weight: 600; }
 
-/* ---------- 文章（正文面） ---------- */
+/* ---------- 文章（长文排版） ---------- */
 
 /* `.prose` 是文章正文的容器：收窄栏宽是"纸感"的核心 —— 900px 的整幅行宽读起来太累。 */
 /* `.prose` 是文章正文的容器：收窄栏宽是"纸感"的核心 —— 900px 的整幅行宽读起来太累。
    **在画布里居中**（2026-10-20）：以前只收窄、不居中，于是 `.wrap`(900) 与 `.prose`/`.post`(68ch)
    两层宽度都贴着左边，左右留白差恒为 262px（1440 下左 290 / 右 552）。标题与正文仍共用同一条
    左右边缘（那是#45 的部分），变的只是这条栏在页面里居中。 */
-.prose { font-size: 1rem; max-width: var(--measure-prose); margin-inline: auto; }
-.plane-prose .prose { font-size: 1.02rem; }
-.prose h2 { font-size: 1.3rem; margin: 38px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
-.prose h3 { font-size: 1.1rem; margin: 28px 0 10px; }
+.prose { font-size: var(--fs-body); line-height: var(--lh-prose); max-width: var(--measure-prose); margin-inline: auto; }
+.prose h2 { font-size: var(--fs-title2); line-height: var(--lh-title); margin: 38px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--separator); }
+.prose h3 { font-size: var(--fs-title3); line-height: var(--lh-title); margin: 28px 0 10px; }
 .prose p { margin: 0 0 17px; }
 .prose ul, .prose ol { padding-left: 22px; margin: 0 0 17px; }
 .prose li { margin-bottom: 7px; }
 .prose img { max-width: 100%; height: auto; border-radius: var(--radius); }
 .prose blockquote {
   margin: 0 0 17px; padding: 2px 0 2px 16px;
-  border-left: 3px solid var(--border); color: var(--fg-dim);
+  border-left: 3px solid var(--separator); color: var(--label-2);
 }
-.prose table { width: 100%; border-collapse: collapse; margin: 0 0 17px; font-size: 0.92rem; }
+.prose table { width: 100%; border-collapse: collapse; margin: 0 0 17px; font-size: var(--fs-subhead); }
 /* 表格的横向滚动容器（2026-10-20 定的 C）：正文收窄到 68ch，宽表在读面**原地横滚**，
    不撑破页面、也不把单元格挤成一行两个字符。编辑面 TipTap 的 `.tableWrapper` 是同一形状。
    注意：margin 挂在容器上，表格自己不带下边距（否则滚动区域里会多出一条空白）。 */
-.prose .table-wrap { overflow-x: auto; margin: 0 0 17px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.prose .table-wrap { overflow-x: auto; margin: 0 0 17px; scrollbar-width: thin; scrollbar-color: var(--separator) transparent; }
 .prose .table-wrap table { margin: 0; }
 /* 最小列宽是**滚动能不能触发**的关键：中文逐字可断，不给下限的话表格永远「塞得进去」，
    滚动容器一辈子不出滚动条（2026-10-20 实测：塞满中文长句 scrollWidth 仍是 598）。
    5.5em ≈ 81px：8 列 → 约 650px > 598 会滚；3~6 列仍摊满栏宽、不出滚动条。 */
 .prose .table-wrap th, .prose .table-wrap td { min-width: 5.5em; }
-.prose th, .prose td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
-.prose th { background: var(--bg-soft); font-weight: 600; }
+.prose th, .prose td { border: 1px solid var(--separator); padding: 8px 10px; text-align: left; }
+.prose th { background: var(--fill); font-weight: 600; }
 /* 单元格里的段落**不带下边距**（读面与编辑面两侧都要管）。
    TipTap 的表格每个单元格都包一层 `<p>`，而 `.prose p { margin: 0 0 17px }`
    （编辑面是 `0 0 0.6em`）会把这层边距**加到每一行上**：文字贴在格子上沿、下面空一条，
@@ -237,31 +230,30 @@ main { padding-top: 34px; }
    选择器带 `th`/`td` 后特异性高于 `.prose p` / `.ProseMirror p`，不依赖书写顺序。 */
 .prose th p, .prose td p,
 .article-editor .ProseMirror th p, .article-editor .ProseMirror td p { margin: 0; }
-.prose hr { border: 0; border-top: 1px solid var(--border); margin: 30px 0; }
+.prose hr { border: 0; border-top: 1px solid var(--separator); margin: 30px 0; }
 
 .post-card { margin-bottom: 14px; }
-.post-card h2 { margin: 0 0 4px; font-size: 1.08rem; }
-.post-card h2 a { color: var(--fg); }
+.post-card h2 { margin: 0 0 4px; font-size: var(--fs-headline); line-height: var(--lh-title); }
+.post-card h2 a { color: var(--label); }
 .post-card h2 a:hover { color: var(--accent); text-decoration: none; }
-.post-card .meta, .post-header .meta { color: var(--fg-faint); font-size: 0.82rem; margin: 0 0 8px; }
-.summary { color: var(--fg-dim); margin: 0 0 10px; font-size: 0.94rem; }
+.post-card .meta, .post-header .meta { color: var(--label-2); font-size: var(--fs-footnote); margin: 0 0 8px; }
+.summary { color: var(--label-2); margin: 0 0 10px; font-size: var(--fs-subhead); }
 .tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 0; }
 .tag {
-  display: inline-block; font-size: 0.78rem; padding: 2px 9px; border-radius: 999px;
-  background: var(--bg-soft); border: 1px solid var(--border);
-  color: var(--fg-dim); white-space: nowrap;
+  display: inline-block; font-size: var(--fs-caption); padding: 2px 9px; border-radius: 999px;
+  background: var(--fill); border: 1px solid var(--separator);
+  color: var(--label-2); white-space: nowrap;
 }
 .tag:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 .tag-active { color: var(--accent); border-color: var(--accent); }
-.tag-count { color: var(--fg-faint); }
+.tag-count { color: var(--label-2); }
 .tag-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
 
 /* 文章页整列收窄到与正文同一条栏宽：标题与正文左边缘对齐、右边缘也齐 —— 这是"纸感"的一部分。
    同样**在画布里居中**（`.post` 与里面的 `.prose` 各自居中，两层都是 68ch 量级，边缘仍然齐）。 */
 .post { max-width: var(--measure-prose); margin-inline: auto; }
 .post-header { margin-bottom: 24px; }
-.post-header h1 { font-size: 1.75rem; margin: 0 0 8px; line-height: 1.35; }
-.plane-prose .post-header h1 { font-size: 2rem; line-height: 1.3; }
+.post-header h1 { font-size: var(--fs-title1); margin: 0 0 8px; line-height: var(--lh-title); }
 
 /* ---------- 可用性面板 ---------- */
 
@@ -270,27 +262,27 @@ main { padding-top: 34px; }
   gap: 12px; margin-bottom: 22px;
 }
 .stat {
-  background: var(--bg-card); border: 1px solid var(--border);
+  background: var(--bg-card); border: 1px solid var(--separator);
   border-radius: var(--radius); padding: 13px 15px;
   display: flex; flex-direction: column; gap: 2px;
 }
-.stat-num { font-size: 1.28rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat-num { font-size: var(--fs-title3); font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-num.has-fault { color: var(--bad); }
-.stat-label { color: var(--fg-faint); font-size: 0.79rem; }
+.stat-label { color: var(--label-2); font-size: var(--fs-caption); }
 
 .mini-list { display: flex; flex-direction: column; }
 .mini-row {
   display: grid; grid-template-columns: 14px 1fr auto auto;
   gap: 12px; align-items: center;
-  padding: 8px 2px; border-bottom: 1px solid var(--border);
-  font-size: 0.9rem;
+  padding: 8px 2px; border-bottom: 1px solid var(--separator);
+  font-size: var(--fs-subhead);
 }
 .mini-row:last-child { border-bottom: 0; }
-.mini-lat, .mini-up { color: var(--fg-dim); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+.mini-lat, .mini-up { color: var(--label-2); font-variant-numeric: tabular-nums; font-size: var(--fs-footnote); }
 .mini-up { min-width: 62px; text-align: right; }
 
 .group-title {
-  font-size: 0.95rem; color: var(--fg-dim); font-weight: 600;
+  font-size: var(--fs-subhead); color: var(--label-2); font-weight: 600;
   margin: 26px 0 10px;
 }
 .target-grid {
@@ -299,13 +291,13 @@ main { padding-top: 34px; }
 }
 .target-card { padding: 16px 17px; }
 .target-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
-.target-head h3 { margin: 0; font-size: 1rem; flex: 1; min-width: 0; }
+.target-head h3 { margin: 0; font-size: var(--fs-headline); flex: 1; min-width: 0; }
 .uptime { font-variant-numeric: tabular-nums; }
 .target-url {
-  margin: 0 0 10px; font-size: 0.78rem; font-family: var(--mono);
+  margin: 0 0 10px; font-size: var(--fs-footnote); font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.target-url a { color: var(--fg-faint); }
+.target-url a { color: var(--label-2); }
 .target-url a:hover { color: var(--accent); }
 
 /* 状态点：**形状不同**，不是只有颜色不同。
@@ -323,9 +315,9 @@ main { padding-top: 34px; }
 /* 状态徽标：与点同义的文字标签（形状 + 文字是两层冗余，不是装饰）。 */
 .badge {
   display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
-  padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border);
-  color: var(--fg-dim); background: var(--bg-soft);
-  font-family: var(--mono); font-size: 0.72rem; white-space: nowrap;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid var(--separator);
+  color: var(--label-2); background: var(--fill);
+  font-size: var(--fs-caption); white-space: nowrap;
 }
 .badge.ok { color: var(--ok); border-color: var(--ok); }
 .badge.warn { color: var(--warn); border-color: var(--warn); }
@@ -338,27 +330,27 @@ main { padding-top: 34px; }
 .cell-strip i.up { background: var(--ok); }
 .cell-strip i.degraded { background: var(--warn); }
 .cell-strip i.down { background: var(--bad); }
-.cell-strip i.cell-missing { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
+.cell-strip i.cell-missing { background: transparent; box-shadow: inset 0 0 0 1px var(--separator); }
 .cell-caption {
-  margin: 0 0 12px; font-family: var(--mono); font-size: 0.72rem;
-  color: var(--fg-faint); font-variant-numeric: tabular-nums;
+  margin: 0 0 12px; font-size: var(--fs-caption);
+  color: var(--label-2); font-variant-numeric: tabular-nums;
 }
 
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 0; }
 .kv div { display: flex; justify-content: space-between; gap: 8px; }
-.kv dt { color: var(--fg-faint); font-size: 0.78rem; margin: 0; }
-.kv dd { margin: 0; font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.kv dt { color: var(--label-2); font-size: var(--fs-caption); margin: 0; }
+.kv dd { margin: 0; font-size: var(--fs-footnote); font-variant-numeric: tabular-nums; }
 
 .target-error {
-  margin: 12px 0 0; padding: 7px 10px; font-size: 0.8rem;
-  color: var(--bad); background: var(--bg-soft);
-  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--border));
+  margin: 12px 0 0; padding: 7px 10px; font-size: var(--fs-footnote);
+  color: var(--bad); background: var(--fill);
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--separator));
   border-radius: 6px; word-break: break-word;
 }
 
 .live-tag {
   display: inline-flex; align-items: center; gap: 6px;
-  font-size: 0.78rem; color: var(--fg-faint);
+  font-size: var(--fs-caption); color: var(--label-2);
 }
 .live-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
@@ -370,12 +362,12 @@ main { padding-top: 34px; }
 .incident-list { list-style: none; padding: 0; margin: 0; }.incident-list li {
   display: grid; grid-template-columns: auto 1fr auto;
   gap: 12px; align-items: baseline;
-  padding: 9px 2px; border-bottom: 1px solid var(--border);
-  font-size: 0.86rem;
+  padding: 9px 2px; border-bottom: 1px solid var(--separator);
+  font-size: var(--fs-subhead);
 }
 .incident-list li:last-child { border-bottom: 0; }
-.incident-time { color: var(--fg-faint); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
-.incident-err { color: var(--fg-dim); font-size: 0.82rem; text-align: right; }
+.incident-time { color: var(--label-2); font-variant-numeric: tabular-nums; font-size: var(--fs-footnote); }
+.incident-err { color: var(--label-2); font-size: var(--fs-footnote); text-align: right; }
 
 /* ---------- 曲线图（内联 SVG） ---------- */
 
@@ -384,17 +376,17 @@ main { padding-top: 34px; }
 .chart-wide svg { height: 104px; }
 .chart figcaption {
   display: flex; justify-content: space-between; gap: 10px;
-  font-size: 0.76rem; color: var(--fg-faint); margin-top: 2px;
+  font-size: var(--fs-caption); color: var(--label-2); margin-top: 2px;
 }
 .chart-max { font-variant-numeric: tabular-nums; }
 .chart-empty {
   height: 74px; display: flex; align-items: center; justify-content: center;
-  background: var(--bg-soft); border: 1px dashed var(--border); border-radius: 6px;
-  color: var(--fg-faint); font-size: 0.76rem; text-align: center; padding: 0 10px;
+  background: var(--fill); border: 1px dashed var(--separator); border-radius: 6px;
+  color: var(--label-2); font-size: var(--fs-caption); text-align: center; padding: 0 10px;
 }
 .chart-axis {
   display: flex; justify-content: space-between; gap: 8px;
-  font-size: 0.7rem; color: var(--fg-faint); margin: -8px 0 12px;
+  font-size: var(--fs-caption); color: var(--label-2); margin: -8px 0 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -406,53 +398,52 @@ main { padding-top: 34px; }
 }
 .login-wrap {
   width: 100%; max-width: 360px;
-  background: var(--bg-card); border: 1px solid var(--border);
+  background: var(--bg-card); border: 1px solid var(--separator);
   border-radius: var(--radius); padding: 32px 28px;
 }
-.login-wrap h1 { font-size: 1.35rem; margin: 0 0 6px; }
-.login-lede { color: var(--fg-dim); font-size: 0.88rem; margin: 0 0 20px; }
+.login-wrap h1 { font-size: var(--fs-title1); line-height: var(--lh-title); margin: 0 0 8px; }
+.login-lede { color: var(--label-2); font-size: var(--fs-subhead); margin: 0 0 20px; }
 .login-form { display: flex; flex-direction: column; gap: 14px; }
 .login-form label {
   display: flex; flex-direction: column; gap: 6px;
-  font-size: 0.82rem; color: var(--fg-dim);
+  font-size: var(--fs-footnote); color: var(--label-2);
 }
 .login-form input {
-  background: var(--bg-soft); border: 1px solid var(--border); color: var(--fg);
-  border-radius: 6px; padding: 9px 11px; font-size: 0.95rem; font-family: inherit;
+  background: var(--fill); border: 1px solid var(--border-strong); color: var(--label);
+  border-radius: 8px; padding: 9px 11px; font-size: var(--fs-subhead); font-family: inherit;
 }
 .login-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .login-form button {
   /* `--on-accent`：暗色下 accent 是亮蓝，白字只有 2.72:1 —— 所以按钮文字走这个 token
      （暗色给深字、浅色给白字，两边都 ≥4.5，见文件头的对比度说明）。 */
   background: var(--accent); color: var(--on-accent); border: 0; border-radius: 6px;
-  padding: 10px 14px; font-size: 0.95rem; font-family: inherit; cursor: pointer; margin-top: 4px;
+  padding: 10px 14px; font-size: var(--fs-subhead); font-family: inherit; cursor: pointer; margin-top: 4px;
 }
 .login-form button:hover { filter: brightness(1.08); }
 /* ⚠ 这里原来是硬编码的 rgba(242,86,77,…)（一个 token 以外的颜色）——已改成 token：
    底色用 `--bg-soft`，边框与文字用 `--bad`，于是"错误文字/底"这一对也在 `check:style` 的表里。 */
 .login-error {
-  background: var(--bg-soft);
-  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--border));
+  background: var(--fill);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--separator));
   color: var(--bad); border-radius: 6px; padding: 9px 11px;
-  font-size: 0.85rem; margin: 0 0 16px;
+  font-size: var(--fs-footnote); margin: 0 0 16px;
 }
 .login-hint {
-  background: var(--bg-soft); border: 1px dashed var(--border);
-  border-radius: 6px; padding: 10px 12px; font-size: 0.8rem;
-  color: var(--fg-dim); margin: 0 0 16px; line-height: 1.6;
+  background: var(--fill); border: 1px dashed var(--separator);
+  border-radius: 8px; padding: 10px 12px; font-size: var(--fs-footnote);
+  color: var(--label-2); margin: 0 0 16px; line-height: 1.6;
 }
-.login-hint code { font-family: var(--mono); font-size: 0.74rem; color: var(--fg); word-break: break-all; }
+.login-hint code { font-family: var(--mono); font-size: var(--fs-caption); color: var(--label); word-break: break-all; }
 
 /* 面板上的一次性提示（改密结果）与失败横幅 */
 .notice {
-  background: var(--bg-soft); border: 1px solid var(--border);
+  background: var(--fill); border: 1px solid var(--separator);
   border-left: 3px solid var(--accent);
   border-radius: 6px; padding: 9px 12px; margin: 0 0 14px;
-  font-size: 0.86rem; color: var(--fg);
+  font-size: var(--fs-subhead); color: var(--label);
 }
 .status-banner { border-left-color: var(--warn); }
 .status-banner a { color: var(--accent); margin-left: 4px; }
-
 
 /* 登出按钮（#38）：写路径要 L3 token，所以它必须是一个带 csrfField() 的**真实表单**，
    不是一个普通链接 —— 这也是「浏览器里还能登出」这件事的落点。 */
@@ -476,14 +467,14 @@ main { padding-top: 34px; }
 .notice-warn { border-left-color: var(--warn); }
 
 /* 摘要卡里的一行小字（概览页用） */
-.stat-sub { color: var(--fg-faint); font-size: 0.8rem; margin-top: 2px; }
+.stat-sub { color: var(--label-2); font-size: var(--fs-footnote); margin-top: 2px; }
 
 /* 表单与破坏性操作 */
 .form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
-.confirm { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; font-size: 0.86rem; }
+.confirm { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; font-size: var(--fs-subhead); }
 .btn-danger { border-color: var(--bad); color: var(--bad); }
-.admin-hint { color: var(--fg-faint); font-size: 0.86rem; }
+.admin-hint { color: var(--label-2); font-size: var(--fs-subhead); }
 
 /* ---------- 管理台左侧导航（#59 定稿 · #62 实现） ----------
    栏宽算术见 `:root` 的 `--wrap-admin`。⚠ 内容列必须 `minmax(0, 1fr)`：
@@ -500,61 +491,61 @@ main { padding-top: 34px; }
 .admin-main { min-width: 0; }
 .admin-side { display: flex; flex-direction: column; gap: 14px; }
 .admin-side-group { display: flex; flex-direction: column; gap: 2px; }
-.admin-side-group-label { color: var(--fg-faint); font-size: 0.76rem; letter-spacing: 0.08em; padding: 0 8px; }
-.admin-side a { color: var(--fg-dim); padding: 5px 8px; border-left: 2px solid transparent; font-size: 0.9rem; }
-.admin-side a:hover { color: var(--fg); text-decoration: none; }
+.admin-side-group-label { color: var(--label-2); font-size: var(--fs-caption); letter-spacing: 0.08em; padding: 0 8px; }
+.admin-side a { color: var(--label-2); padding: 5px 8px; border-left: 2px solid transparent; font-size: var(--fs-subhead); }
+.admin-side a:hover { color: var(--label); text-decoration: none; }
 /* 当前项：与顶栏同一判据（`aria-current`）；配色只用已断言的那几对（fg/bg-soft + accent 当左边框） */
-.admin-side a[aria-current="page"] { color: var(--fg); background: var(--bg-soft); border-left-color: var(--accent); }
+.admin-side a[aria-current="page"] { color: var(--label); background: var(--fill); border-left-color: var(--accent); }
 
 /* 管理台文章页（#50）：列表表格 + 正文文本框 + 草稿预览 */
-.admin-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin-bottom: 24px; }
-.admin-table th { text-align: left; color: var(--fg-faint); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.admin-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: var(--fs-subhead); margin-bottom: 24px; }
+.admin-table th { text-align: left; color: var(--label-2); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--separator); }
+.admin-table td { padding: 8px; border-bottom: 1px solid var(--separator); vertical-align: top; }
 .article-form { display: block; margin-bottom: 18px; }
 /* 写作区富文本编辑器（#57）：只服务编辑面；读面仍是服务端渲染，禁 JS 也能读。 */
-.article-editor { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-soft);
-  color: var(--fg); min-height: 320px; max-height: 70vh; overflow: auto; }
+.article-editor { border: 1px solid var(--separator); border-radius: 6px; background: var(--fill);
+  color: var(--label); min-height: 320px; max-height: 70vh; overflow: auto; }
 .article-editor .ProseMirror { min-height: 300px; padding: 10px 12px; outline: none; }
 .article-editor .ProseMirror p { margin: 0 0 0.6em; }
 .article-editor .ProseMirror table { border-collapse: collapse; width: 100%; margin: 0.6em 0; }
-.article-editor .ProseMirror th, .article-editor .ProseMirror td { border: 1px solid var(--border);
+.article-editor .ProseMirror th, .article-editor .ProseMirror td { border: 1px solid var(--separator);
   padding: 4px 8px; vertical-align: top; }
 .article-editor .ProseMirror th { background: var(--bg-card); text-align: left; }
 .article-editor .ProseMirror img { max-width: 100%; height: auto; }
-.article-editor .ProseMirror blockquote { border-left: 3px solid var(--border); margin: 0.6em 0;
-  padding-left: 12px; color: var(--fg-dim); }
-.article-editor .ProseMirror pre { background: var(--bg); border: 1px solid var(--border);
+.article-editor .ProseMirror blockquote { border-left: 3px solid var(--separator); margin: 0.6em 0;
+  padding-left: 12px; color: var(--label-2); }
+.article-editor .ProseMirror pre { background: var(--bg); border: 1px solid var(--separator);
   border-radius: 6px; padding: 10px; overflow: auto; }
 .article-editor .ProseMirror code { font-family: var(--mono); font-size: 0.9em; }
 .article-editor .ProseMirror-selectednode { outline: 2px solid var(--accent); }
 .editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
-.editor-toolbar button { font: inherit; font-size: 0.82rem; padding: 4px 8px; border: 1px solid var(--border);
-  background: var(--bg-card); color: var(--fg); border-radius: 6px; cursor: pointer; }
+.editor-toolbar button { font: inherit; font-size: var(--fs-footnote); padding: 4px 8px; border: 1px solid var(--border-strong);
+  background: var(--bg-card); color: var(--label); border-radius: 6px; cursor: pointer; }
 .editor-toolbar button:hover { border-color: var(--accent); }
 .article-preview { padding: 12px 16px; }
 
 /* 修订历史（#51）：列表 + 逐版全文 */
 .revision-list { list-style: none; padding: 0; margin: 0 0 24px; }
-.revision-list li { border-bottom: 1px solid var(--border); padding: 10px 0; }
-.revision-list summary { cursor: pointer; color: var(--fg-faint); font-size: 0.84rem; }
-.revision-body { white-space: pre-wrap; font-size: 0.84rem; line-height: 1.55; color: var(--fg);
-  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin: 8px 0 0; }
+.revision-list li { border-bottom: 1px solid var(--separator); padding: 10px 0; }
+.revision-list summary { cursor: pointer; color: var(--label-2); font-size: var(--fs-footnote); }
+.revision-body { white-space: pre-wrap; font-size: var(--fs-footnote); line-height: 1.55; color: var(--label);
+  background: var(--fill); border: 1px solid var(--separator); border-radius: 6px; padding: 10px; margin: 8px 0 0; }
 
 /* 上传与媒体（#52） */
-.upload-preview { max-width: 320px; border: 1px solid var(--border); border-radius: 6px; }
-.media-snippet { white-space: pre-wrap; word-break: break-all; font-size: 0.84rem;
-  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; }
+.upload-preview { max-width: 320px; border: 1px solid var(--separator); border-radius: 6px; }
+.media-snippet { white-space: pre-wrap; word-break: break-all; font-size: var(--fs-footnote);
+  background: var(--fill); border: 1px solid var(--separator); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; }
 
 /* 管理台目标页（#40）：按分组分标题 + 每条目标一块（行内编辑表单 + 启停/删除） */
-.target-group { margin: 26px 0 8px; font-size: 0.98rem; }
+.target-group { margin: 26px 0 8px; font-size: var(--fs-headline); }
 /* 新增表单与行内编辑表单各是自己的类（e2e 也按这两个类定位）：给它们各自的留白，
    而不是靠父级的通用间距 —— 新增块要紧一点、行内编辑要贴着行。 */
-.target-new { margin: 0 0 22px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.target-new { margin: 0 0 22px; padding-bottom: 18px; border-bottom: 1px solid var(--separator); }
 .target-edit { margin: 0; }
-.target-row { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card);
+.target-row { border: 1px solid var(--separator); border-radius: var(--radius); background: var(--bg-card);
   padding: 12px 14px; margin-bottom: 12px; }
 .target-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.target-id { color: var(--fg-faint); font-size: 0.8rem; }
+.target-id { color: var(--label-2); font-size: var(--fs-footnote); }
 .target-row .form-row { margin-bottom: 8px; }
 .target-row form { margin: 0; }
 
@@ -563,63 +554,65 @@ main { padding-top: 34px; }
 .settings-form .stat-sub { margin: 0 0 10px; }
 
 /* ══════════════════════════════════════════════════════════
-   两套平面的排版细则（#45）
-   数据面 = 面板 / 管理台 / 登录：终端等宽化（等宽字体、tabular 数字、紧凑行高、数字对齐）。
-   正文面 = 首页 / 分享 / 文章 / 关于：纸感阅读化（见上面 `.plane-prose` 那几处 + `.prose` 的窄栏）。
-   颜色一律复用同一份 token —— 这两段只碰排版。
+   排版：一套 iOS 字阶（#68）。平面（数据面 / 正文面）已退役，
+   等宽只留给 code / pre / .mono；数字用 tabular-nums。
    ══════════════════════════════════════════════════════════ */
 
-/* 数据面：把散在面板/管理台里的"等宽化"收成一处，别再各写一遍 */
-.plane-data h1, .plane-data h2, .plane-data h3 { font-family: var(--font-data); letter-spacing: -0.01em; }
-.plane-data .stat-num { font-size: 1.32rem; }
-.plane-data .admin-hint, .plane-data .form-row label, .plane-data .confirm { font-size: 0.86rem; }
-.plane-data input, .plane-data select, .plane-data textarea, .plane-data button {
-  font-family: var(--font-data); font-size: 0.88rem;
+/* ── 控件（#67 / #68）：输入框与按钮全站一套；登录页的专有规则在下面按选择器覆盖 ── */
+input, select, textarea {
+  background: var(--fill); border: 1px solid var(--border-strong); color: var(--label);
+  border-radius: 8px; padding: 6px 9px; font: inherit;
 }
-.plane-data input:not([type="checkbox"]):not([type="file"]),
-.plane-data select, .plane-data textarea {
-  background: var(--bg-soft); border: 1px solid var(--border); color: var(--fg);
-  border-radius: 6px; padding: 6px 9px;
-}
-.plane-data input:focus, .plane-data select:focus, .plane-data textarea:focus {
+input[type="checkbox"], input[type="file"] { background: none; border: 0; padding: 0; border-radius: 0; }
+input:focus, select:focus, textarea:focus {
   outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
 }
-.plane-data button {
-  background: var(--bg-soft); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 12px; cursor: pointer;
+button {
+  background: var(--fill); color: var(--label); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit;
 }
-.plane-data button:hover { border-color: var(--accent); color: var(--accent); }
-.plane-data .btn-danger { border-color: var(--bad); color: var(--bad); }
-.plane-data .btn-danger:hover { border-color: var(--bad); color: var(--bad); filter: brightness(1.12); }
-.plane-data .admin-table, .plane-data .revision-body, .plane-data .media-snippet { font-family: var(--font-data); }
+button:hover { border-color: var(--accent); color: var(--accent); }
+.btn-danger { border-color: var(--bad); color: var(--bad); }
+.btn-danger:hover { border-color: var(--bad); color: var(--bad); filter: brightness(1.08); }
 
-/* 登录页 = 数据面（但它没有导航栏，所以自己带 plane-data） */
-.login-body.plane-data { font-family: var(--font-data); }
-.login-wrap h1 { font-family: var(--font-data); letter-spacing: -0.01em; }
+/* 主题三态（#67）：原生 <select>，三态只切 color-scheme；picker 在页头与登录页右上。 */
+.header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.theme-picker { position: relative; display: inline-flex; align-items: center; }
+.theme-picker select {
+  appearance: none; min-height: 32px; padding: 0 26px 0 10px;
+  border-radius: 8px; background: var(--fill); color: var(--label);
+  font-size: var(--fs-footnote); cursor: pointer;
+}
+.theme-picker select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-picker::after {
+  content: "⌄"; position: absolute; right: 9px; top: 50%; transform: translateY(-58%);
+  color: var(--label-2); font-size: 12px; pointer-events: none;
+}
+.login-theme { position: fixed; top: 16px; right: 16px; z-index: 10; }
 
 /* ── 窄屏断点 ──────────────────────────────────────────────
    两个断点，别再加第三个：720px（版面从多栏退成一栏）与 560px（进一步压缩间距与字号）。
    ⚠ 断点的**目视观感**未经真机浏览器验证，归票⑩；这里能断言的是"规则确实存在且生效"。 */
 @media (max-width: 720px) {
+  .hero h1 { font-size: var(--fs-title1); }
+  .post-header h1 { font-size: var(--fs-title2); }
   .target-grid { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 1fr; }
   .stat-strip { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
   .admin-table { display: block; overflow-x: auto; }
   .prose { max-width: none; }
-  .plane-prose .hero h1 { font-size: 1.75rem; }
-  .plane-prose .post-header h1 { font-size: 1.6rem; }
   /* 管理台侧栏折成横向条目条（#59 §4）：不用 JS，组标签各起一行 —— 分组这条 IA 决定在窄屏也活着 */
   .admin-shell { grid-template-columns: minmax(0, 1fr); }
-  .admin-side { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  .admin-side { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; border-bottom: 1px solid var(--separator); padding-bottom: 10px; }
   .admin-side-group { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
   .admin-side-group-label { flex-basis: 100%; }
 }
 
 @media (max-width: 560px) {
   .header-inner { min-height: 52px; }
-  .site-nav { font-size: 0.82rem; }
+  .site-nav { font-size: var(--fs-footnote); }
   .nav-sep { padding: 0 6px; }
-  .hero h1 { font-size: 1.5rem; }
+  .hero h1 { font-size: var(--fs-title2); }
   .incident-list li { grid-template-columns: 1fr; gap: 2px; }
   .incident-err { text-align: left; }
   .form-row { flex-direction: column; align-items: stretch; }
@@ -629,27 +622,36 @@ main { padding-top: 34px; }
 }
 
 /* ── 打印样式 ──────────────────────────────────────────────
-   屏幕已经是纸色（B 暖色纸墨），但**打印仍要纯纸面**：黑字白底最省墨、对比最大，
-   并去掉一切"只在屏幕上成立"的东西（粘性页头、导航、登出表单、按钮、提示语）。
+   屏幕是 iOS 的浅/深两套，但**打印仍要纯纸面**：黑字白底最省墨、对比最大，
+   并去掉一切"只在屏幕上成立"的东西（粘性页头、导航、登出表单、按钮、提示语、主题选择器）。
    改在 `body` 上而不是 `:root` —— 全站只有一份 `:root`，这条纪律连打印也不破。 */
 @media print {
   body {
+    color-scheme: light;
     --bg: #ffffff;
-    --bg-soft: #ffffff;
     --bg-card: #ffffff;
-    --border: #bbbbbb;
-    --fg: #000000;
-    --fg-dim: #222222;
-    --fg-faint: #333333;
+    --bg-elev: #ffffff;
+    --fill: #ffffff;
+    --fill-strong: #ffffff;
+    --label: #000000;
+    --label-2: #222222;
+    --label-3: #333333;
+    --separator: #bbbbbb;
+    --border-strong: #999999;
     --accent: #000000;
     --on-accent: #ffffff;
+    --ok: #000000;
+    --warn: #555555;
+    --bad: #000000;
+    --unknown: #dddddd;
+    --scrim: #000000;
     background: #ffffff; color: #000000;
     font-size: 11pt; line-height: 1.5;
     /* 纸上不需要「撑满一屏」：留着 flex + 100vh 会多印一页空白 */
     display: block; min-height: 0;
   }
   .site-header, .site-footer, .logout-form, .site-nav, .admin-side, .live-tag,
-  .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis { display: none !important; }
+  .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker { display: none !important; }
   main { padding-top: 0; }
   .wrap { max-width: none; padding: 0; }
   /* 侧栏藏掉之后，管理台外壳退回单列（否则打印出来的正文仍只占右边那一列） */
@@ -662,5 +664,14 @@ main { padding-top: 34px; }
   a { color: #000000; text-decoration: underline; }
   /* 打印出来的纸上点不开链接，所以把站内地址显式写出来（只对正文里的链接）。 */
   .prose a[href^="/"]::after { content: " (" attr(href) ")"; font-size: 9pt; color: #333333; }
+  /* 状态格带：颜色退役，改图案（实心 / 45° 斜线 / 斜网格 / 空心）—— 徽标文字与点形状仍是另两层冗余。 */
   .cell-strip i { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .cell-strip i.up { background: #000000; }
+  .cell-strip i.degraded { background: repeating-linear-gradient(45deg, #000 0 2px, #fff 2px 5px); }
+  .cell-strip i.down {
+    background: repeating-linear-gradient(45deg, #000 0 2px, #fff 2px 5px),
+      repeating-linear-gradient(-45deg, #000 0 2px, #fff 2px 5px);
+  }
+  .cell-strip i.cell-missing { background: #ffffff; box-shadow: inset 0 0 0 1px #000000; }
 }
+

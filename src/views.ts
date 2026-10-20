@@ -84,16 +84,25 @@ export interface LayoutOptions {
 }
 
 /**
- * 两套**排版语言**（map Notes 第 6 条：B+C 混合）。它们只换排版，颜色仍是同一份 token 表。
- *
- * - `data`（数据面）：面板 · 管理台 —— **终端等宽化**（等宽字体、tabular 数字、紧凑行高）；
- * - `prose`（正文面）：首页 · 分享 · 文章 · 关于 —— **纸感阅读化**（大字号、宽行距、68ch 窄栏）。
- *
- * 平面由**导航项**推出来而不是每个页面手写：`active` 只有 `status`/`admin` 属于数据面，
- * 忘写的代价是「那一页排版忽然变成另一种」—— 推出来就不会漏。
+ * 主题三态（#67）：`color-scheme` 是**唯一**开关，三态只切它、不复制 token。
+ * 这段控件在页头与登录页各出现一次（`[data-theme-select]` 恰好 2 处）。
  */
-function planeOf(active: LayoutOptions['active']): 'data' | 'prose' {
-  return active === 'status' || active === 'admin' ? 'data' : 'prose'
+function themePicker(): string {
+  return `<label class="theme-picker"><span class="sr">主题</span><select data-theme-select aria-label="主题">
+<option value="system">跟随系统</option>
+<option value="light">浅色</option>
+<option value="dark">深色</option>
+</select></label>`
+}
+
+/** `<head>` 里的防闪脚本：**必须在 `<link rel="stylesheet">` 之前**求值，否则第一帧会白闪。 */
+function themeBoot(): string {
+  return `<script>try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark'){document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}}catch(e){}</script>`
+}
+
+/** `</body>` 前的同步脚本：不监听 `matchMedia`（系统切换由 CSS 的 light-dark() 处理）、不写 cookie。 */
+function themeScript(): string {
+  return `<script>(()=>{const root=document.documentElement,KEY='theme',selects=document.querySelectorAll('[data-theme-select]');const read=()=>{try{return localStorage.getItem(KEY)||'system'}catch(e){return 'system'}};const apply=(value)=>{if(value==='light'||value==='dark'){root.dataset.theme=value;root.style.colorScheme=value}else{root.removeAttribute('data-theme');root.style.colorScheme=''}selects.forEach((s)=>{s.value=value})};apply(read());selects.forEach((s)=>s.addEventListener('change',()=>{const value=s.value==='light'||s.value==='dark'?s.value:'system';try{if(value==='system')localStorage.removeItem(KEY);else localStorage.setItem(KEY,value)}catch(e){}apply(value)}))})()</script>`
 }
 
 /**
@@ -158,8 +167,8 @@ function adminSidebar(section: AdminSection): string {
 }
 
 export function layout(opts: LayoutOptions, site: { title: string; description: string }): string {
-  // 平面 + 页面自带的 bodyClass（登录页不走 `layout()`，它自己在 `<body>` 上写 plane-data）。
-  const bodyClass = [`plane-${planeOf(opts.active)}`, opts.bodyClass].filter(Boolean).join(' ')
+  // 页面自带的 bodyClass（403/404 用 `page-error`；其余页面没有额外类）。
+  const bodyClass = opts.bodyClass ?? ''
   // 管理台：正文列**之前**长出侧栏（`docs/admin-console-sidebar-decision.md` §2）。
   // `adminSection` 没传时这里与改动前**一字不差** —— 首页 / 分享 / 面板 / 403 / 登录都不受影响。
   const main = opts.adminSection
@@ -170,17 +179,20 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>${escapeHtml(opts.title)} · ${escapeHtml(site.title)}</title>
 <meta name="description" content="${escapeHtml(opts.description)}">
+${themeBoot()}
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
+<noscript><style>[data-theme-select] { display: none }</style></noscript>
 </head>
 <body class="${escapeHtml(bodyClass)}">
 <header class="site-header">
   <div class="wrap header-inner">
     <a class="brand" href="/">${escapeHtml(site.title)}</a>
     <nav class="site-nav">${nav(opts.active)}</nav>
-    <form class="logout-form" method="post" action="/logout">${csrfField()}<button type="submit">登出</button></form>
+    <div class="header-actions">${themePicker()}<form class="logout-form" method="post" action="/logout">${csrfField()}<button type="submit">登出</button></form></div>
   </div>
 </header>
 ${main}
@@ -189,6 +201,7 @@ ${main}
     <span>${escapeHtml(site.description)}</span>
   </div>
 </footer>
+${themeScript()}
 </body>
 </html>`
 }
@@ -864,11 +877,15 @@ export function loginPage(opts: LoginPageOptions, site: { title: string; descrip
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>登录 · ${escapeHtml(site.title)}</title>
+${themeBoot()}
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
+<noscript><style>[data-theme-select] { display: none }</style></noscript>
 </head>
-<body class="login-body plane-data">
+<body class="login-body">
+<div class="login-theme">${themePicker()}</div>
 <main class="login-wrap">
   <h1>${escapeHtml(site.title)}</h1>
   <p class="login-lede">${escapeHtml(site.description)}</p>
@@ -885,6 +902,7 @@ export function loginPage(opts: LoginPageOptions, site: { title: string; descrip
     <button type="submit">登录</button>
   </form>
 </main>
+${themeScript()}
 </body>
 </html>`
 }

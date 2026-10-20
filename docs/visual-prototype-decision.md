@@ -1,5 +1,10 @@
 # 视觉原型定稿：面板采用「卡片墙 · 时间格」
 
+> ⚠ **已被取代**（2026-10-20）：本文的「数据面 / 正文面两套平面」已由
+> [#68](https://github.com/Lkyloveaw/lkyloveaw-home/issues/68) 退役（改成一套 iOS 字阶，
+> 见 `docs/ios-component-mapping-decision.md`）。面板仍是「卡片墙 · 时间格」（结构未变），
+> 但配色与排版不再是本文那一套。本文件保留，作为原型方法论与选型记录。
+
 本文件是「整站视觉原型」这张票的产出（map：[个人站自管化](https://github.com/Lkyloveaw/lkyloveaw-home/issues/20)）。
 
 票：<https://github.com/Lkyloveaw/lkyloveaw-home/issues/21>
