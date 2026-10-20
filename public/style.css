@@ -189,7 +189,11 @@ main { padding-top: 34px; }
 /* ---------- 文章（正文面） ---------- */
 
 /* `.prose` 是文章正文的容器：收窄栏宽是"纸感"的核心 —— 900px 的整幅行宽读起来太累。 */
-.prose { font-size: 1rem; max-width: var(--measure-prose); }
+/* `.prose` 是文章正文的容器：收窄栏宽是"纸感"的核心 —— 900px 的整幅行宽读起来太累。
+   **在画布里居中**（2026-10-20）：以前只收窄、不居中，于是 `.wrap`(900) 与 `.prose`/`.post`(68ch)
+   两层宽度都贴着左边，左右留白差恒为 262px（1440 下左 290 / 右 552）。标题与正文仍共用同一条
+   左右边缘（那是#45 的部分），变的只是这条栏在页面里居中。 */
+.prose { font-size: 1rem; max-width: var(--measure-prose); margin-inline: auto; }
 .plane-prose .prose { font-size: 1.02rem; }
 .prose h2 { font-size: 1.3rem; margin: 38px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .prose h3 { font-size: 1.1rem; margin: 28px 0 10px; }
@@ -239,8 +243,9 @@ main { padding-top: 34px; }
 .tag-count { color: var(--fg-faint); }
 .tag-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
 
-/* 文章页整列收窄到与正文同一条栏宽：标题与正文左边缘对齐、右边缘也齐 —— 这是"纸感"的一部分。 */
-.post { max-width: var(--measure-prose); }
+/* 文章页整列收窄到与正文同一条栏宽：标题与正文左边缘对齐、右边缘也齐 —— 这是"纸感"的一部分。
+   同样**在画布里居中**（`.post` 与里面的 `.prose` 各自居中，两层都是 68ch 量级，边缘仍然齐）。 */
+.post { max-width: var(--measure-prose); margin-inline: auto; }
 .post-header { margin-bottom: 24px; }
 .post-header h1 { font-size: 1.75rem; margin: 0 0 8px; line-height: 1.35; }
 .plane-prose .post-header h1 { font-size: 2rem; line-height: 1.3; }

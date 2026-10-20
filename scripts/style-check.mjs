@@ -251,6 +251,8 @@ section('两套平面：数据面终端化 / 正文面纸感化')
   check('CSS 有 `body.plane-prose` 且字体走 `var(--font-prose)`', /body\.plane-prose\s*\{[^}]*font-family:\s*var\(--font-prose\)/s.test(css))
   check('两份排版 token 都在 `:root` 里定义过（字体 / 字号 / 行高 / 窄栏）', ['font-data', 'font-prose', 'fs-data', 'lh-data', 'fs-prose', 'lh-prose', 'measure-prose'].every((k) => new RegExp(`--${k}\\s*:`).test(css)))
   check('正文面收窄栏宽（`.prose` 用 `var(--measure-prose)`）', /\.prose\s*\{[^}]*max-width:\s*var\(--measure-prose\)/s.test(css))
+  // 只收窄不居中 = 左右留白不对称（`.wrap` 900 与 `.prose`/`.post` 68ch 都贴左边，差恒为 262px）。
+  check('窄栏在画布里居中（`.prose` 与 `.post` 都有 `margin-inline: auto`）', /\.prose\s*\{[^}]*margin-inline:\s*auto/s.test(css) && /\.post\s*\{[^}]*margin-inline:\s*auto/s.test(css))
   // TipTap 的单元格里包着一层 <p>，`.prose p` 的下边距会**加到每一行上**（文字贴格子沿、表凭空变高）。
   // 两侧都要清：读面 `.prose` 与编辑面 `.ProseMirror`（2026-10-20 真机上量出来的）。
   check(
