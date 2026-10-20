@@ -30,6 +30,14 @@
 >   新机 Node 装在 `/usr/bin/node`，**systemd 与 ssh 都直接拿到 22** —— 不需要 `Environment=PATH=` 那套弯路了。
 > - 旧机的 Docker 属主问题（`backup-checkpoint-decision.md` §4）在裸机上**不适用**（无容器 → 无跨 UID 错配）。
 >
+> **第三条教训（新机才有的，2026-10-20 实测）：边缘上有一层华为云 WAF。**
+> 请求一密（批量验收、CDP 轮询）就会被它拦成**空 body 的 403**，`Server: ADM/2.1.1`，
+> **连 `/healthz` 都拦**；而在机器本机 `curl 127.0.0.1:3000` 仍是 200 ——
+> 所以排查第一件事是分辨「应用坏了」还是「边缘挡了」。
+> 跑批量验证时走 **SSH 隧道**绕开边缘：`ssh -N -L 3999:127.0.0.1:3000 root@hw.hyacinthus.cn`，
+> 之后对 `http://127.0.0.1:3999` 操作（注意 `SITE_ORIGIN` 里的白名单是 `http://127.0.0.1:3000`，
+> 经隧道发 POST 时 `Origin` 头要写白名单里的那个，否则 L2 会拦）。
+>
 > **部署形状（本文件后续会话可照抄）**：`/opt/personal-wiki` 放代码与数据（`data/` 由默认路径生成），
 > `git` 不进部署产物、用 **tar over ssh 同步工作树**（仓库有未推送提交，不为了部署去 push），
 > `npm ci` + `npm run build` 在机器上跑，`systemd` 单元托管，`SESSION_SECRET` 写进 `/opt/personal-wiki/.env`。
