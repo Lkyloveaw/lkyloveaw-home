@@ -2347,7 +2347,7 @@ try {
   }
 
   // ══════════════════════════════════════════════════════════
-  console.log('\n[iOS 化（#70）：一套字阶与三态主题 · 站内框架]')
+  console.log('\n[iOS 化（#70–#72）：字阶与主题 · 外壳与导航 · 公开面]')
   // ══════════════════════════════════════════════════════════
   {
     const admP = await postForm('/login', { form: { username: 'roleprobe', password: 'roleprobe-password-1', next: '/' } })
@@ -2387,6 +2387,10 @@ try {
       '管理员在管理台页面看得到 tab bar 的「管理」项（且它是唯一的当前项）',
       tabOf(adminPage.body).includes('<span>管理</span>') && (tabOf(adminPage.body).match(/aria-current="page"/g) ?? []).length === 1,
     )
+    // 公开面（#68 §6 / #72）：文章列表是 inset 列表的一行，标签条是横向 chip row
+    check('首页：最近分享是 inset 列表（`.inset-list.post-list` > `.cell.post-card`）', /class="inset-list post-list"/.test(home.body) && /class="cell post-card"/.test(home.body))
+    check('分享列表：chip row + 整行可点的文章行', /class="chip-row"/.test(posts.body) && /class="cell post-card"/.test(posts.body))
+
     // 样式表真的被引用，且字阶 / 断点 / 打印规则在里面（不是只在源码里）
     const css = await get('/style.css')
     check('`/style.css` 可取（200 + text/css）', css.status === 200 && css.type.includes('text/css'), `${css.status} ${css.type}`)

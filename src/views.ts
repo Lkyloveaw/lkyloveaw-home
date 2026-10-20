@@ -936,18 +936,21 @@ function postCard(post: PostMeta): string {
   const tags = post.tags
     .map((t) => `<a class="tag" href="/tags/${encodeURIComponent(t)}">${escapeHtml(t)}</a>`)
     .join('')
-  return `<article class="card post-card">
-  <h2><a href="/posts/${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h2>
-  <p class="meta"><time datetime="${escapeHtml(post.date)}">${escapeHtml(post.date)}</time></p>
-  <p class="summary">${escapeHtml(post.summary)}</p>
-  ${tags ? `<p class="tags">${tags}</p>` : ''}
+  return `<article class="cell post-card">
+  <div class="cell-main">
+    <h2 class="cell-title"><a href="/posts/${encodeURIComponent(post.slug)}">${escapeHtml(post.title)}</a></h2>
+    <p class="meta"><time datetime="${escapeHtml(post.date)}">${escapeHtml(post.date)}</time></p>
+    <p class="summary">${escapeHtml(post.summary)}</p>
+    ${tags ? `<p class="tags">${tags}</p>` : ''}
+  </div>
+  <span class="chev" aria-hidden="true">${icon('chev')}</span>
 </article>`
 }
 
 export function homePage(posts: PostMeta[], status: StatusSummary, site: { title: string; description: string }): string {
   const body = `
 <section class="hero">
-  <h1>${escapeHtml(site.title)}</h1>
+  <h1 class="large-title">${escapeHtml(site.title)}</h1>
   <p class="lede">${escapeHtml(site.description)}</p>
 </section>
 
@@ -958,7 +961,11 @@ ${statusBlock(status)}
     <h2>最近分享</h2>
     <a class="more" href="/posts">全部 →</a>
   </div>
-  ${posts.length ? posts.slice(0, 4).map(postCard).join('\n') : '<p class="empty">还没有文章。登录后在 <strong>管理台 → 文章</strong> 里写一篇就会出现。</p>'}
+  ${
+    posts.length
+      ? `<div class="inset-list post-list">${posts.slice(0, 4).map(postCard).join('\n')}</div>`
+      : '<p class="empty">还没有文章。登录后在 <strong>管理台 → 文章</strong> 里写一篇就会出现。</p>'
+  }
 </section>`
   return layout(
     { title: '首页', description: site.description, active: 'home', body },
@@ -1011,11 +1018,11 @@ function statusBlock(summary: StatusSummary): string {
 
   const rows = summary.targets
     .map(
-      ({ target, stats: s }) => `<div class="mini-row">
+      ({ target, stats: s }) => `<div class="cell">
       ${statusDot(s.lastStatus)}
-      <span class="mini-name">${escapeHtml(target.name)}</span>
-      <span class="mini-lat">${s.avgLatencyMs != null ? `${s.avgLatencyMs} ms` : '—'}</span>
-      <span class="mini-up">${formatUptime(s.uptime)}</span>
+      <span class="cell-title">${escapeHtml(target.name)}</span>
+      <span class="cell-meta">${s.avgLatencyMs != null ? `${s.avgLatencyMs} ms` : '—'}</span>
+      <span class="cell-meta">${formatUptime(s.uptime)}</span>
     </div>`,
     )
     .join('')
@@ -1030,13 +1037,13 @@ function statusBlock(summary: StatusSummary): string {
     <div class="stat"><span class="stat-num">${formatUptime(avgUptime)}</span><span class="stat-label">平均可用率（${escapeHtml(summary.windowLabel)}）</span></div>
     <div class="stat"><span class="stat-num">${summary.incidents.length}</span><span class="stat-label">近期异常</span></div>
   </div>
-  <div class="mini-list">${rows}</div>
+  <div class="inset-list">${rows}</div>
 </section>`
 }
 
 export function postsPage(posts: PostMeta[], tags: Array<{ tag: string; count: number }>, site: { title: string; description: string }, heading = '分享', activeTag?: string): string {
   const tagBar = tags.length
-    ? `<div class="tag-bar">${
+    ? `<div class="chip-row">${
         activeTag
           ? `<a class="tag" href="/posts">← 全部</a>`
           : ''
@@ -1045,9 +1052,13 @@ export function postsPage(posts: PostMeta[], tags: Array<{ tag: string; count: n
 
   const body = `
 <section class="section">
-  <h1>${escapeHtml(heading)}</h1>
+  <h1 class="large-title">${escapeHtml(heading)}</h1>
   ${tagBar}
-  ${posts.length ? posts.map(postCard).join('\n') : '<p class="empty">这里还没有内容。</p>'}
+  ${
+    posts.length
+      ? `<div class="inset-list post-list">${posts.map(postCard).join('\n')}</div>`
+      : '<p class="empty">这里还没有内容。</p>'
+  }
 </section>`
   return layout({ title: heading, description: site.description, active: 'posts', body }, site)
 }
@@ -1072,7 +1083,7 @@ export function postPage(post: Post, site: { title: string; description: string 
 export function aboutPage(site: { title: string; description: string }): string {
   const body = `
 <section class="section prose">
-  <h1>关于</h1>
+  <h1 class="large-title">关于</h1>
   <p>这里记录我自己折腾过的事情，以及内网各业务系统的可用性。</p>
   <h2>怎么加一篇文章</h2>
   <p>登录后在 <strong>管理台 → 文章</strong> 里新建即可 —— 写、改、发布、撤下都在网页上，改完立刻生效，不用登服务器。</p>

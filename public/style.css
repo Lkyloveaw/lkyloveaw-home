@@ -200,6 +200,7 @@ pre code { background: none; border: 0; padding: 0; }
   color: var(--label-2); font-size: var(--fs-caption); text-decoration: none;
 }
 .tab-item .icon { width: 22px; height: 22px; }
+.tab-item span { white-space: nowrap; }
 .tab-item:hover { text-decoration: none; }
 .tab-item[aria-current="page"] { color: var(--accent); }
 
@@ -250,21 +251,13 @@ pre code { background: none; border: 0; padding: 0; }
 .tag-ok { color: var(--ok); background: var(--bg-card); border-color: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 40%, var(--separator)); }
 .tag-warn { color: var(--warn); background: var(--bg-card); border-color: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, var(--separator)); }
 
-.chip-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.chip-row { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0 18px; padding-bottom: 4px; scrollbar-width: thin; }
 
 .site-footer {
   border-top: 1px solid var(--separator);
   margin-top: 56px; padding: 22px 0 30px;
   color: var(--label-2); font-size: var(--fs-footnote);
 }
-
-.site-footer {
-  border-top: 1px solid var(--separator);
-  margin-top: 56px; padding: 22px 0 30px;
-  color: var(--label-2); font-size: var(--fs-footnote);
-}
-
-main { padding-top: 34px; }
 
 /* ---------- 通用 ---------- */
 
@@ -274,6 +267,8 @@ main { padding-top: 34px; }
 .lede { color: var(--label-2); font-size: var(--fs-body); margin: 0 0 4px; }
 .section { margin-bottom: 40px; }
 .section h1 { font-size: var(--fs-title2); line-height: var(--lh-title); margin: 0 0 18px; }
+/* 页面主标题（#68 §4.3）：Large Title 34 / 1.3 / 700。放在 `.section h1` 之后，同特异性靠顺序取胜。 */
+h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); letter-spacing: -.02em; margin: 0 0 10px; font-weight: 700; }
 .section-head {
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 12px; margin-bottom: 14px;
@@ -283,8 +278,8 @@ main { padding-top: 34px; }
 .more:hover { color: var(--accent); }
 .empty {
   color: var(--label-2); background: var(--fill);
-  border: 1px dashed var(--separator); border-radius: var(--radius);
-  padding: 18px; margin: 0;
+  border-radius: var(--radius-lg);
+  padding: 20px; margin: 0;
 }
 .back { margin-top: 32px; font-size: var(--fs-subhead); }
 
@@ -295,7 +290,6 @@ main { padding-top: 34px; }
   padding: 18px 20px;
 }
 
-.mini-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .incident-name { font-weight: 600; }
 
 /* ---------- 文章（长文排版） ---------- */
@@ -337,12 +331,25 @@ main { padding-top: 34px; }
 .article-editor .ProseMirror th p, .article-editor .ProseMirror td p { margin: 0; }
 .prose hr { border: 0; border-top: 1px solid var(--separator); margin: 30px 0; }
 
-.post-card { margin-bottom: 14px; }
-.post-card h2 { margin: 0 0 4px; font-size: var(--fs-headline); line-height: var(--lh-title); }
-.post-card h2 a { color: var(--label); }
-.post-card h2 a:hover { color: var(--accent); text-decoration: none; }
-.post-card .meta, .post-header .meta { color: var(--label-2); font-size: var(--fs-footnote); margin: 0 0 8px; }
-.summary { color: var(--label-2); margin: 0 0 10px; font-size: var(--fs-subhead); }
+/* 文章列表（#68 §6）：inset grouped 列表里的一行。整行可点 = 标题链接的 `::after` 铺满行；
+   标签仍可点（`z-index: 1` 抬到覆盖层之上），不嵌套交互元素。 */
+.cell-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.cell > .cell-title { flex: 1; min-width: 0; }
+.post-card {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px; align-items: center;
+}
+.post-card:hover { background: var(--fill); }
+.post-list .post-card { padding-block: 14px; }
+.post-card .cell-title a { color: var(--label); }
+.post-card .cell-title a::after { content: ""; position: absolute; inset: 0; }
+.post-card .cell-title a:hover { color: var(--accent); text-decoration: none; }
+.post-card .tags a { position: relative; z-index: 1; }
+.post-card .meta, .post-header .meta { color: var(--label-2); font-size: var(--fs-footnote); margin: 0 0 4px; }
+.post-card .summary { color: var(--label-2); margin: 0; font-size: var(--fs-subhead); line-height: var(--lh-ui); }
+.post-card .tags { margin-top: 2px; }
+
 .tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 0; }
 .tag {
   display: inline-block; font-size: var(--fs-caption); padding: 2px 9px; border-radius: 999px;
@@ -352,7 +359,6 @@ main { padding-top: 34px; }
 .tag:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
 .tag-active { color: var(--accent); border-color: var(--accent); }
 .tag-count { color: var(--label-2); }
-.tag-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
 
 /* 文章页整列收窄到与正文同一条栏宽：标题与正文左边缘对齐、右边缘也齐 —— 这是"纸感"的一部分。
    同样**在画布里居中**（`.post` 与里面的 `.prose` 各自居中，两层都是 68ch 量级，边缘仍然齐）。 */
@@ -374,17 +380,6 @@ main { padding-top: 34px; }
 .stat-num { font-size: var(--fs-title3); font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-num.has-fault { color: var(--bad); }
 .stat-label { color: var(--label-2); font-size: var(--fs-caption); }
-
-.mini-list { display: flex; flex-direction: column; }
-.mini-row {
-  display: grid; grid-template-columns: 14px 1fr auto auto;
-  gap: 12px; align-items: center;
-  padding: 8px 2px; border-bottom: 1px solid var(--separator);
-  font-size: var(--fs-subhead);
-}
-.mini-row:last-child { border-bottom: 0; }
-.mini-lat, .mini-up { color: var(--label-2); font-variant-numeric: tabular-nums; font-size: var(--fs-footnote); }
-.mini-up { min-width: 62px; text-align: right; }
 
 .group-title {
   font-size: var(--fs-subhead); color: var(--label-2); font-weight: 600;
@@ -741,11 +736,11 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     display: block; min-height: 0; padding-bottom: 0;
   }
   .site-header, .site-footer, .site-rail, .tab-bar, .admin-tabs, .logout-form, .live-tag,
-  .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker { display: none !important; }
+  .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker, .back { display: none !important; }
   .wrap { max-width: none; padding: 0; }
   /* 导航藏掉之后，外壳退回单列（否则打印出来的正文仍只占右边那一列） */
   .app-shell { display: block; }
-  .app-main { max-width: none; padding: 0; }
+  .app-main { max-width: none; padding: 12px 0 0; }
   .prose { max-width: none; }
   /* 纸上滚不了：滚动容器必须放开，否则宽表会被裁掉右半边 */
   .prose .table-wrap { overflow: visible; }

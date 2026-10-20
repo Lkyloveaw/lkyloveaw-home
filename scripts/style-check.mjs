@@ -342,6 +342,20 @@ section('外壳与导航：全站 rail / 手机 tab bar / 管理模块条（#68 
 }
 
 // ════════════════════════════════════════════════════
+section('公开面：inset 列表 / 大标题 / 整行可点（#68 §6）')
+// ════════════════════════════════════════════════════
+{
+  check('文章卡是 inset 列表里的一行（`class="cell post-card"` + `.inset-list.post-list`）', views.includes('class="cell post-card"') && views.includes('class="inset-list post-list"'))
+  check('文章卡带 chevron（装饰性 `aria-hidden`）', views.includes('<span class="chev" aria-hidden="true">'))
+  check('整行可点：标题链接的 `::after` 铺满行（不嵌套交互元素）', /\.post-card \.cell-title a::after\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0/s.test(css))
+  check('标签仍可点：`.post-card .tags a` 抬到覆盖层之上', /\.post-card \.tags a\s*\{[^}]*position:\s*relative[^}]*z-index:\s*1/s.test(css))
+  check('标签条是 `.chip-row`（旧的 `.tag-bar` 已退役）', views.includes('class="chip-row"') && !views.includes('tag-bar') && !/\.tag-bar/.test(css))
+  check('大标题落在三类页上（首页 hero / 分享 / 关于），且 CSS 是 34/700', (views.match(/class="large-title"/g) ?? []).length >= 3 && /h1\.large-title\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css) && /h1\.large-title\s*\{[^}]*font-weight:\s*700/s.test(css))
+  check('空态是实色块（没有虚线占位框）', /\.empty\s*\{[^}]*background:\s*var\(--fill\)/s.test(css) && !/\.empty\s*\{[^}]*dashed/s.test(css))
+  check('状态摘要行也用同一套 `.cell`（旧的 `.mini-*` 已退役）', views.includes('<div class="inset-list">${rows}</div>') && !views.includes('mini-') && !/\.mini-[a-z]/.test(css))
+}
+
+// ════════════════════════════════════════════════════
 section('窄屏断点与打印其余')
 // ════════════════════════════════════════════════════
 {
