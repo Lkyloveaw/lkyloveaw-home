@@ -4,6 +4,11 @@
 
 票：<https://github.com/Lkyloveaw/lkyloveaw-home/issues/59>
 
+> ⚠ **已被修订**（2026-10-20，[#68](https://github.com/Lkyloveaw/lkyloveaw-home/issues/68) / [#71](https://github.com/Lkyloveaw/lkyloveaw-home/issues/71)）：
+> 侧栏从「只在管理台内部」升为**全站 rail** —— 桌面 `.site-rail` 含「站点」组与管理组，管理组内保留本文 §2 的
+> 「运维 / 内容」分组；≤720px 改由底部 `.tab-bar` + 页首 `.admin-tabs` 承担；403 页**有**全站 rail、但**没有**管理组。
+> 本文的模块分组、六模块顺序、`adminSection` 判据、`aria-current` 唯一当前项、打印隐藏仍然有效。
+
 它把 map 目的地第 ① 条（「管理台从**两次点击**变成**一条左侧导航点即达**」）落到**看得见的那一层**：
 侧栏挂在 DOM 的哪一层、当前项怎么判定、窄屏怎么折、403 页长不长它、要改哪些旧文档。
 **不管**配色取值（[主题三选一](https://github.com/Lkyloveaw/lkyloveaw-home/issues/60)），

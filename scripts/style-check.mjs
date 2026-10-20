@@ -18,6 +18,7 @@ const root = path.resolve(import.meta.dirname, '..')
 const css = fs.readFileSync(path.join(root, 'public/style.css'), 'utf8')
 const views = fs.readFileSync(path.join(root, 'src/views.ts'), 'utf8')
 const statusJs = fs.readFileSync(path.join(root, 'public/status.js'), 'utf8')
+const iconsTs = fs.readFileSync(path.join(root, 'src/icons.ts'), 'utf8')
 
 let passed = 0
 let failed = 0
@@ -96,7 +97,7 @@ const COLOR_TOKENS = new Set([
 ])
 const NON_COLOR = new Set([
   // 形状 / 栏宽 / 字体
-  'radius', 'wrap', 'wrap-admin', 'side-w', 'font', 'mono',
+  'radius', 'radius-sm', 'radius-lg', 'tap', 'wrap', 'wrap-admin', 'rail-w', 'font', 'mono',
   // iOS 字阶（10 字号 + 4 行高）
   'fs-large', 'fs-title1', 'fs-title2', 'fs-title3', 'fs-headline',
   'fs-body', 'fs-callout', 'fs-subhead', 'fs-footnote', 'fs-caption',
@@ -243,6 +244,8 @@ section('服务端渲染的类名，CSS 里都有定义')
   for (const s of ['ok', 'warn', 'bad']) {
     check(`样式类 \`${s}\` 在 CSS 里有对应规则（徽标/点）`, new RegExp(`\\.(badge|dot)\\.${s}\\b`).test(css))
   }
+  check('图标全部来自 `icon()`（没有图标字体 / 外部图标库）', views.includes("from './icons.js'") && views.includes('icon(') && !views.includes('@font-face'))
+  check('`icons.ts` 里没有颜色字面量（只有 currentColor）', !/#[0-9a-f]{3,8}\b/i.test(iconsTs))
 }
 
 // ════════════════════════════════════════════════════
@@ -271,7 +274,7 @@ section('排版：一套 iOS 字阶（平面与两套字体已退役，#68）')
 
   check('正文栏宽 68ch（`.prose` 用 `var(--measure-prose)`）', /\.prose\s*\{[^}]*max-width:\s*var\(--measure-prose\)/s.test(css))
   check('窄栏在画布里居中（`.prose` 与 `.post` 都有 `margin-inline: auto`）', /\.prose\s*\{[^}]*margin-inline:\s*auto/s.test(css) && /\.post\s*\{[^}]*margin-inline:\s*auto/s.test(css))
-  check('页脚贴底：body 是撑满一屏的 flex 列，`main` 吃掉剩余高度', /body:not\(\.login-body\)\s*\{[^}]*display:\s*flex[^}]*min-height:\s*100vh/s.test(css) && /body:not\(\.login-body\)\s*>\s*main\s*\{[^}]*flex:\s*1 0 auto/s.test(css))
+  check('页脚贴底：body 是撑满一屏的 flex 列，`.app-shell` 吃掉剩余高度', /body:not\(\.login-body\)\s*\{[^}]*display:\s*flex[^}]*min-height:\s*100vh/s.test(css) && /body:not\(\.login-body\)\s*>\s*\.app-shell\s*\{[^}]*flex:\s*1 0 auto/s.test(css))
   check('登录页被排除在贴底布局之外（它自己是 100vh 居中块）', /body:not\(\.login-body\)/.test(css))
   check('打印时不留「撑满一屏」', /@media print[\s\S]*?body\s*\{[^}]*display:\s*block/s.test(css))
   check(
@@ -318,25 +321,24 @@ section('打印：17 个灰阶 token + 格带图案（#68 §11）')
 }
 
 // ════════════════════════════════════════════════════
-section('管理台侧栏：契约仍在地面上（#59 定稿 · #62 实现；批次② 才会换）')
+section('外壳与导航：全站 rail / 手机 tab bar / 管理模块条（#68 §5）')
 // ════════════════════════════════════════════════════
 {
-  check(
-    '`layout()` 里有那个分支：`adminSection` 存在时 main 挂上 `admin-shell`',
-    /opts\.adminSection[\s\S]{0,160}class="wrap admin-shell"/.test(views),
-  )
-  check('侧栏是 `<nav class="admin-side">` 且带可分辨的地标名', /<nav class="admin-side" aria-label="管理台导航">/.test(views))
-  check(
-    '六个模块各传了自己的 `adminSection`',
-    ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((s) => new RegExp(`adminSection: '${s}'`).test(views)),
-  )
-  check('当前项只在 `key === section` 时带 `aria-current="page"`', /key === section \? ' aria-current="page"' : ''/.test(views))
   const narrow = (css.match(/@media \(max-width: 720px\)\s*\{([\s\S]*?)\n\}/) ?? [, ''])[1]
-  check('720px 断点里侧栏折成横排并允许换行', /\.admin-side\s*\{[^}]*flex-wrap:\s*wrap/s.test(narrow))
-  check('720px 断点里组标签各起一行', /\.admin-side-group-label\s*\{[^}]*flex-basis:\s*100%/s.test(narrow))
-  check('打印时侧栏整块隐藏、外壳退回单列', /\.admin-side[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.admin-shell\s*\{[^}]*display:\s*block/.test(printBody))
-  check('栏宽两个非颜色 token 都在（`:root` 里，且是 px 值）', /--wrap-admin\s*:\s*\d+px/.test(css) && /--side-w\s*:\s*\d+px/.test(css))
-  check('内容列用的是 `minmax(0, 1fr)`（宽表不会把网格撑出容器）', /grid-template-columns:\s*var\(--side-w\)\s+minmax\(0,\s*1fr\)/.test(css))
+  check('`layout()` 输出 `.app-shell`，管理台页加 `--admin` 修饰', views.includes('class="${shellClass}"') && views.includes("const shellClass = opts.adminSection ? 'app-shell app-shell--admin' : 'app-shell'"))
+  check('桌面 rail 是唯一的 `<nav class="site-rail" aria-label="站内导航">`', views.includes('<nav class="site-rail" aria-label="站内导航">'))
+  check('导航只有一张数据源：`NAV_ITEMS` 4 项（首页 / 分享 / 系统可用性 / 关于）', views.includes('const NAV_ITEMS: ReadonlyArray<NavItem> = [') && ['首页', '分享', '系统可用性', '关于'].every((label) => views.includes(`label: '${label}'`)))
+  check('管理组只在 `currentIsAdmin()` 时渲染，六模块顺序写死（#59 §2）', views.includes('currentIsAdmin()') && views.includes('? `<div class="rail-group"><span class="rail-group-label">管理</span>') && ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`['${k}', '/admin`)))
+  check('管理组里有「运维」「内容」两个 sub-label', views.includes('<span class="rail-sub-label">') && views.includes("'运维',") && views.includes("['内容', [['articles'"))
+  check('当前项判据唯一：`key === active`（站点）/ `key === section`（模块）', views.includes("item.key === active ? ' aria-current=\"page\"' : ''") && views.includes("key === section ? ' aria-current=\"page\"' : ''"))
+  check('tab bar 与 rail 同源（同一张 `NAV_ITEMS` + `ADMIN_ITEM`），只读 4 / 管理员 5', views.includes('const items = currentIsAdmin() ? [...NAV_ITEMS, ADMIN_ITEM] : NAV_ITEMS'))
+  check('`.admin-tabs` 只在 `adminSection` 存在时渲染', views.includes("${opts.adminSection ? adminTabs(opts.adminSection) : ''}"))
+  check('页头**不透明**：`background: var(--bg)`，全站无 `backdrop-filter`', /\.site-header\s*\{[^}]*background:\s*var\(--bg\)/s.test(css) && !/backdrop-filter:/.test(css))
+  check('外壳两列：`var(--rail-w) minmax(0, 1fr)`', /grid-template-columns:\s*var\(--rail-w\)\s+minmax\(0,\s*1fr\)/.test(css))
+  check('栏宽 token：`--wrap-admin` 与 `--rail-w` 都在且是 px', /--wrap-admin\s*:\s*\d+px/.test(css) && /--rail-w\s*:\s*\d+px/.test(css))
+  check('720px 断点：rail 隐藏、tab bar 出现、外壳单列', /\.site-rail\s*\{\s*display:\s*none/.test(narrow) && /\.tab-bar\s*\{\s*display:\s*flex/.test(narrow) && /\.app-shell\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(narrow))
+  check('720px 断点：管理台模块条出现（横向可滚）', /\.admin-tabs\s*\{[^}]*overflow-x:\s*auto/s.test(narrow))
+  check('打印时导航整块隐藏、外壳退回单列', printBody.includes('.site-rail') && printBody.includes('.tab-bar') && printBody.includes('.admin-tabs') && /display:\s*none/.test(printBody) && /\.app-shell\s*\{\s*display:\s*block/.test(printBody))
 }
 
 // ════════════════════════════════════════════════════
@@ -351,7 +353,7 @@ section('窄屏断点与打印其余')
   check('560px 断点存在，且表单行改成竖排', tight.length > 0 && /\.form-row\s*\{\s*flex-direction:\s*column/.test(tight))
   check('存在 `@media print`', printBody.length > 0)
   check('打印时把配色就地改成纸面（黑字白底）', /--bg:\s*#ffffff/.test(printBody) && /--label:\s*#000000/.test(printBody))
-  check('打印时藏掉只在屏幕上成立的东西（页头 / 导航 / 登出 / 按钮 / 提示语 / picker）', /\.site-header[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.site-nav/.test(printBody) && /\bbutton\b[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.theme-picker/.test(printBody))
+  check('打印时藏掉只在屏幕上成立的东西（页头 / rail / tab bar / 模块条 / 登出 / 按钮 / picker）', /\.site-header[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.site-rail/.test(printBody) && /\.tab-bar/.test(printBody) && /\.admin-tabs/.test(printBody) && /\bbutton\b[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.theme-picker/.test(printBody))
   check('打印时卡片不许被切成两页（`break-inside: avoid`）', /break-inside:\s*avoid/.test(printBody))
   check('打印时正文里的站内链接把地址写出来', /\.prose a\[href\^="\/"\]::after/.test(printBody))
 }

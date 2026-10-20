@@ -39,10 +39,13 @@
 
   /* 形状 / 栏宽 / 字体 */
   --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 16px;
+  --tap: 44px;
   --wrap: 900px;
   /* 1140 = 20（内边距）+ 220（侧栏）+ 20（栏距）+ 860（正文列）+ 20（内边距） */
   --wrap-admin: 1140px;
-  --side-w: 220px;
+  --rail-w: 248px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
     "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
@@ -91,7 +94,7 @@ body:not(.login-body) {
   flex-direction: column;
   min-height: 100vh;
 }
-body:not(.login-body) > main {
+body:not(.login-body) > .app-shell {
   flex: 1 0 auto;
 }
 
@@ -126,15 +129,16 @@ pre code { background: none; border: 0; padding: 0; }
 
 /* ---------- 页头 / 页脚（站内框架） ---------- */
 
+/* 页头**不透明**（#65 §4：backdrop-filter 做不出 vibrancy，半透明页头没法静态证对比度）。 */
 .site-header {
+  background: var(--bg);
   border-bottom: 1px solid var(--separator);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px);
-  position: sticky; top: 0; z-index: 10;
+  position: sticky; top: 0; z-index: 20;
 }
 .header-inner {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; min-height: 58px; flex-wrap: wrap;
+  gap: 12px; min-height: 56px; flex-wrap: wrap;
+  padding-inline: 20px;
 }
 .brand {
   font-family: var(--font); font-weight: 600; color: var(--label);
@@ -142,16 +146,117 @@ pre code { background: none; border: 0; padding: 0; }
 }
 .brand:hover { text-decoration: none; color: var(--accent); }
 
-/* 导航：**不再是一排药丸**，而是命令行那种 `/` 分隔的条目（分隔符由 `nav()` 输出，
-   不是一个可点的伪元素 —— 点分隔符不该跳转到相邻页面）。 */
-.site-nav {
-  display: flex; align-items: center; flex-wrap: wrap;
-  font-size: var(--fs-subhead);
+/* ---------- 外壳：左 rail + 右正文（桌面） ----------
+   内容列必须 `minmax(0, 1fr)`：宽表 / 长 code 的 min-content 会把 `1fr` 撑破容器。 */
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  align-items: start;
 }
-.site-nav a { color: var(--label-2); padding: 5px 0; }
-.site-nav a:hover { color: var(--label); text-decoration: none; }
-.site-nav a[aria-current="page"] { color: var(--accent); }
-.nav-sep { color: var(--label-3); padding: 0 9px; user-select: none; }
+.app-main { padding-block: 24px 48px; }
+.app-shell--admin .app-main { max-width: var(--wrap-admin); }
+
+/* 403 / 404：同一套外壳里的居中空态（#68 §5.5）。文案不动，只调层级与留白。 */
+.page-error .app-main { display: flex; flex-direction: column; justify-content: center; min-height: 55vh; }
+.page-error h1 { margin: 0 0 10px; font-size: var(--fs-large); line-height: var(--lh-title); letter-spacing: -.02em; }
+.page-error p { margin: 0 0 16px; color: var(--label-2); font-size: var(--fs-body); }
+
+/* 全站唯一导航（桌面）：站点组 + 管理组（仅管理员，组内保留 #59 的运维 / 内容两段）。 */
+.site-rail {
+  position: sticky; top: 56px;
+  display: flex; flex-direction: column; gap: 20px;
+  padding: 16px 12px;
+  border-inline-end: 1px solid var(--separator);
+  min-height: calc(100vh - 56px);
+}
+.rail-group { display: flex; flex-direction: column; gap: 2px; }
+.rail-group-label {
+  padding: 0 10px 6px; color: var(--label-2);
+  font-size: var(--fs-caption); font-weight: 600; letter-spacing: .08em;
+}
+.rail-sub-label { padding: 6px 10px 2px; color: var(--label-2); font-size: var(--fs-caption); }
+.rail-link {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 38px; padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--label-2); font-size: var(--fs-subhead); font-weight: 500;
+}
+.rail-link:hover { background: var(--fill); color: var(--label); text-decoration: none; }
+.rail-link[aria-current="page"] { background: var(--bg-card); color: var(--label); font-weight: 600; }
+.rail-link[aria-current="page"] .icon { color: var(--accent); }
+/* 管理模块条目没有图标：用左内边距对齐到「图标 + 间距」之后 */
+.rail-link--sub { padding-inline-start: 38px; }
+
+/* 手机导航：≤720 才出现的底部 tab bar（4 项；管理员多一项「管理」）。 */
+.tab-bar {
+  display: none;
+  position: fixed; inset-inline: 0; bottom: 0; z-index: 20;
+  background: var(--bg-card); border-block-start: 1px solid var(--separator);
+  padding: 6px 4px 8px;
+}
+.tab-item {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  flex: 1; padding: 4px 2px;
+  color: var(--label-2); font-size: var(--fs-caption); text-decoration: none;
+}
+.tab-item .icon { width: 22px; height: 22px; }
+.tab-item:hover { text-decoration: none; }
+.tab-item[aria-current="page"] { color: var(--accent); }
+
+/* 管理台模块条：只在 ≤720 出现（桌面由 rail 的管理组承担同一组条目）。 */
+.admin-tabs { display: none; }
+
+/* ---------- 组件基元（#68 §3）：列表 / 行 / 箭头 / 按钮 / 标签 ---------- */
+.icon { width: 18px; height: 18px; flex: 0 0 auto; }
+.chev { width: 16px; height: 16px; color: var(--label-3); flex: 0 0 auto; }
+
+.inset-list {
+  overflow: hidden;
+  border: 1px solid var(--separator); border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+.inset-list > * + * { border-block-start: 1px solid var(--separator); }
+.cell {
+  display: flex; align-items: center; gap: 12px;
+  min-height: var(--tap); padding: 12px 16px;
+  color: var(--label);
+}
+.cell-stack { display: flex; flex-direction: column; }
+.cell-stack > * + * { border-block-start: 1px solid var(--separator); }
+.cell-title { margin: 0; font-size: var(--fs-headline); font-weight: 600; line-height: var(--lh-title); }
+.cell-sub { color: var(--label-2); font-size: var(--fs-footnote); line-height: var(--lh-ui); }
+.cell-meta { color: var(--label-2); font-size: var(--fs-footnote); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cell-detail > summary {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; cursor: pointer; list-style: none;
+  color: var(--label-2); font-size: var(--fs-subhead);
+}
+.cell-detail > summary::-webkit-details-marker { display: none; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 36px; padding: 7px 13px;
+  border: 1px solid transparent; border-radius: var(--radius);
+  background: var(--fill); color: var(--label);
+  font-size: var(--fs-subhead); font-weight: 600; white-space: nowrap;
+}
+.btn:hover { text-decoration: none; filter: brightness(.97); }
+.btn:active { transform: scale(.98); }
+.btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.btn-secondary { background: var(--fill); color: var(--label); border-color: var(--fill); }
+.btn-plain { background: transparent; color: var(--accent); border-color: transparent; }
+
+/* 彩色标签：底必须是 --bg-card（ok / warn 在 --fill 上只有 4.27 / 4.12，不过 AA）。 */
+.tag-ok { color: var(--ok); background: var(--bg-card); border-color: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 40%, var(--separator)); }
+.tag-warn { color: var(--warn); background: var(--bg-card); border-color: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, var(--separator)); }
+
+.chip-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+
+.site-footer {
+  border-top: 1px solid var(--separator);
+  margin-top: 56px; padding: 22px 0 30px;
+  color: var(--label-2); font-size: var(--fs-footnote);
+}
 
 .site-footer {
   border-top: 1px solid var(--separator);
@@ -476,26 +581,7 @@ main { padding-top: 34px; }
 .btn-danger { border-color: var(--bad); color: var(--bad); }
 .admin-hint { color: var(--label-2); font-size: var(--fs-subhead); }
 
-/* ---------- 管理台左侧导航（#59 定稿 · #62 实现） ----------
-   栏宽算术见 `:root` 的 `--wrap-admin`。⚠ 内容列必须 `minmax(0, 1fr)`：
-   `.admin-table` 是 width:100% 的宽表，写 `1fr`（= `minmax(auto, 1fr)`）会让 min-content
-   把网格撑出容器 —— 症状是整页横滚，而 720px 断点那条「表格自己滚」的断言管不了它。 */
-.admin-shell {
-  max-width: var(--wrap-admin);
-  display: grid;
-  grid-template-columns: var(--side-w) minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-}
-/* 网格子项默认 `min-width: auto`，宽表照样能把列撑大 —— 这条是上面那句 minmax 的另一半 */
-.admin-main { min-width: 0; }
-.admin-side { display: flex; flex-direction: column; gap: 14px; }
-.admin-side-group { display: flex; flex-direction: column; gap: 2px; }
-.admin-side-group-label { color: var(--label-2); font-size: var(--fs-caption); letter-spacing: 0.08em; padding: 0 8px; }
-.admin-side a { color: var(--label-2); padding: 5px 8px; border-left: 2px solid transparent; font-size: var(--fs-subhead); }
-.admin-side a:hover { color: var(--label); text-decoration: none; }
-/* 当前项：与顶栏同一判据（`aria-current`）；配色只用已断言的那几对（fg/bg-soft + accent 当左边框） */
-.admin-side a[aria-current="page"] { color: var(--label); background: var(--fill); border-left-color: var(--accent); }
+/* 管理台的外壳与模块导航由 .app-shell / .site-rail / .admin-tabs 承担（#68 §5）。 */
 
 /* 管理台文章页（#50）：列表表格 + 正文文本框 + 草稿预览 */
 .admin-table { width: 100%; border-collapse: collapse; font-size: var(--fs-subhead); margin-bottom: 24px; }
@@ -601,17 +687,21 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   .stat-strip { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
   .admin-table { display: block; overflow-x: auto; }
   .prose { max-width: none; }
-  /* 管理台侧栏折成横向条目条（#59 §4）：不用 JS，组标签各起一行 —— 分组这条 IA 决定在窄屏也活着 */
-  .admin-shell { grid-template-columns: minmax(0, 1fr); }
-  .admin-side { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; border-bottom: 1px solid var(--separator); padding-bottom: 10px; }
-  .admin-side-group { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
-  .admin-side-group-label { flex-basis: 100%; }
+  /* 导航在窄屏换形态：rail 消失、tab bar 出现；管理台再加模块条（不用 JS） */
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .site-rail { display: none; }
+  .tab-bar { display: flex; }
+  body:not(.login-body) { padding-bottom: 64px; }
+  .admin-tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 16px; padding-bottom: 6px; scrollbar-width: thin; }
+  .admin-tabs-group { display: flex; align-items: center; gap: 4px; }
+  .admin-tabs-label { color: var(--label-2); font-size: var(--fs-caption); white-space: nowrap; }
+  .admin-tabs a { white-space: nowrap; color: var(--label-2); font-size: var(--fs-subhead); padding: 6px 10px; border-radius: 999px; background: var(--fill); }
+  .admin-tabs a[aria-current="page"] { color: var(--accent); background: var(--bg-card); }
 }
 
 @media (max-width: 560px) {
   .header-inner { min-height: 52px; }
-  .site-nav { font-size: var(--fs-footnote); }
-  .nav-sep { padding: 0 6px; }
+  .tab-item { font-size: 11px; }
   .hero h1 { font-size: var(--fs-title2); }
   .incident-list li { grid-template-columns: 1fr; gap: 2px; }
   .incident-err { text-align: left; }
@@ -648,14 +738,14 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     background: #ffffff; color: #000000;
     font-size: 11pt; line-height: 1.5;
     /* 纸上不需要「撑满一屏」：留着 flex + 100vh 会多印一页空白 */
-    display: block; min-height: 0;
+    display: block; min-height: 0; padding-bottom: 0;
   }
-  .site-header, .site-footer, .logout-form, .site-nav, .admin-side, .live-tag,
+  .site-header, .site-footer, .site-rail, .tab-bar, .admin-tabs, .logout-form, .live-tag,
   .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker { display: none !important; }
-  main { padding-top: 0; }
   .wrap { max-width: none; padding: 0; }
-  /* 侧栏藏掉之后，管理台外壳退回单列（否则打印出来的正文仍只占右边那一列） */
-  .admin-shell { display: block; max-width: none; }
+  /* 导航藏掉之后，外壳退回单列（否则打印出来的正文仍只占右边那一列） */
+  .app-shell { display: block; }
+  .app-main { max-width: none; padding: 0; }
   .prose { max-width: none; }
   /* 纸上滚不了：滚动容器必须放开，否则宽表会被裁掉右半边 */
   .prose .table-wrap { overflow: visible; }

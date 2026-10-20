@@ -75,6 +75,14 @@ const postForm = async (path, opts = {}) => {
  */
 const csrfFor = (cookie) => csrfToken(SECRET, cookie.replace(/^session=/, ''))
 
+// ── 导航断言的小工具（全站 rail / 管理组 / 当前项 / tab bar），多个块共用 ──
+const railOf = (html) => (html.match(/<nav class="site-rail"[\s\S]*?<\/nav>/) ?? [''])[0]
+const adminGroupOf = (rail) => (rail.match(/<span class="rail-group-label">管理<\/span>[\s\S]*$/) ?? [''])[0]
+const currentIn = (nav) => [...nav.matchAll(/<a[^>]*href="([^"]+)"[^>]*aria-current="page"/g)].map((m) => m[1])
+const currentOf = (html) => currentIn(adminGroupOf(railOf(html)))
+const tabOf = (html) => (html.match(/<nav class="tab-bar"[\s\S]*?<\/nav>/) ?? [''])[0]
+const tabItems = (html) => (tabOf(html).match(/class="tab-item"/g) ?? []).length
+
 // 准备一个独立的临时数据目录与目标清单
 const tmpData = path.join(ROOT, '.e2e-tmp')
 fs.rmSync(tmpData, { recursive: true, force: true })
@@ -1018,8 +1026,8 @@ try {
 
     const overview = await get('/admin', { cookie: adminCookie })
     check('管理员 GET /admin → 200', overview.status === 200, `got ${overview.status}`)
-    check('管理员顶栏含「管理」', />管理</.test(overview.body))
-    check('「管理」被标成当前页（aria-current）', /aria-current="page"[^>]*>管理</.test(overview.body))
+    check('管理员看得到导航里的「管理」组', overview.body.includes('rail-group-label">管理<'))
+    check('「概览」被标成当前页（aria-current）', /<a[^>]*href="\/admin"[^>]*aria-current="page"/.test(overview.body))
     check('概览页有四块摘要卡', (overview.body.match(/class="stat"/g) || []).length >= 4)
     check('概览页**不渲染目标列表**（不造第二份真相）', !/ledger\.internal\.example/.test(overview.body))
     // 这条断言的**形状**跟着 #63 改了：不再钉「四页 + 四个名字」。
@@ -1051,20 +1059,16 @@ try {
     check('只读 GET /admin → **403**（不是 404，也不是只读视图）', roAdmin.status === 403, `got ${roAdmin.status}`)
     check('403 页明说「需要管理员权限」', /需要管理员权限/.test(roAdmin.body))
 
-    // ── 管理台侧栏（#59 定稿 · #62 实现）：六页都有、当前项恰好一个且指向当前路径 ──
-    // 契约：`docs/admin-console-sidebar-decision.md` §2/§4。
-    // ⚠ 每一条都**先证明前提**：先断言「这一页确实有侧栏」，再断言「当前项恰好一个」——
-    //    否则后者在「整页没渲染出来」时也恒真（那是空断言，本文件反复踩过的坑）。
-    const sidebarOf = (html) => (html.match(/<nav class="admin-side"[\s\S]*?<\/nav>/) ?? [''])[0]
-    const currentIn = (nav) => [...nav.matchAll(/<a href="([^"]+)" aria-current="page">/g)].map((m) => m[1])
+    // ── 全站 rail（#68 §5）：桌面唯一导航；管理组只在管理员出现；当前项恰好一个 ──
+    // 契约：`docs/ios-component-mapping-decision.md` §5。每条先证明前提（先「有 rail」，再「当前项唯一」）。
     const ADMIN_PAGES = ['/admin', '/admin/targets', '/admin/accounts', '/admin/backups', '/admin/settings', '/admin/articles']
     for (const route of ADMIN_PAGES) {
       const page = await get(route, { cookie: adminCookie })
-      const nav = sidebarOf(page.body)
-      const current = currentIn(nav)
+      const rail = railOf(page.body)
+      const current = currentOf(page.body)
       check(
-        `${route}：管理台页**有侧栏**，且恰好一项是当前项`,
-        page.status === 200 && nav.length > 0 && current.length === 1,
+        `${route}：有 rail，管理组里恰好一项是当前项`,
+        page.status === 200 && rail.length > 0 && current.length === 1,
         `status=${page.status} 当前项=${JSON.stringify(current)}`,
       )
       check(
@@ -1074,42 +1078,65 @@ try {
       )
     }
 
-    const sideNav = sidebarOf((await get('/admin', { cookie: adminCookie })).body)
+    const adminRail = railOf((await get('/admin', { cookie: adminCookie })).body)
     check(
-      '侧栏：六个模块名 + 两个组标签都在',
-      ['概览', '目标', '账号', '备份', '设置', '文章'].every((t) => sideNav.includes(`>${t}<`)) &&
-        sideNav.includes('>运维<') &&
-        sideNav.includes('>内容<'),
+      'rail 管理组：六个模块名 +「运维」「内容」两个组标签',
+      ['概览', '目标', '账号', '备份', '设置', '文章'].every((t) => adminRail.includes(`>${t}</span>`)) &&
+        adminRail.includes('>运维<') &&
+        adminRail.includes('>内容<'),
     )
-    check('侧栏条目**不带计数**（#58 Notes 10：侧栏里一个数字都没有）', !/\d/.test(sideNav))
+    check(
+      'rail 条目**不带计数**（#58 Notes 10：把图标 SVG 去掉后一个数字都没有）',
+      !/\d/.test(adminRail.replace(/<svg[\s\S]*?<\/svg>/g, '')),
+    )
 
     const roTargets = await get('/admin/targets', { cookie: roCookie })
     check(
-      '只读 GET /admin/targets → 403，且**没有**侧栏（403 不长侧栏：#59 §5）',
-      roTargets.status === 403 && !roTargets.body.includes('class="admin-side"'),
+      '只读 GET /admin/targets → 403；页面上有 rail，但**没有**管理组（403 不是管理台的一部分）',
+      roTargets.status === 403 && roTargets.body.includes('class="site-rail"') && !roTargets.body.includes('rail-group-label">管理<'),
       `got ${roTargets.status}`,
     )
 
     for (const p of ['/', '/status', '/about', '/posts']) {
       const page = await get(p, { cookie: adminCookie })
+      const rail = railOf(page.body)
       check(
-        `${p}**没有**侧栏（侧栏只在管理台内部）`,
-        page.status === 200 && !page.body.includes('class="admin-side"'),
-        `got ${page.status}`,
+        `${p}：公开页也有 rail（站点组 4 + 管理组 6 = 10 条）`,
+        page.status === 200 && (rail.match(/class="rail-link/g) ?? []).length === 10,
+        `links=${(rail.match(/class="rail-link/g) ?? []).length}`,
       )
     }
 
+    const roHomeForRail = await get('/', { cookie: roCookie })
     check(
-      '顶栏「管理」**仍**带 aria-current（侧栏没有把它抢走；两个 current 是 #59 §10 的有意为之）',
-      /aria-current="page"[^>]*>管理</.test((await get('/admin', { cookie: adminCookie })).body),
+      '只读用户：rail 只有站点组 4 项（没有管理组）',
+      (railOf(roHomeForRail.body).match(/class="rail-link/g) ?? []).length === 4 && !roHomeForRail.body.includes('rail-group-label">管理<'),
     )
+    check(
+      '公开页的当前项恰好一个且指向本页（`/status`）',
+      currentIn(railOf((await get('/status', { cookie: adminCookie })).body)).join(',') === '/status',
+    )
+
+    // 手机：同源的 tab bar（管理员 5 项 / 只读 4 项）+ 管理台模块条
+    check(
+      'tab bar 与 rail 同源：管理员 5 项、只读 4 项',
+      tabItems((await get('/', { cookie: adminCookie })).body) === 5 && tabItems(roHomeForRail.body) === 4,
+    )
+    check(
+      '管理台页有模块条 `.admin-tabs`，公开页没有',
+      /class="admin-tabs"/.test((await get('/admin/targets', { cookie: adminCookie })).body) &&
+        !/class="admin-tabs"/.test((await get('/', { cookie: adminCookie })).body),
+    )
+
+    const styleCss = (await get('/style.css')).body
+    check('页头不透明（`background: var(--bg)`）、全站无 `backdrop-filter`', styleCss.includes('background: var(--bg)') && !styleCss.includes('backdrop-filter:'))
 
     // 文章页的**编辑态**同属「文章」这一个模块：拿列表里第一条真实 slug 进去看
     const listHtml = (await get('/admin/articles', { cookie: adminCookie })).body
     const slugMatch = listHtml.match(/\/admin\/articles\?edit=([^"&]+)/)
     const editPath = slugMatch ? `/admin/articles?edit=${slugMatch[1]}` : '/admin/articles?edit='
     const editPage = await get(editPath, { cookie: adminCookie })
-    const editCurrent = currentIn(sidebarOf(editPage.body))
+    const editCurrent = currentOf(editPage.body)
     check(
       '文章页（含编辑态）高亮的是「文章」，不是「概览」',
       editPage.status === 200 && editCurrent.length === 1 && editCurrent[0] === '/admin/articles',
@@ -2345,22 +2372,22 @@ try {
     check('五个页面的 `<body>` 都不再带平面类（#68：平面已退役）', !bodyClasses.includes('plane-'), bodyClasses)
     check('登录页的 `<body>` 只有 `login-body`（不再有 plane-data）', bodyClassOf(login.body) === 'login-body', bodyClassOf(login.body))
 
-    // 站内框架（nav）：`/` 分隔的条目，分隔符是服务端的 span（不是伪元素）
-    // 分隔符数 = 条目数 − 1（动态算，不写死 3）：只读 4 项、管理员 5 项 —— 两种情况都验。
-    const navItems = (html) => ((html.match(/<nav class="site-nav">([\s\S]*?)<\/nav>/) ?? [, ''])[1].match(/<a /g) ?? []).length
-    const navSeps = (html) => (html.match(/class="nav-sep"/g) ?? []).length
     const roP = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
     const roHome = await get('/', { cookie: roP.setCookie.split(';')[0] })
+    // 站内框架：一套数据源，两处呈现（桌面 rail / 手机 tab bar）；当前项判据只有 aria-current
     check(
-      '导航用 `/` 分隔，且**分隔符数 = 条目数 − 1**（管理员：5 项 4 个；只读：4 项 3 个）',
-      navItems(home.body) === 5 && navSeps(home.body) === 4 && navItems(roHome.body) === 4 && navSeps(roHome.body) === 3,
-      `管理员 ${navItems(home.body)}项/${navSeps(home.body)}分隔 · 只读 ${navItems(roHome.body)}项/${navSeps(roHome.body)}分隔`,
+      '所有页面都带一条 rail 与一个 tab bar（同一份数据源的两处呈现）',
+      [home, statusPage, posts, about, adminPage].every((r) => r.body.includes('class="site-rail"') && r.body.includes('class="tab-bar"')),
     )
-    check('导航分隔符对读屏隐藏（`aria-hidden`）', /class="nav-sep" aria-hidden="true"/.test(home.body))
-    check('当前项仍带 `aria-current="page"`（结构没被改写坏）', /aria-current="page"/.test(home.body) && /aria-current="page"/.test(adminPage.body))
-    check('管理员在管理台页面看得到「管理」项', /aria-current="page"[^>]*>管理</.test(adminPage.body))
-
-    // 样式表真的被引用、且两套平面的规则在里面（不是只在源码里）
+    check(
+      '当前项在每个页面的 rail 里恰好一个（`aria-current="page"`）',
+      [home, statusPage, posts, about, adminPage].every((r) => currentIn(railOf(r.body)).length === 1),
+    )
+    check(
+      '管理员在管理台页面看得到 tab bar 的「管理」项（且它是唯一的当前项）',
+      tabOf(adminPage.body).includes('<span>管理</span>') && (tabOf(adminPage.body).match(/aria-current="page"/g) ?? []).length === 1,
+    )
+    // 样式表真的被引用，且字阶 / 断点 / 打印规则在里面（不是只在源码里）
     const css = await get('/style.css')
     check('`/style.css` 可取（200 + text/css）', css.status === 200 && css.type.includes('text/css'), `${css.status} ${css.type}`)
     check('样式表里没有平面选择器（#68）', !css.body.includes('plane-'))

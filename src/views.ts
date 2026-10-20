@@ -9,6 +9,7 @@ import type { TargetStats, TimelinePoint, OverviewPoint, ProbeResult, LatencyPoi
 import { latencyChart, uptimeChart } from './charts.js'
 import { currentCsrfToken, currentIsAdmin } from './csrf.js'
 import { MIN_PASSWORD_LENGTH } from './users.js'
+import { icon, type IconName } from './icons.js'
 
 /**
  * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
@@ -106,35 +107,34 @@ function themeScript(): string {
 }
 
 /**
- * 站内导航（最终呈现）：**`/` 分隔的条目**，不是一排药丸。
+ * 站内导航的**唯一数据源**（#68 §5）：桌面 rail 与手机 tab bar 都从这里渲染，
+ * 所以「哪几项、什么顺序、当前项怎么标」只有一份。
  *
- * 分隔符是**服务端输出的 `<span class="nav-sep" aria-hidden="true">`**，不是 CSS 伪元素 ——
- * 伪元素挂在 `<a>` 的盒子里，点分隔符会跳到相邻页面，那是个不该有的点击目标。
  * 「管理」项只对管理员渲染（`docs/admin-console-ia-decision.md` §2）：只读用户看不到入口，
  * 而不是看到一个点了就 403 的项 —— 那等于每次点都吃一次错。
  * 角色从请求上下文读（渲染层不该被迫多接一个参数），见 `csrf.ts` 的 `currentIsAdmin()`。
  */
-function nav(active: LayoutOptions['active']): string {
-  const items: Array<[LayoutOptions['active'], string, string]> = [
-    ['home', '/', '首页'],
-    ['posts', '/posts', '分享'],
-    ['status', '/status', '系统可用性'],
-    ['about', '/about', '关于'],
-  ]
-  if (currentIsAdmin()) items.push(['admin', '/admin', '管理'])
-  return items
-    .map(([key, href, label], i) => {
-      const sep = i === 0 ? '' : '<span class="nav-sep" aria-hidden="true">/</span>'
-      return `${sep}<a href="${href}"${key === active ? ' aria-current="page"' : ''}>${label}</a>`
-    })
-    .join('')
+interface NavItem {
+  key: NonNullable<LayoutOptions['active']>
+  href: string
+  label: string
+  icon: IconName
 }
 
+const NAV_ITEMS: ReadonlyArray<NavItem> = [
+  { key: 'home', href: '/', label: '首页', icon: 'home' },
+  { key: 'posts', href: '/posts', label: '分享', icon: 'doc' },
+  { key: 'status', href: '/status', label: '系统可用性', icon: 'pulse' },
+  { key: 'about', href: '/about', label: '关于', icon: 'info' },
+]
+const ADMIN_ITEM: NavItem = { key: 'admin', href: '/admin', label: '管理', icon: 'sliders' }
+
 /**
- * 侧栏的两组（`docs/admin-console-sidebar-decision.md` §2）。分组与顺序写死在这里：
- * 它是**信息架构**，不是数据 —— 「运维 5 项 / 内容 1 项」是 #59 定下的决定，不是运行时算出来的。
+ * 管理台的模块分组（`docs/admin-console-sidebar-decision.md` §2）：分组与顺序写死在这里。
+ * 它是**信息架构**，不是数据 —— 「运维 5 项 / 内容 1 项」是 #59 定下的决定；
+ * 条目**不带计数 / 徽标**（#58 Notes 10）：计数会造出第二份真相。
  */
-const SIDEBAR_GROUPS: ReadonlyArray<[string, ReadonlyArray<[AdminSection, string, string]>]> = [
+const ADMIN_GROUPS: ReadonlyArray<[string, ReadonlyArray<[AdminSection, string, string]>]> = [
   [
     '运维',
     [
@@ -148,20 +148,46 @@ const SIDEBAR_GROUPS: ReadonlyArray<[string, ReadonlyArray<[AdminSection, string
   ['内容', [['articles', '/admin/articles', '文章']]],
 ]
 
-/**
- * 管理台的左侧导航。
- *
- * **条目不带计数 / 徽标**（map #58 Notes 10）：只有标签 + href + 当前项标记 ——
- * 计数会造出第二份真相，而概览页已经有那一份。
- * 当前项用 `aria-current="page"`，与顶栏同一判据：不引入第二套「哪一项是当前项」的表示法。
- */
-function adminSidebar(section: AdminSection): string {
-  return `<nav class="admin-side" aria-label="管理台导航">${SIDEBAR_GROUPS.map(
+/** rail 的一行。管理模块没有图标（`sub`），用左内边距对齐到图标之后。 */
+function railLink(href: string, label: string, iconName: IconName | null, current: boolean, sub = false): string {
+  return `<a class="rail-link${sub ? ' rail-link--sub' : ''}" href="${href}"${
+    current ? ' aria-current="page"' : ''
+  }>${iconName ? icon(iconName) : ''}<span>${escapeHtml(label)}</span></a>`
+}
+
+/** 桌面：一条 rail = 站点组 +（管理员才有）管理组。 */
+function rail(active: LayoutOptions['active'], section?: AdminSection): string {
+  const site = NAV_ITEMS.map((item) => railLink(item.href, item.label, item.icon, item.key === active)).join('')
+  const admin = currentIsAdmin()
+    ? `<div class="rail-group"><span class="rail-group-label">管理</span>${ADMIN_GROUPS.map(
+        ([label, items]) =>
+          `<span class="rail-sub-label">${label}</span>${items
+            .map(([key, href, text]) => railLink(href, text, null, key === section, true))
+            .join('')}`,
+      ).join('')}</div>`
+    : ''
+  return site + admin
+}
+
+/** 手机：底部 tab bar（只读 4 项 / 管理员 5 项）——与 rail 同一张表。 */
+function tabBar(active: LayoutOptions['active']): string {
+  const items = currentIsAdmin() ? [...NAV_ITEMS, ADMIN_ITEM] : NAV_ITEMS
+  return items
+    .map(
+      (item) =>
+        `<a class="tab-item" href="${item.href}"${item.key === active ? ' aria-current="page"' : ''}>${icon(
+          item.icon,
+        )}<span>${item.label}</span></a>`,
+    )
+    .join('')
+}
+
+/** 手机：管理台的模块条（桌面由 rail 的管理组承担同一组条目）。 */
+function adminTabs(section: AdminSection): string {
+  return `<nav class="admin-tabs" aria-label="管理台模块">${ADMIN_GROUPS.map(
     ([label, items]) =>
-      `<div class="admin-side-group"><span class="admin-side-group-label">${label}</span>${items
-        .map(
-          ([key, href, text]) => `<a href="${href}"${key === section ? ' aria-current="page"' : ''}>${text}</a>`,
-        )
+      `<div class="admin-tabs-group"><span class="admin-tabs-label">${label}</span>${items
+        .map(([key, href, text]) => `<a href="${href}"${key === section ? ' aria-current="page"' : ''}>${text}</a>`)
         .join('')}</div>`,
   ).join('')}</nav>`
 }
@@ -169,11 +195,7 @@ function adminSidebar(section: AdminSection): string {
 export function layout(opts: LayoutOptions, site: { title: string; description: string }): string {
   // 页面自带的 bodyClass（403/404 用 `page-error`；其余页面没有额外类）。
   const bodyClass = opts.bodyClass ?? ''
-  // 管理台：正文列**之前**长出侧栏（`docs/admin-console-sidebar-decision.md` §2）。
-  // `adminSection` 没传时这里与改动前**一字不差** —— 首页 / 分享 / 面板 / 403 / 登录都不受影响。
-  const main = opts.adminSection
-    ? `<main class="wrap admin-shell">${adminSidebar(opts.adminSection)}<div class="admin-main">${opts.body}</div></main>`
-    : `<main class="wrap">${opts.body}</main>`
+  const shellClass = opts.adminSection ? 'app-shell app-shell--admin' : 'app-shell'
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -189,13 +211,16 @@ ${themeBoot()}
 </head>
 <body class="${escapeHtml(bodyClass)}">
 <header class="site-header">
-  <div class="wrap header-inner">
+  <div class="header-inner">
     <a class="brand" href="/">${escapeHtml(site.title)}</a>
-    <nav class="site-nav">${nav(opts.active)}</nav>
     <div class="header-actions">${themePicker()}<form class="logout-form" method="post" action="/logout">${csrfField()}<button type="submit">登出</button></form></div>
   </div>
 </header>
-${main}
+<div class="${shellClass}">
+  <nav class="site-rail" aria-label="站内导航">${rail(opts.active, opts.adminSection)}</nav>
+  <main class="wrap app-main">${opts.adminSection ? adminTabs(opts.adminSection) : ''}${opts.body}</main>
+</div>
+<nav class="tab-bar" aria-label="站内导航（手机）">${tabBar(opts.active)}</nav>
 <footer class="site-footer">
   <div class="wrap">
     <span>${escapeHtml(site.description)}</span>
@@ -245,7 +270,7 @@ export function forbiddenPage(
 <p><a href="/">回首页</a></p>`,
     },
   }[kind]
-  return layout({ title: page.title, description: site.description, body: page.body }, site)
+  return layout({ title: page.title, description: site.description, body: page.body, bodyClass: 'page-error' }, site)
 }
 
 /**
@@ -1227,7 +1252,7 @@ ${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
 
 export function notFoundPage(site: { title: string; description: string }): string {
   const body = `<section class="section"><h1>404</h1><p class="empty">这个页面不存在。</p><p class="back"><a href="/">← 回首页</a></p></section>`
-  return layout({ title: '404', description: site.description, active: 'home', body }, site)
+  return layout({ title: '404', description: site.description, body, bodyClass: 'page-error' }, site)
 }
 
 /** 管理台文章列表里的一行。 */
