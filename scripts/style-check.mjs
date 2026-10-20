@@ -251,6 +251,12 @@ section('两套平面：数据面终端化 / 正文面纸感化')
   check('CSS 有 `body.plane-prose` 且字体走 `var(--font-prose)`', /body\.plane-prose\s*\{[^}]*font-family:\s*var\(--font-prose\)/s.test(css))
   check('两份排版 token 都在 `:root` 里定义过（字体 / 字号 / 行高 / 窄栏）', ['font-data', 'font-prose', 'fs-data', 'lh-data', 'fs-prose', 'lh-prose', 'measure-prose'].every((k) => new RegExp(`--${k}\\s*:`).test(css)))
   check('正文面收窄栏宽（`.prose` 用 `var(--measure-prose)`）', /\.prose\s*\{[^}]*max-width:\s*var\(--measure-prose\)/s.test(css))
+  // TipTap 的单元格里包着一层 <p>，`.prose p` 的下边距会**加到每一行上**（文字贴格子沿、表凭空变高）。
+  // 两侧都要清：读面 `.prose` 与编辑面 `.ProseMirror`（2026-10-20 真机上量出来的）。
+  check(
+    '单元格里的段落不带下边距（表格行不被撑高，读面 + 编辑面）',
+    /\.prose th p,\s*\.prose td p,[\s\S]{0,160}\.ProseMirror th p,\s*\.article-editor \.ProseMirror td p\s*\{\s*margin:\s*0/.test(css),
+  )
 
   check('views.ts 里数据面 = 面板 + 管理台（`status` / `admin` → data）', /active === 'status' \|\| active === 'admin' \? 'data' : 'prose'/.test(views))
   check('`layout()` 把平面写进 `<body class="plane-…">`', /plane-\$\{planeOf\(opts\.active\)\}/.test(views))

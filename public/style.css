@@ -204,6 +204,13 @@ main { padding-top: 34px; }
 .prose table { width: 100%; border-collapse: collapse; margin: 0 0 17px; font-size: 0.92rem; }
 .prose th, .prose td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; }
 .prose th { background: var(--bg-soft); font-weight: 600; }
+/* 单元格里的段落**不带下边距**（读面与编辑面两侧都要管）。
+   TipTap 的表格每个单元格都包一层 `<p>`，而 `.prose p { margin: 0 0 17px }`
+   （编辑面是 `0 0 0.6em`）会把这层边距**加到每一行上**：文字贴在格子上沿、下面空一条，
+   整张表凭空高出「行数 × 17px」。2026-10-20 真机上量到：5 行的空表 = 171px，文字不居中。
+   选择器带 `th`/`td` 后特异性高于 `.prose p` / `.ProseMirror p`，不依赖书写顺序。 */
+.prose th p, .prose td p,
+.article-editor .ProseMirror th p, .article-editor .ProseMirror td p { margin: 0; }
 .prose hr { border: 0; border-top: 1px solid var(--border); margin: 30px 0; }
 
 .post-card { margin-bottom: 14px; }
