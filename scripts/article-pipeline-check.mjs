@@ -196,6 +196,9 @@ const rowspanHtml = docToHtml(
   ]),
 )
 check('合并单元格：rowspan 出现', rowspanHtml.includes('rowspan="2"'), rowspanHtml)
+// 选项 C（2026-10-20 用户定）：表格外面套一层横向滚动容器，否则 68ch 栏里的宽表无处可滚。
+check('表格外面套了 `.table-wrap`（横向滚动容器）', /<div class="table-wrap">\s*<table>/.test(mergedHtml), mergedHtml.slice(0, 140))
+check('滚动容器包住了整张表（有开有闭）', mergedHtml.includes('</table>\n</div>'), mergedHtml.slice(-80))
 
 // ─────────────────────────────────────────────────────────────
 console.log('\n== 六、出口纪律（规格 #48 的出口表） ==')

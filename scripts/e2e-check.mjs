@@ -295,6 +295,9 @@ try {
     check('老 URL：正文真的渲染了（不是空壳）', post.body.includes('<pre><code') && post.body.includes('用 Node 单进程同时做站点和探活'))
     const second = await authed('/posts/uptime-metrics')
     check('老 URL：第二篇老文章也在（/posts/uptime-metrics）', second.status === 200, `got ${second.status}`)
+    // 选项 C（2026-10-20）：表格要在滚动容器里，否则 68ch 栏里的宽表没地方滚。
+    check('读面：表格被 `.table-wrap` 包住（宽表可横向滚动）', /<div class="table-wrap">\s*<table>/.test(second.body), (second.body.match(/<div class="table-wrap">|<table>/g) || []).join(' '))
+    check('读面：滚动容器里确实有单元格（不是空壳容器）', /<div class="table-wrap">\s*<table>[\s\S]{0,400}<t[dh]>/.test(second.body))
   }
 
   console.log('\n[可用性面板]')

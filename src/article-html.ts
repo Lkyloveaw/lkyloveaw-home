@@ -144,11 +144,14 @@ function renderTable(node: PMNode): string {
     return html
   }
 
-  let html = '<table>\n'
+  // 表格套一层横向滚动容器（选项 C，用户 2026-10-20 定）：正文收窄到 68ch 之后，宽表
+  // （列多、单元格内容长）会把栏撑得难看或挤成一行两个字符。读面在 `.table-wrap` 里原地横滚；
+  // 编辑面 TipTap 自己就有 `.tableWrapper` —— 两面结构就此对齐。
+  let html = '<div class="table-wrap">\n<table>\n'
   html += renderColgroup(rows)
   if (head.length) html += `<thead>\n${renderRows(head)}</thead>\n`
   if (body.length || !head.length) html += `<tbody>\n${renderRows(body)}</tbody>\n`
-  html += '</table>\n'
+  html += '</table>\n</div>\n'
   return html
 }
 

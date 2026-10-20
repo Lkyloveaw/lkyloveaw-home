@@ -257,6 +257,12 @@ section('两套平面：数据面终端化 / 正文面纸感化')
     '单元格里的段落不带下边距（表格行不被撑高，读面 + 编辑面）',
     /\.prose th p,\s*\.prose td p,[\s\S]{0,160}\.ProseMirror th p,\s*\.article-editor \.ProseMirror td p\s*\{\s*margin:\s*0/.test(css),
   )
+  // 选项 C（2026-10-20 用户定）：宽表在 68ch 栏里**原地横向滚动**，打印时放开滚动。
+  check('宽表有横向滚动容器（`.prose .table-wrap` → `overflow-x: auto`）', /\.prose \.table-wrap\s*\{[^}]*overflow-x:\s*auto/s.test(css))
+  check('滚动容器的下边距挂在容器上（表格自己不带，免得滚动区多一条空白）', /\.prose \.table-wrap table\s*\{[^}]*margin:\s*0/s.test(css))
+  // 中文逐字可断：没有最小列宽，表格永远「塞得进去」，滚动容器永不出现滚动条（实测过）。
+  check('单元格有最小列宽（否则中文会让滚动永不触发）', /\.prose \.table-wrap th,\s*\.prose \.table-wrap td\s*\{[^}]*min-width:\s*[\d.]+em/s.test(css))
+  check('打印时滚动容器放开（纸上滚不了，宽表不能被裁）', /@media print[\s\S]*\.prose \.table-wrap\s*\{\s*overflow:\s*visible/s.test(css))
 
   check('views.ts 里数据面 = 面板 + 管理台（`status` / `admin` → data）', /active === 'status' \|\| active === 'admin' \? 'data' : 'prose'/.test(views))
   check('`layout()` 把平面写进 `<body class="plane-…">`', /plane-\$\{planeOf\(opts\.active\)\}/.test(views))
