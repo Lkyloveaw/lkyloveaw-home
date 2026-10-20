@@ -2390,6 +2390,12 @@ try {
     // 公开面（#68 §6 / #72）：文章列表是 inset 列表的一行，标签条是横向 chip row
     check('首页：最近分享是 inset 列表（`.inset-list.post-list` > `.cell.post-card`）', /class="inset-list post-list"/.test(home.body) && /class="cell post-card"/.test(home.body))
     check('分享列表：chip row + 整行可点的文章行', /class="chip-row"/.test(posts.body) && /class="cell post-card"/.test(posts.body))
+    const panelCards = (statusPage.body.match(/class="card target-card"/g) ?? []).length
+    check(
+      '面板：每张目标卡的格带仍是 56 格、kv 仍是 4 项',
+      /data-cells="56"/.test(statusPage.body) && panelCards > 0 && (statusPage.body.match(/<dd>/g) ?? []).length === 4 * panelCards,
+      `cards=${panelCards}`,
+    )
 
     // 样式表真的被引用，且字阶 / 断点 / 打印规则在里面（不是只在源码里）
     const css = await get('/style.css')

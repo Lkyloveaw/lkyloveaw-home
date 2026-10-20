@@ -274,6 +274,8 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
   gap: 12px; margin-bottom: 14px;
 }
 .section-head h1, .section-head h2 { margin: 0; font-size: var(--fs-headline); line-height: var(--lh-title); }
+/* 面板标题在 section-head 里：large-title 要比这条更具体，否则会被压回 headline。 */
+.section-head h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); font-weight: 700; letter-spacing: -.02em; }
 .more { font-size: var(--fs-subhead); color: var(--label-2); }
 .more:hover { color: var(--accent); }
 .empty {
@@ -369,15 +371,15 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
 /* ---------- 可用性面板 ---------- */
 
 .stat-strip {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px; margin-bottom: 22px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin-bottom: 24px;
 }
 .stat {
-  background: var(--bg-card); border: 1px solid var(--separator);
-  border-radius: var(--radius); padding: 13px 15px;
+  background: var(--bg-card); border: 0;
+  border-radius: var(--radius-lg); padding: 14px 16px;
   display: flex; flex-direction: column; gap: 2px;
 }
-.stat-num { font-size: var(--fs-title3); font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-num { font-size: var(--fs-title2); line-height: var(--lh-title); font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-num.has-fault { color: var(--bad); }
 .stat-label { color: var(--label-2); font-size: var(--fs-caption); }
 
@@ -386,15 +388,15 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
   margin: 26px 0 10px;
 }
 .target-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 14px;
 }
-.target-card { padding: 16px 17px; }
-.target-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; }
+.target-card { padding: 16px; border-radius: var(--radius-lg); }
+.target-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
 .target-head h3 { margin: 0; font-size: var(--fs-headline); flex: 1; min-width: 0; }
 .uptime { font-variant-numeric: tabular-nums; }
 .target-url {
-  margin: 0 0 10px; font-size: var(--fs-footnote); font-family: var(--mono);
+  margin: 0 0 10px; font-size: var(--fs-caption);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .target-url a { color: var(--label-2); }
@@ -425,8 +427,8 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
 
 /* 状态格带：每格 = 一次探测，**格数固定**（见 views.ts 的 CELL_STRIP_LEN）。
    格数固定才能让各卡横向可比；缺的历史画成空心格，不假装 up。 */
-.cell-strip { display: flex; gap: 1px; height: 18px; margin: 0 0 6px; }
-.cell-strip i { flex: 1 1 0; min-width: 0; border-radius: 1px; background: var(--unknown); }
+.cell-strip { display: flex; gap: 1px; height: 16px; margin: 0 0 6px; }
+.cell-strip i { flex: 1 1 0; min-width: 0; border-radius: 2px; background: var(--unknown); }
 .cell-strip i.up { background: var(--ok); }
 .cell-strip i.degraded { background: var(--warn); }
 .cell-strip i.down { background: var(--bad); }
@@ -442,10 +444,11 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
 .kv dd { margin: 0; font-size: var(--fs-footnote); font-variant-numeric: tabular-nums; }
 
 .target-error {
-  margin: 12px 0 0; padding: 7px 10px; font-size: var(--fs-footnote);
+  margin: 12px 0 0; padding: 8px 10px; font-size: var(--fs-footnote);
   color: var(--bad); background: var(--fill);
-  border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--separator));
-  border-radius: 6px; word-break: break-word;
+  border: 0; border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 40%, var(--separator));
+  word-break: break-word;
 }
 
 .live-tag {
@@ -459,19 +462,25 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 
-.incident-list { list-style: none; padding: 0; margin: 0; }.incident-list li {
-  display: grid; grid-template-columns: auto 1fr auto;
-  gap: 12px; align-items: baseline;
-  padding: 9px 2px; border-bottom: 1px solid var(--separator);
+.incident-list { list-style: none; padding: 0; margin: 0; }
+.incident-list li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px; align-items: baseline;
+  padding: 12px 16px;
   font-size: var(--fs-subhead);
 }
-.incident-list li:last-child { border-bottom: 0; }
 .incident-time { color: var(--label-2); font-variant-numeric: tabular-nums; font-size: var(--fs-footnote); }
 .incident-err { color: var(--label-2); font-size: var(--fs-footnote); text-align: right; }
 
 /* ---------- 曲线图（内联 SVG） ---------- */
 
-.chart { margin: 0 0 12px; }
+.chart {
+  margin: 0 0 12px; padding: 4px 0;
+  /* 纸纹网格：横向每 26px 一条 --separator 细线，竖线同一节奏；不用 SVG <line>，几何断言不被多变量干扰 */
+  background-image:
+    repeating-linear-gradient(to top, color-mix(in srgb, var(--separator) 60%, transparent) 0 1px, transparent 1px 26px),
+    repeating-linear-gradient(to right, color-mix(in srgb, var(--separator) 40%, transparent) 0 1px, transparent 1px 26px);
+}
 .chart svg { display: block; width: 100%; height: 74px; }
 .chart-wide svg { height: 104px; }
 .chart figcaption {
@@ -481,7 +490,7 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
 .chart-max { font-variant-numeric: tabular-nums; }
 .chart-empty {
   height: 74px; display: flex; align-items: center; justify-content: center;
-  background: var(--fill); border: 1px dashed var(--separator); border-radius: 6px;
+  background: var(--fill); border: 0; border-radius: var(--radius-sm);
   color: var(--label-2); font-size: var(--fs-caption); text-align: center; padding: 0 10px;
 }
 .chart-axis {
@@ -683,6 +692,9 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   .admin-table { display: block; overflow-x: auto; }
   .prose { max-width: none; }
   /* 导航在窄屏换形态：rail 消失、tab bar 出现；管理台再加模块条（不用 JS） */
+  /* 面板标题 + live 提示：窄屏上下排，别让提示挤掉大标题的整行宽度 */
+  .section-head { flex-wrap: wrap; }
+  .section-head .live-tag { flex-basis: 100%; }
   .app-shell { grid-template-columns: minmax(0, 1fr); }
   .site-rail { display: none; }
   .tab-bar { display: flex; }
@@ -740,7 +752,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   .wrap { max-width: none; padding: 0; }
   /* 导航藏掉之后，外壳退回单列（否则打印出来的正文仍只占右边那一列） */
   .app-shell { display: block; }
-  .app-main { max-width: none; padding: 12px 0 0; }
+  .app-main { max-width: none; padding: 24px 0 0; }
   .prose { max-width: none; }
   /* 纸上滚不了：滚动容器必须放开，否则宽表会被裁掉右半边 */
   .prose .table-wrap { overflow: visible; }

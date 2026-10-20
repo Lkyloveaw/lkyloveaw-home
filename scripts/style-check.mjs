@@ -19,6 +19,7 @@ const css = fs.readFileSync(path.join(root, 'public/style.css'), 'utf8')
 const views = fs.readFileSync(path.join(root, 'src/views.ts'), 'utf8')
 const statusJs = fs.readFileSync(path.join(root, 'public/status.js'), 'utf8')
 const iconsTs = fs.readFileSync(path.join(root, 'src/icons.ts'), 'utf8')
+const chartsTs = fs.readFileSync(path.join(root, 'src/charts.ts'), 'utf8')
 
 let passed = 0
 let failed = 0
@@ -259,10 +260,10 @@ section('排版：一套 iOS 字阶（平面与两套字体已退役，#68）')
   check('`body` 用 `var(--font)` 与 `--fs-callout`（不再按平面换字体）', /body\s*\{[^}]*font-family:\s*var\(--font\)/s.test(css) && /body\s*\{[^}]*font-size:\s*var\(--fs-callout\)/s.test(css))
   check('10 个字号 token 与 4 个行高 token 都在 `:root`', ['fs-large', 'fs-title1', 'fs-title2', 'fs-title3', 'fs-headline', 'fs-body', 'fs-callout', 'fs-subhead', 'fs-footnote', 'fs-caption', 'lh-tight', 'lh-title', 'lh-ui', 'lh-prose'].every((k) => new RegExp(`--${k}\\s*:`).test(css)))
 
-  check('Large Title 落在 `.hero h1`（`--fs-large`）', /\.hero h1\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css))
+  check('Large Title 落在页面主标题（`.hero h1` / `h1.large-title` → `--fs-large`）', /\.hero h1\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css) && /h1\.large-title\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css))
   check('Title 1 落在文章标题（`.post-header h1` → `--fs-title1`）', /\.post-header h1\s*\{[^}]*font-size:\s*var\(--fs-title1\)/s.test(css))
-  check('Title 2 落在区块标题（`.prose h2` → `--fs-title2`）', /\.prose h2\s*\{[^}]*font-size:\s*var\(--fs-title2\)/s.test(css))
-  check('Title 3 落在小标题与指标数字（`.prose h3` / `.stat-num` → `--fs-title3`）', /\.prose h3\s*\{[^}]*font-size:\s*var\(--fs-title3\)/s.test(css) && /\.stat-num\s*\{[^}]*font-size:\s*var\(--fs-title3\)/s.test(css))
+  check('Title 2 落在区块标题与统计数字（`.prose h2` / `.stat-num` → `--fs-title2`）', /\.prose h2\s*\{[^}]*font-size:\s*var\(--fs-title2\)/s.test(css) && /\.stat-num\s*\{[^}]*font-size:\s*var\(--fs-title2\)/s.test(css))
+  check('Title 3 落在小标题（`.prose h3` → `--fs-title3`）', /\.prose h3\s*\{[^}]*font-size:\s*var\(--fs-title3\)/s.test(css))
   check('Body 落在长文（`.prose` → `--fs-body` + `--lh-prose`）', /\.prose\s*\{[^}]*font-size:\s*var\(--fs-body\)[^}]*line-height:\s*var\(--lh-prose\)/s.test(css))
   check('Caption 落在徽标 / 标签 / 格带说明 / 图表轴（`--fs-caption`）', ['.badge', '.tag', '.cell-caption', '.chart-axis'].every((sel) => new RegExp(`${sel.replace('.', '\\.')}\\s*\\{[^}]*font-size:\\s*var\\(--fs-caption\\)`, 's').test(css)))
   check('Footnote 落在 meta / stat-sub / kv（`--fs-footnote`）', ['.post-card .meta, .post-header .meta', '.stat-sub', '.kv dd'].every((sel) => new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{[^}]*font-size:\\s*var\\(--fs-footnote\\)`, 's').test(css)))
@@ -380,6 +381,8 @@ section('面板那两条实现要点没被抽变形')
   check('缺失历史仍画空心格（`.cell-missing` 在 CSS 里）', /\.cell-strip i\.cell-missing\b/.test(css))
   check('跨文件契约类名没被顺手改掉（`.cell-strip` / `.badge` / `.dot` 都在）', ['cell-strip', 'badge', 'dot'].every((c) => new RegExp(`\\.${c}\\b`).test(css)))
   check('客户端状态映射仍在一处（`status.js` 的 `STATE_CLASS`）', /STATE_CLASS/.test(statusJs))
+  check('曲线网格用 CSS 纸纹（`repeating-linear-gradient` + `--separator`），不往 SVG 里塞网格', /\.chart\s*\{[^}]*repeating-linear-gradient/s.test(css) && /--separator/.test(css) && !/<line\s/.test(chartsTs))
+  check('`charts.ts` 里没有颜色字面量（颜色只来自 CSS / currentColor）', !/#[0-9a-f]{3,8}/i.test(chartsTs))
 }
 
 // ════════════════════════════════════════════════════

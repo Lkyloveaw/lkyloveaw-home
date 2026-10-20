@@ -1223,7 +1223,7 @@ export function statusPage(
     .join('\n')
 
   const incidents = summary.incidents.length
-    ? `<ul class="incident-list">${summary.incidents
+    ? `<ul class="inset-list incident-list">${summary.incidents
         .map((i) => {
           const known = summary.targets.find((t) => t.target.id === i.targetId)?.target.name
           return `<li><span class="incident-time">${escapeHtml(formatTime(i.at))}</span>
@@ -1236,7 +1236,7 @@ export function statusPage(
   const body = `
 <section class="section" id="status-root" data-generated="${summary.generatedAt}">
   <div class="section-head">
-    <h1>内网业务系统可用性</h1>
+    <h1 class="large-title">内网业务系统可用性</h1>
     <span class="live-tag"><span class="live-dot"></span>每 ${summary.probeIntervalSeconds} 秒探测 · 每 30 秒刷新数值（曲线随页面刷新）</span>
   </div>
   <p class="lede">统计窗口：${escapeHtml(summary.windowLabel)} · 最后更新 <span class="js-generated">${escapeHtml(formatAgo(summary.generatedAt))}</span></p>
