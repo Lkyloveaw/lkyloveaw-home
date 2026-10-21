@@ -357,6 +357,20 @@ section('公开面：inset 列表 / 大标题 / 整行可点（#68 §6）')
 }
 
 // ════════════════════════════════════════════════════
+section('管理台：六页列表化与 details 折叠（#68 §8）')
+// ════════════════════════════════════════════════════
+{
+  check('六个模块各自的 `adminSection` 都在（概览 / 目标 / 账号 / 备份 / 设置 / 文章）', ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`adminSection: '${k}'`)))
+  check('目标列表：每行是 `cell-stack`，编辑表单收进 `<details class="cell-detail">`', views.includes('<div class="cell-stack">') && views.includes('<details class="cell-detail"') && views.includes('<summary>编辑「'))
+  check('新增表单收进 `<details class="create-card">`（账号页同款）', (views.match(/class="create-card"/g) ?? []).length >= 2)
+  check('破坏性动作仍是原生 `required` 复选框（不用 JS confirm）', (views.match(/name="confirm" value="yes" required/g) ?? []).length >= 3)
+  check('`.admin-table` 已从视图与样式表里彻底退役', !views.includes('admin-table') && !css.includes('admin-table'))
+  check('账号页三个动作表单仍在（改角色 / 停用或启用 / 重置口令）', ['account-role', 'account-disable', 'account-enable', 'account-reset-password'].every((a) => views.includes(`value="${a}"`)))
+  check('目标行仍保留 `target-id`（e2e 按它数行）', (views.match(/class="target-id/g) ?? []).length === 1)
+  check('打印时列表行留下、表单与折叠块隐藏', /\.form-row[\s\S]{0,200}display:\s*none/.test(printBody) && /details[\s\S]{0,40}display:\s*none/.test(printBody))
+}
+
+// ════════════════════════════════════════════════════
 section('窄屏断点与打印其余')
 // ════════════════════════════════════════════════════
 {
@@ -364,7 +378,6 @@ section('窄屏断点与打印其余')
   const tight = (css.match(/@media \(max-width: 560px\)\s*\{([\s\S]*?)\n\}/) ?? [, ''])[1]
   check('存在 720px 断点（版面从多栏退成一栏）', narrow.length > 0)
   check('720px 断点里：目标卡与参数表退回一栏', /\.target-grid\s*\{\s*grid-template-columns:\s*1fr/.test(narrow) && /\.kv\s*\{\s*grid-template-columns:\s*1fr/.test(narrow))
-  check('720px 断点里：管理台宽表可横向滚动', /\.admin-table\s*\{[^}]*overflow-x:\s*auto/s.test(narrow))
   check('560px 断点存在，且表单行改成竖排', tight.length > 0 && /\.form-row\s*\{\s*flex-direction:\s*column/.test(tight))
   check('存在 `@media print`', printBody.length > 0)
   check('打印时把配色就地改成纸面（黑字白底）', /--bg:\s*#ffffff/.test(printBody) && /--label:\s*#000000/.test(printBody))

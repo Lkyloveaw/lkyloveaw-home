@@ -1028,7 +1028,7 @@ try {
     check('管理员 GET /admin → 200', overview.status === 200, `got ${overview.status}`)
     check('管理员看得到导航里的「管理」组', overview.body.includes('rail-group-label">管理<'))
     check('「概览」被标成当前页（aria-current）', /<a[^>]*href="\/admin"[^>]*aria-current="page"/.test(overview.body))
-    check('概览页有四块摘要卡', (overview.body.match(/class="stat"/g) || []).length >= 4)
+    check('概览页有四块摘要卡', (overview.body.match(/class="stat( stat-link)?"/g) || []).length >= 4)
     check('概览页**不渲染目标列表**（不造第二份真相）', !/ledger\.internal\.example/.test(overview.body))
     // 这条断言的**形状**跟着 #63 改了：不再钉「四页 + 四个名字」。
     // 那种写法每加一页就得回来改一次（#50 加文章页时漏了，于是那句自述假了一整轮）；
@@ -1127,6 +1127,9 @@ try {
       /class="admin-tabs"/.test((await get('/admin/targets', { cookie: adminCookie })).body) &&
         !/class="admin-tabs"/.test((await get('/', { cookie: adminCookie })).body),
     )
+    const targetsBody = (await get('/admin/targets', { cookie: adminCookie })).body
+    check('管理台：`.admin-table` 已退役（六页都改用 inset 列表）', !targetsBody.includes('admin-table'))
+    check('管理台：目标页用 `<details class="cell-detail">` 折叠编辑表单（且不是模态）', targetsBody.includes('<details class="cell-detail"') && !targetsBody.includes('<dialog'))
 
     const styleCss = (await get('/style.css')).body
     check('页头不透明（`background: var(--bg)`）、全站无 `backdrop-filter`', styleCss.includes('background: var(--bg)') && !styleCss.includes('backdrop-filter:'))
@@ -1693,7 +1696,7 @@ try {
     /** `/api/status` 的 JSON（读者面，能证明探测**真的**跑到了新目标）。 */
     const apiJson = async () => JSON.parse((await get('/api/status', { cookie: adminT })).body)
     /** 管理台目标页上「有几条目标」：每条目标渲染一个 `class="target-id"`。 */
-    const rowCount = (html) => (html.match(/class="target-id"/g) ?? []).length
+    const rowCount = (html) => (html.match(/class="target-id /g) ?? []).length
 
     const NEWID = 'e2e-target-probe'
     const NEWNAME = 'e2e 验收目标'
@@ -2007,7 +2010,7 @@ try {
     check('⑬ 产物非空（大小 > 0）', created.length === 1 && fs.statSync(path.join(BACKUP_DIR, created[0])).size > 0)
     const page1 = await get('/admin/backups?notice=backup-started', { cookie: adminB })
     check('⑬ 页面列表里出现它，且带大小与时间', page1.body.includes(created[0] ?? '(无)') && /(KB|MB|B)</.test(page1.body), (page1.body.match(/(\d+\.\d+ (KB|MB))/) ?? ['(无大小)'])[0])
-    check('⑬ 页面上「今天已备份」的说法与磁盘一致（列表 1 行）', (page1.body.match(/<code>\d{4}-\d{2}-\d{2}\.sqlite<\/code>/g) ?? []).length === 1)
+    check('⑬ 页面上「今天已备份」的说法与磁盘一致（列表 1 行）', (page1.body.match(/<code[^>]*>\d{4}-\d{2}-\d{2}\.sqlite<\/code>/g) ?? []).length === 1)
 
     // ── ⑭ 再点一次：**跳过**，且不新增产物（这两条必须按 note 分型，否则会互斥）──
     const again = await postForm('/admin/backups', { cookie: adminB, csrf: csrfB(), form: { action: 'backup-now' } })

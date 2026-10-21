@@ -229,10 +229,28 @@ pre code { background: none; border: 0; padding: 0; }
 .cell-meta { color: var(--label-2); font-size: var(--fs-footnote); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cell-detail > summary {
   display: flex; align-items: center; gap: 8px;
-  padding: 10px 16px; cursor: pointer; list-style: none;
+  min-height: var(--tap); padding: 12px 16px; cursor: pointer; list-style: none;
   color: var(--label-2); font-size: var(--fs-subhead);
 }
 .cell-detail > summary::-webkit-details-marker { display: none; }
+.cell-detail > summary::after { content: "›"; margin-left: auto; color: var(--label-2); font-size: 18px; line-height: 1; }
+.cell-detail[open] > summary::after { transform: rotate(90deg); }
+.cell-detail > form { margin: 0; padding: 0 16px 12px; }
+.cell-stack > .cell-detail { border-block-start: 1px solid var(--separator); }
+
+.create-card {
+  margin: 0 0 20px; overflow: hidden;
+  background: var(--bg-card); border: 1px solid var(--separator); border-radius: var(--radius-lg);
+}
+.create-card > summary {
+  display: flex; align-items: center; gap: 8px;
+  min-height: var(--tap); padding: 12px 16px; cursor: pointer; list-style: none;
+  font-size: var(--fs-headline); font-weight: 600;
+}
+.create-card > summary::-webkit-details-marker { display: none; }
+.create-card > summary::after { content: "+"; margin-left: auto; color: var(--accent); font-size: 22px; line-height: 1; }
+.create-card[open] > summary::after { content: "−"; }
+.create-card > form { margin: 0; padding: 0 16px 16px; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -588,14 +606,31 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
 /* 管理台的外壳与模块导航由 .app-shell / .site-rail / .admin-tabs 承担（#68 §5）。 */
 
 /* 管理台文章页（#50）：列表表格 + 正文文本框 + 草稿预览 */
-.admin-table { width: 100%; border-collapse: collapse; font-size: var(--fs-subhead); margin-bottom: 24px; }
-.admin-table th { text-align: left; color: var(--label-2); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--separator); }
-.admin-table td { padding: 8px; border-bottom: 1px solid var(--separator); vertical-align: top; }
+/* 管理台：表格全部退成 inset 列表（#68 §8）。 */
+.cell-field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.cell-field > label { display: flex; flex-direction: column; gap: 6px; color: var(--label-2); font-size: var(--fs-footnote); }
+.cell-field input { width: 100%; }
+.cell-actions { display: flex; flex-direction: column; gap: 4px; }
+.backup-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: baseline; }
+.backup-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.article-row { position: relative; }
+.article-row .cell-main { gap: 3px; }
+.article-row .cell-title a { color: var(--label); }
+.article-row .cell-title a::after { content: ""; position: absolute; inset: 0; }
+.article-row .cell-title a:hover { color: var(--accent); text-decoration: none; }
+.trash-row { align-items: flex-start; }
+.kv { display: block; margin: 0; }
+.kv .cell { align-items: baseline; justify-content: space-between; gap: 12px; }
+.kv dd { margin: 0; margin-left: auto; }
+.stat-link { position: relative; padding-right: 40px; color: inherit; text-decoration: none; }
+.stat-link:hover { text-decoration: none; background: var(--fill); }
+.stat-go { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--label-2); }
 .article-form { display: block; margin-bottom: 18px; }
 /* 写作区富文本编辑器（#57）：只服务编辑面；读面仍是服务端渲染，禁 JS 也能读。 */
-.article-editor { border: 1px solid var(--separator); border-radius: 6px; background: var(--fill);
+.article-editor { border: 0; border-radius: var(--radius-lg); background: var(--bg-card);
+  box-shadow: inset 0 0 0 1px var(--separator);
   color: var(--label); min-height: 320px; max-height: 70vh; overflow: auto; }
-.article-editor .ProseMirror { min-height: 300px; padding: 10px 12px; outline: none; }
+.article-editor .ProseMirror { min-height: 300px; padding: 14px 16px; outline: none; }
 .article-editor .ProseMirror p { margin: 0 0 0.6em; }
 .article-editor .ProseMirror table { border-collapse: collapse; width: 100%; margin: 0.6em 0; }
 .article-editor .ProseMirror th, .article-editor .ProseMirror td { border: 1px solid var(--separator);
@@ -608,15 +643,15 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
   border-radius: 6px; padding: 10px; overflow: auto; }
 .article-editor .ProseMirror code { font-family: var(--mono); font-size: 0.9em; }
 .article-editor .ProseMirror-selectednode { outline: 2px solid var(--accent); }
-.editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
-.editor-toolbar button { font: inherit; font-size: var(--fs-footnote); padding: 4px 8px; border: 1px solid var(--border-strong);
-  background: var(--bg-card); color: var(--label); border-radius: 6px; cursor: pointer; }
-.editor-toolbar button:hover { border-color: var(--accent); }
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.editor-toolbar button { font: inherit; font-size: var(--fs-footnote); min-height: 30px; padding: 4px 10px; border: 0;
+  background: var(--fill); color: var(--label); border-radius: var(--radius-sm); cursor: pointer; }
+.editor-toolbar button:hover { background: var(--separator); }
 .article-preview { padding: 12px 16px; }
 
 /* 修订历史（#51）：列表 + 逐版全文 */
 .revision-list { list-style: none; padding: 0; margin: 0 0 24px; }
-.revision-list li { border-bottom: 1px solid var(--separator); padding: 10px 0; }
+.revision-row { flex-wrap: wrap; }
 .revision-list summary { cursor: pointer; color: var(--label-2); font-size: var(--fs-footnote); }
 .revision-body { white-space: pre-wrap; font-size: var(--fs-footnote); line-height: 1.55; color: var(--label);
   background: var(--fill); border: 1px solid var(--separator); border-radius: 6px; padding: 10px; margin: 8px 0 0; }
@@ -627,17 +662,14 @@ h1.large-title { font-size: var(--fs-large); line-height: var(--lh-title); lette
   background: var(--fill); border: 1px solid var(--separator); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0; }
 
 /* 管理台目标页（#40）：按分组分标题 + 每条目标一块（行内编辑表单 + 启停/删除） */
-.target-group { margin: 26px 0 8px; font-size: var(--fs-headline); }
-/* 新增表单与行内编辑表单各是自己的类（e2e 也按这两个类定位）：给它们各自的留白，
-   而不是靠父级的通用间距 —— 新增块要紧一点、行内编辑要贴着行。 */
-.target-new { margin: 0 0 22px; padding-bottom: 18px; border-bottom: 1px solid var(--separator); }
+/* 新增表单与行内编辑表单各是自己的类（e2e 也按这两个类定位）。 */
+.target-new { margin: 0; padding: 0; border: 0; }
 .target-edit { margin: 0; }
-.target-row { border: 1px solid var(--separator); border-radius: var(--radius); background: var(--bg-card);
-  padding: 12px 14px; margin-bottom: 12px; }
-.target-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.target-id { color: var(--label-2); font-size: var(--fs-footnote); }
-.target-row .form-row { margin-bottom: 8px; }
-.target-row form { margin: 0; }
+.target-row-head { gap: 8px; }
+.target-row-head .cell-title { flex: 1; min-width: 0; }
+.target-id { color: var(--label-2); white-space: nowrap; }
+.target-row-head .form-row { margin-bottom: 8px; }
+.target-row-head form { margin: 0; }
 
 /* 管理台站点设置页（#42）：值坏掉时的提示 + 只读 env 清单里的说明 */
 .bad-text { color: var(--bad); }
@@ -689,7 +721,6 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   .target-grid { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 1fr; }
   .stat-strip { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
-  .admin-table { display: block; overflow-x: auto; }
   .prose { max-width: none; }
   /* 导航在窄屏换形态：rail 消失、tab bar 出现；管理台再加模块条（不用 JS） */
   /* 面板标题 + live 提示：窄屏上下排，别让提示挤掉大标题的整行宽度 */
@@ -748,7 +779,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     display: block; min-height: 0; padding-bottom: 0;
   }
   .site-header, .site-footer, .site-rail, .tab-bar, .admin-tabs, .logout-form, .live-tag,
-  .form-actions, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker, .back { display: none !important; }
+  .form-actions, .form-row, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker, .back,
+  details, .article-editor, .editor-toolbar { display: none !important; }
   .wrap { max-width: none; padding: 0; }
   /* 导航藏掉之后，外壳退回单列（否则打印出来的正文仍只占右边那一列） */
   .app-shell { display: block; }

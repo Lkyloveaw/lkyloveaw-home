@@ -352,10 +352,10 @@ export function adminOverviewPage(
   notice?: unknown,
 ): string {
   const card = (title: string, value: string, detail: string, href: string): string =>
-    `<div class="stat"><div class="stat-label">${escapeHtml(title)}</div>` +
-    `<div class="stat-num">${escapeHtml(value)}</div>` +
-    `<div class="stat-sub">${escapeHtml(detail)}</div>` +
-    `<div class="stat-sub"><a href="${href}">进入 →</a></div></div>`
+    `<a class="stat stat-link" href="${href}"><span class="stat-label">${escapeHtml(title)}</span>` +
+    `<span class="stat-num">${escapeHtml(value)}</span>` +
+    `<span class="stat-sub">${escapeHtml(detail)}</span>` +
+    `<span class="stat-go" aria-hidden="true">${icon('chev')}</span></a>`
 
   const backupValue = d.backup.latest ? (d.backup.doneToday ? '今天已备份' : '今天还没备份') : '还没有备份'
   const backupDetail = d.backup.latest
@@ -438,7 +438,8 @@ export function adminTargetsPage(
     return statusDot(status)
   }
 
-  const newForm = `<h2>新增目标</h2>
+  const newForm = `<details class="create-card"${forCreate ? ' open' : ''}>
+<summary>新增目标</summary>
 <form method="post" action="/admin/targets" class="target-new">${csrfField()}
 <input type="hidden" name="action" value="target-create">
 <div class="form-row">
@@ -455,7 +456,8 @@ export function adminTargetsPage(
 <label class="confirm"><input type="checkbox" name="enabled" value="yes"${!forCreate || forCreate.enabled ? ' checked' : ''}> 立即启用</label>
 <button type="submit">新增</button>
 </div>
-</form>`
+</form>
+</details>`
 
   const renderRow = (row: AdminTargetRow): string => {
     const s = sub && sub.action === 'target-update' && sub.id === row.id ? sub : null
@@ -477,11 +479,13 @@ export function adminTargetsPage(
 <span class="stat-sub">它<strong>没有任何历史记录</strong>，删了就真没了（删掉之后可以用同一个 id 重新建）。</span>
 </form>`
 
-    return `<div class="target-row">
-<div class="target-row-head">
-${statusDotFor(row)}<strong>${escapeHtml(row.name)}</strong>
-<code class="target-id">${escapeHtml(row.id)}</code>${state}
+    return `<div class="cell-stack">
+<div class="cell target-row-head">
+${statusDotFor(row)}<span class="cell-title">${escapeHtml(row.name)}</span>
+<code class="target-id cell-sub">${escapeHtml(row.id)}</code>${state}
 </div>
+<details class="cell-detail"${s ? ' open' : ''}>
+<summary>编辑「${escapeHtml(row.name)}」</summary>
 <form method="post" action="/admin/targets" class="target-edit">${csrfField()}
 <input type="hidden" name="action" value="target-update">
 <input type="hidden" name="id" value="${escapeHtml(row.id)}">
@@ -513,21 +517,25 @@ ${
 </form>`
 }
 ${removeForm}
+</details>
 </div>`
   }
 
   // 按 `group` 分标题（与 `statusPage` 同一手法），**分组不进 URL**（§1.2）。
   // 顺序由 SQL 给定（未分组排最后），这里只负责「分组一变就开一个新标题」。
-  let list = ''
-  let currentGroup: string | null = null
+  const byGroup: Array<{ name: string; rows: AdminTargetRow[] }> = []
   for (const row of rows) {
     const g = row.group?.trim() || '未分组'
-    if (g !== currentGroup) {
-      list += `<h2 class="target-group">${escapeHtml(g)}</h2>`
-      currentGroup = g
-    }
-    list += renderRow(row)
+    const last = byGroup[byGroup.length - 1]
+    if (last && last.name === g) last.rows.push(row)
+    else byGroup.push({ name: g, rows: [row] })
   }
+  const list = byGroup
+    .map(
+      (g) =>
+        `<h2 class="group-title">${escapeHtml(g.name)}</h2><div class="inset-list">${g.rows.map(renderRow).join('')}</div>`,
+    )
+    .join('')
 
   const body =
     renderNotice(opts.notice) +
@@ -595,26 +603,25 @@ export function adminSettingsPage(
 
   const fields = rows
     .map(
-      (row) => `<div class="form-row">
+      (row) => `<div class="cell cell-field">
 <label>${escapeHtml(row.label)}
 <input name="${escapeHtml(row.key)}" value="${valueOf(row)}"${row.kind === 'int' ? ' inputmode="numeric"' : ''}>
 </label>
-</div>
-<p class="stat-sub">${escapeHtml(row.hint)}${
+<p class="cell-sub">${escapeHtml(row.hint)}${
         row.bad
           ? '<br><span class="bad-text">库里的值不可用，上面显示的是回退后的默认值。</span>'
           : row.outOfFormRange
             ? '<br><span class="bad-text">当前值超出上面的区间（它来自 <code>.env</code> 的首次落值，仍按它探测）—— 想改就必须落回区间内。</span>'
             : ''
-      }</p>`,
+      }</p></div>`,
     )
     .join('\n')
 
   const envRows = envOnly
     .map(
       (e) =>
-        `<div><dt>${escapeHtml(e.label)}</dt><dd>${escapeHtml(e.value)}` +
-        `<div class="stat-sub">${escapeHtml(e.note)}</div></dd></div>`,
+        `<div class="cell"><dt>${escapeHtml(e.label)}</dt><dd>${escapeHtml(e.value)}` +
+        `<span class="cell-sub">${escapeHtml(e.note)}</span></dd></div>`,
     )
     .join('\n')
 
@@ -627,14 +634,14 @@ export function adminSettingsPage(
 之后改它们不再有任何效果（值不同时启动日志里会有一行警告）。</p>
 <form method="post" action="/admin/settings">${csrfField()}
 <input type="hidden" name="action" value="settings-save">
-${fields}
+<div class="inset-list">${fields}</div>
 <div class="form-actions"><button type="submit">保存</button>
 <span class="stat-sub">标题与描述<strong>下一次请求</strong>就生效；探测间隔
 <strong>从下一轮开始</strong>生效，正在等的那一轮不会被打断。</span></div>
 </form>
 <h2>留在 .env 里的（只读）</h2>
 <p class="admin-hint">这些改错了会删数据、或把人锁在外面 —— 所以它们不放进网页表单，只在这里让你一眼看到。</p>
-<dl class="kv">${envRows}</dl>`
+<dl class="inset-list kv">${envRows}</dl>`
 
   return layout({ title: '站点设置 · 管理台', description: site.description, active: 'admin', adminSection: 'settings', body }, site)
 }
@@ -685,11 +692,11 @@ export function adminBackupsPage(
 ): string {
   const rows = files
     .map(
-      (f) => `<tr>
-<td><code>${escapeHtml(f.name)}</code></td>
-<td>${escapeHtml(formatBytes(f.bytes))}</td>
-<td>${escapeHtml(formatTime(f.mtimeMs))}<div class="stat-sub">${escapeHtml(formatAgo(f.mtimeMs))}</div></td>
-</tr>`,
+      (f) => `<div class="cell backup-row">
+<code class="cell-sub backup-name">${escapeHtml(f.name)}</code>
+<span class="cell-meta">${escapeHtml(formatBytes(f.bytes))}</span>
+<span class="cell-meta">${escapeHtml(formatTime(f.mtimeMs))}<span class="cell-sub">${escapeHtml(formatAgo(f.mtimeMs))}</span></span>
+</div>`,
     )
     .join('')
 
@@ -699,9 +706,8 @@ export function adminBackupsPage(
     : opts.missing
       ? `<p class="empty">备份目录还不存在（第一次备份时会创建）。</p>`
       : files.length
-        ? `<table class="admin-table"><thead><tr><th>产物</th><th>大小</th><th>时间</th></tr></thead>
-<tbody>${rows}</tbody></table>
-<p class="stat-sub">只保留最近 <strong>${opts.backupKeep}</strong> 份，更旧的会被自动删掉。一天一份 = 数据库 + 媒体快照 + 清单，同一天只留一份。</p>`
+        ? `<div class="inset-list">${rows}</div>
+<p class="cell-sub">只保留最近 <strong>${opts.backupKeep}</strong> 份，更旧的会被自动删掉。一天一份 = 数据库 + 媒体快照 + 清单，同一天只留一份。</p>`
         : `<p class="empty">备份目录还是空的 —— 点上面的按钮要一份，或者等探测轮次里的自动备份。</p>`
 
   const body =
@@ -723,9 +729,9 @@ export function adminBackupsPage(
 <h2>现有产物</h2>
 ${listing}
 <h2>参数（只读）</h2>
-<dl class="kv">
-<div><dt>备份目录</dt><dd><code>${escapeHtml(opts.backupDir)}</code></div>
-<div><dt>保留份数</dt><dd>${opts.backupKeep}</dd></div>
+<dl class="inset-list kv">
+<div class="cell"><dt>备份目录</dt><dd><code>${escapeHtml(opts.backupDir)}</code></div>
+<div class="cell"><dt>保留份数</dt><dd>${opts.backupKeep}</dd></div>
 </dl>
 <p class="admin-hint">这两项决定<strong>文件写在哪、删几份</strong>，改错会丢东西 —— 所以留在 <code>.env</code> 里，页面上只读。</p>
 <h2>恢复与下载不在这个页面上</h2>
@@ -780,7 +786,8 @@ export function adminAccountsPage(
   /** 新增表单的回填：只回填用户名（口令永不回填）。 */
   const newUsername = escapeHtml(sub?.action === 'account-create' ? (sub.username ?? '') : '')
 
-  const newForm = `<h2>新增账号</h2>
+  const newForm = `<details class="create-card"${sub?.action === 'account-create' ? ' open' : ''}>
+<summary>新增账号</summary>
 <form method="post" action="/admin/accounts">${csrfField()}
 <input type="hidden" name="action" value="account-create">
 <div class="form-row">
@@ -791,21 +798,22 @@ export function adminAccountsPage(
 </div>
 <p class="stat-sub">新账号<strong>默认只读</strong>（最小权限）：要给他管理权，创建后点那一行的「升为管理员」——
 那是一次显式的提权动作。口令至少 ${MIN_PASSWORD_LENGTH} 位，不会被回填、也不会写进页面。</p>
-</form>`
+</form>
+</details>`
 
   const row = (u: AdminAccountRow): string => {
     const roleCell = `<span class="tag${u.role === 'admin' ? ' tag-active' : ''}">${roleWord(u.role)}</span>`
     const stateCell = u.enabled ? '<span class="tag tag-active">启用中</span>' : '<span class="tag">已停用</span>'
 
     if (u.isSelf) {
-      return `<tr>
-<td><strong>${escapeHtml(u.username)}</strong><div class="stat-sub">id ${u.id} · 这是你自己</div></td>
-<td>${roleCell}</td>
-<td>${stateCell}</td>
-<td>${u.tokenVersion}</td>
-<td><span class="stat-sub">自己的角色 / 启停不在这里改（服务端也会拒）—— 这是防自锁的第一道。
-改自己的口令请用「系统可用性」页上的那条入口（它不踢别的设备，也不需要确认框）。</span></td>
-</tr>`
+      return `<div class="cell-stack">
+<div class="cell">
+<div class="cell-main"><span class="cell-title">${escapeHtml(u.username)}</span><span class="cell-sub">id ${u.id} · 这是你自己</span></div>
+${roleCell}${stateCell}<span class="cell-meta">代次 ${u.tokenVersion}</span>
+</div>
+<div class="cell"><span class="cell-sub">自己的角色 / 启停不在这里改（服务端也会拒）—— 这是防自锁的第一道。
+改自己的口令请用「系统可用性」页上的那条入口（它不踢别的设备，也不需要确认框）。</span></div>
+</div>`
     }
 
     const roleForm =
@@ -851,18 +859,20 @@ export function adminAccountsPage(
 <button type="submit">重置口令</button>
 </form>`
 
-    return `<tr>
-<td><strong>${escapeHtml(u.username)}</strong><div class="stat-sub">id ${u.id}</div></td>
-<td>${roleCell}</td>
-<td>${stateCell}</td>
-<td>${u.tokenVersion}</td>
-<td>${roleForm}${stateForm}${pwForm}</td>
-</tr>`
+    return `<div class="cell-stack">
+<div class="cell">
+<div class="cell-main"><span class="cell-title">${escapeHtml(u.username)}</span><span class="cell-sub">id ${u.id}</span></div>
+${roleCell}${stateCell}<span class="cell-meta">代次 ${u.tokenVersion}</span>
+</div>
+<details class="cell-detail">
+<summary>管理「${escapeHtml(u.username)}」</summary>
+${roleForm}${stateForm}${pwForm}
+</details>
+</div>`
   }
 
   const table = rows.length
-    ? `<table class="admin-table"><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>凭据代次</th><th>操作</th></tr></thead>
-<tbody>${rows.map(row).join('\n')}</tbody></table>`
+    ? `<div class="inset-list">${rows.map(row).join('\n')}</div>`
     : '<p class="empty">库里还没有账号（这不该发生：零账号时用环境变量或 CLI 建第一个）。</p>'
 
   const body =
@@ -1350,17 +1360,18 @@ export function adminArticlesPage(
               : ''
           const tags = a.tags.map((t) => '<span class="tag">' + escapeHtml(t) + '</span>').join('')
           return (
-            '<tr>' +
-            '<td>' + badge + '</td>' +
-            '<td><a href="/admin/articles?edit=' + encodeURIComponent(a.slug) + '">' + escapeHtml(a.title) + '</a>' +
-            '<div class="stat-sub">' + escapeHtml(a.slug) + '</div></td>' +
-            '<td>' + escapeHtml(a.date) + '</td>' +
-            '<td>' + tags + '</td>' +
-            '</tr>'
+            '<div class="cell article-row">' +
+            '<div class="cell-main">' +
+            '<span class="cell-title"><a href="/admin/articles?edit=' + encodeURIComponent(a.slug) + '">' + escapeHtml(a.title) + '</a></span>' +
+            '<span class="cell-sub">' + escapeHtml(a.slug) + ' · ' + escapeHtml(a.date) + '</span>' +
+            (tags ? '<span class="tags">' + tags + '</span>' : '') +
+            '</div>' + badge +
+            '<span class="chev" aria-hidden="true">' + icon('chev') + '</span>' +
+            '</div>'
           )
         })
         .join('')
-    : '<tr><td colspan="4" class="empty">还没有文章。</td></tr>'
+    : '<p class="empty">还没有文章。</p>'
 
   const editForm = edit
     ? edit.trashed
@@ -1423,11 +1434,11 @@ ${
     ? `<h2>修订历史（${opts.revisions.length}）</h2>
 <p class="admin-hint">每次保存留一版<strong>全文快照</strong>，永久保留（不自动清理）。
 退回<strong>不会删掉任何版本</strong> —— 退回本身也是一次保存。</p>
-<ol class="revision-list">
+<ol class="inset-list revision-list">
 ${opts.revisions
   .map(
-    (r) => `<li>
-<div class="form-actions">
+    (r) => `<li class="cell-stack">
+<div class="cell revision-row">
 <strong>${escapeHtml(formatTime(r.savedAt))}</strong>
 <span class="tag">${r.draft ? '当时是草稿' : '当时是已发布'}</span>
 <span class="stat-sub">${escapeHtml(r.title)}</span>
@@ -1437,7 +1448,7 @@ ${opts.revisions
 <input type="hidden" name="revision" value="${r.id}">
 <button type="submit">退回这一版</button></form>
 </div>
-<details><summary>看这一版的正文</summary><pre class="revision-body">${escapeHtml(r.markdown)}</pre></details>
+<details class="cell-detail"><summary>看这一版的正文</summary><pre class="revision-body">${escapeHtml(r.markdown)}</pre></details>
 </li>`,
   )
   .join('')}
@@ -1447,14 +1458,19 @@ ${opts.revisions
   const trashSection = trash.length
     ? `<h2>回收站（${trash.length}）</h2>
 <p class="admin-hint">这里的文章<strong>读者看不到</strong>，但它们的 slug 仍然被占着 —— 免得旧链接被别人捡去用。</p>
-<table class="admin-table"><thead><tr><th>删除前状态</th><th>标题 / slug</th><th>日期</th><th>操作</th></tr></thead><tbody>
+<div class="inset-list">
 ${trash
   .map(
-    (a) => `<tr>
-<td><span class="tag">${a.draft ? '草稿' : '已发布'}</span></td>
-<td><a href="/admin/articles?edit=${encodeURIComponent(a.slug)}">${escapeHtml(a.title)}</a><div class="stat-sub">${escapeHtml(a.slug)}</div></td>
-<td>${escapeHtml(a.date)}</td>
-<td>
+    (a) => `<div class="cell-stack">
+<div class="cell article-row">
+<div class="cell-main">
+<span class="cell-title"><a href="/admin/articles?edit=${encodeURIComponent(a.slug)}">${escapeHtml(a.title)}</a></span>
+<span class="cell-sub">${escapeHtml(a.slug)} · ${escapeHtml(a.date)}</span>
+</div>
+<span class="tag">${a.draft ? '草稿' : '已发布'}</span>
+<span class="chev" aria-hidden="true">${icon('chev')}</span>
+</div>
+<div class="cell cell-actions">
 <form method="post" action="/admin/articles" class="form-actions">${csrfField()}
 <input type="hidden" name="action" value="article-restore">
 <input type="hidden" name="orig_slug" value="${escapeHtml(a.slug)}">
@@ -1464,10 +1480,10 @@ ${trash
 <input type="hidden" name="orig_slug" value="${escapeHtml(a.slug)}">
 <label class="confirm"><input type="checkbox" name="confirm" value="yes" required> 我确认彻底删除，<strong>不可恢复</strong></label>
 <button type="submit" class="btn-danger">彻底删除</button></form>
-</td></tr>`,
+</div></div>`,
   )
   .join('')}
-</tbody></table>`
+</div>`
     : ''
 
   const uploadBox =
@@ -1494,9 +1510,8 @@ ${trash
     `<h1>文章</h1>
 <p class="admin-hint">这一版能写、能改、能发。回收站与修订历史在下一票。</p>
 ${uploadBox}
-<p class="form-actions"><a href="/admin/articles?edit=">＋ 新建一篇</a></p>
-<table class="admin-table"><thead><tr><th>状态</th><th>标题 / slug</th><th>日期</th><th>标签</th></tr></thead>
-<tbody>${rows}</tbody></table>
+<p class="form-actions"><a class="btn btn-primary" href="/admin/articles?edit=">＋ 新建一篇</a></p>
+<div class="inset-list">${rows}</div>
 ${trashSection}
 ${editForm}
 ${revisions}`
