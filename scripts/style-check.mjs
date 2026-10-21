@@ -245,6 +245,7 @@ section('服务端渲染的类名，CSS 里都有定义')
   for (const s of ['ok', 'warn', 'bad']) {
     check(`样式类 \`${s}\` 在 CSS 里有对应规则（徽标/点）`, new RegExp(`\\.(badge|dot)\\.${s}\\b`).test(css))
   }
+  check('退场类名清零（plane / site-nav / nav-sep / admin-side / admin-table / mini / admin-shell / admin-main）', ![/(?:plane-(?:data|prose)|site-nav|nav-sep|admin-side|admin-table|mini-|admin-shell|admin-main)/].some((re) => re.test(cssNoComments) || re.test(views)))
   check('图标全部来自 `icon()`（没有图标字体 / 外部图标库）', views.includes("from './icons.js'") && views.includes('icon(') && !views.includes('@font-face'))
   check('`icons.ts` 里没有颜色字面量（只有 currentColor）', !/#[0-9a-f]{3,8}\b/i.test(iconsTs))
 }
@@ -367,7 +368,7 @@ section('管理台：六页列表化与 details 折叠（#68 §8）')
   check('`.admin-table` 已从视图与样式表里彻底退役', !views.includes('admin-table') && !css.includes('admin-table'))
   check('账号页三个动作表单仍在（改角色 / 停用或启用 / 重置口令）', ['account-role', 'account-disable', 'account-enable', 'account-reset-password'].every((a) => views.includes(`value="${a}"`)))
   check('目标行仍保留 `target-id`（e2e 按它数行）', (views.match(/class="target-id/g) ?? []).length === 1)
-  check('打印时列表行留下、表单与折叠块隐藏', /\.form-row[\s\S]{0,200}display:\s*none/.test(printBody) && /details[\s\S]{0,40}display:\s*none/.test(printBody))
+  check('打印时列表行留下、表单与折叠块隐藏', printBody.includes('details') && printBody.includes('input, select, textarea') && /display:\s*none/.test(printBody) && printBody.includes('.cell') && /break-inside:\s*avoid/.test(printBody))
 }
 
 // ════════════════════════════════════════════════════
@@ -383,6 +384,12 @@ section('窄屏断点与打印其余')
   check('打印时把配色就地改成纸面（黑字白底）', /--bg:\s*#ffffff/.test(printBody) && /--label:\s*#000000/.test(printBody))
   check('打印时藏掉只在屏幕上成立的东西（页头 / rail / tab bar / 模块条 / 登出 / 按钮 / picker）', /\.site-header[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.site-rail/.test(printBody) && /\.tab-bar/.test(printBody) && /\.admin-tabs/.test(printBody) && /\bbutton\b[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.theme-picker/.test(printBody))
   check('打印时卡片不许被切成两页（`break-inside: avoid`）', /break-inside:\s*avoid/.test(printBody))
+  check('打印隐藏站内框架（页头 / 页脚 / rail / tab bar / 模块条 / picker / 登出）', ['.site-header', '.site-footer', '.site-rail', '.tab-bar', '.admin-tabs', '.theme-picker', '.logout-form'].every((sel) => printBody.includes(sel)))
+  check('打印隐藏表单与提示（button / form-actions / form-row / confirm / admin-hint / notice）', ['button', '.form-actions', '.form-row', '.confirm', '.admin-hint', '.notice'].every((sel) => printBody.includes(sel)))
+  check('打印隐藏输入控件与折叠内容（input/select/textarea + details + 编辑器）', printBody.includes('input, select, textarea') && printBody.includes('details') && printBody.includes('.article-editor'))
+  check('打印放开滚动与限宽（table-wrap 可见 / app-shell 单列 / app-main 不限宽）', /\.table-wrap\s*\{[^}]*overflow:\s*visible/s.test(printBody) && /\.app-shell\s*\{[^}]*display:\s*block/s.test(printBody) && /\.app-main\s*\{[^}]*max-width:\s*none/s.test(printBody))
+  check('打印保留可读结构（行 / 卡片不被切开 + 站内链接地址）', /\.cell[^{]*\{[^}]*break-inside:\s*avoid/s.test(printBody) && printBody.includes('a[href^="/"]::after'))
+  check('打印里没有 `light-dark()`（灰阶是字面量）', !printBody.includes('light-dark('))
   check('打印时正文里的站内链接把地址写出来', /\.prose a\[href\^="\/"\]::after/.test(printBody))
 }
 

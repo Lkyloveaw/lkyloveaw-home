@@ -780,7 +780,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   }
   .site-header, .site-footer, .site-rail, .tab-bar, .admin-tabs, .logout-form, .live-tag,
   .form-actions, .form-row, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker, .back,
-  details, .article-editor, .editor-toolbar { display: none !important; }
+  details, .article-editor, .editor-toolbar,
+  input, select, textarea { display: none !important; }
   .wrap { max-width: none; padding: 0; }
   /* 导航藏掉之后，外壳退回单列（否则打印出来的正文仍只占右边那一列） */
   .app-shell { display: block; }
@@ -788,7 +789,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   .prose { max-width: none; }
   /* 纸上滚不了：滚动容器必须放开，否则宽表会被裁掉右半边 */
   .prose .table-wrap { overflow: visible; }
-  .card, .stat, .target-card, .post-card, .target-row, .cell-strip, .chart { break-inside: avoid; }
+  .card, .stat, .target-card, .post-card, .cell, .inset-list > *, .cell-strip, .chart { break-inside: avoid; }
   .post-card, .card, .stat, .target-card { border: 1px solid #bbbbbb; }
   a { color: #000000; text-decoration: underline; }
   /* 打印出来的纸上点不开链接，所以把站内地址显式写出来（只对正文里的链接）。 */

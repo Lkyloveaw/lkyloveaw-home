@@ -59,14 +59,14 @@
 
 | 批次 | 票 | 交付（用户看得见） | 主要落点 | `style-check` 目标 | `e2e` |
 | --- | --- | --- | --- | --- | --- |
-| ① 基座 | [#70](https://github.com/Lkyloveaw/lkyloveaw-home/issues/70) | 颜色、字号、深浅三态、打印灰阶与图案 | `style.css` `:root` + 打印块；`views.ts` 两外壳 `<head>`/picker；`style-check` token/对比度/排版；`e2e` 主题组 | **≈134** | 524 → ~536（改写 7 + 新增 ~12） |
-| ② 外壳与导航 | [#71](https://github.com/Lkyloveaw/lkyloveaw-home/issues/71) | 左侧 rail、手机 tab bar、管理模块条、不透明页头、按钮/列表基元、登录页、图标 | `views.ts` `layout()`/导航/登录；`icons.ts`；`style.css` 外壳 + 基元；`style-check` 导航段；`e2e` 32 条改写 | **≈142** | ~544（+rail/tab/403 ~8） |
-| ③ 公开面 | [#72](https://github.com/Lkyloveaw/lkyloveaw-home/issues/72) | 首页 / 分享 / 标签 / 文章 / 关于 / 空态 | `views.ts` 五个页面函数；`style.css` 阅读面；`style-check` 类名与 overlay | **≈145** | ~546 |
-| ④ 面板 | [#73](https://github.com/Lkyloveaw/lkyloveaw-home/issues/73) | 统计条、目标卡、格带、曲线、异常列表 | `views.ts` `statusPage`；`style.css` 面板；`panel-check` 必须仍绿 | **≈147** | ~547 |
-| ⑤ 管理台 | [#74](https://github.com/Lkyloveaw/lkyloveaw-home/issues/74) | 六页列表化、折叠表单、确认框、notice、编辑器 | `views.ts` 六个管理页 + 编辑器；`style.css`；`style-check` 管理台结构 8 条 | **≈151** | ~549（写路径全回归） |
-| ⑥ 收口 | [#75](https://github.com/Lkyloveaw/lkyloveaw-home/issues/75) | 打印降级、旧类名清零、截图与最终数字 | `style.css` print；`style-check` 隐藏清单；docs 回填 | **≈151** | 最终数登记 |
+| ① 基座 | [#70](https://github.com/Lkyloveaw/lkyloveaw-home/issues/70) | 颜色、字号、深浅三态、打印灰阶与图案 | `style.css` `:root` + 打印块；`views.ts` 两外壳 `<head>`/picker；`style-check` token/对比度/排版；`e2e` 主题组 | **140**（目标 ≈134） | **528**（旧 524） |
+| ② 外壳与导航 | [#71](https://github.com/Lkyloveaw/lkyloveaw-home/issues/71) | 左侧 rail、手机 tab bar、管理模块条、不透明页头、按钮/列表基元、登录页、图标 | `views.ts` `layout()`/导航/登录；`icons.ts`；`style.css` 外壳 + 基元；`style-check` 导航段；`e2e` 32 条改写 | **147**（目标 ≈142） | **531** |
+| ③ 公开面 | [#72](https://github.com/Lkyloveaw/lkyloveaw-home/issues/72) | 首页 / 分享 / 标签 / 文章 / 关于 / 空态 | `views.ts` 五个页面函数；`style.css` 阅读面；`style-check` 类名与 overlay | **155**（目标 ≈145） | **533** |
+| ④ 面板 | [#73](https://github.com/Lkyloveaw/lkyloveaw-home/issues/73) | 统计条、目标卡、格带、曲线、异常列表 | `views.ts` `statusPage`；`style.css` 面板；`panel-check` 必须仍绿 | **157**（目标 ≈147） | **534** |
+| ⑤ 管理台 | [#74](https://github.com/Lkyloveaw/lkyloveaw-home/issues/74) | 六页列表化、折叠表单、确认框、notice、编辑器 | `views.ts` 六个管理页 + 编辑器；`style.css`；`style-check` 管理台结构 8 条 | **164**（目标 ≈151） | **536**（写路径全回归） |
+| ⑥ 收口 | [#75](https://github.com/Lkyloveaw/lkyloveaw-home/issues/75) | 打印降级、旧类名清零、截图与最终数字 | `style.css` print；`style-check` 隐藏清单；docs 回填 | **171**（目标登记 ≈151） | **536**（最终数） |
 
-> 项数是**目标**，落地时以脚本输出为准；纪律是**只许升不许降**（明确退役的断言必须在票面写清是哪几条、为什么）。
+> 上表是**实测**（#75 收口时回填）。纪律是**只许升不许降**；实际普遍高于目标，是因为对比度、打印隐藏清单、公开面与管理台结构后来拆成了更细的独立断言（例如 ⑥ 的打印检查由 1 条拆成 6 条）。最终：`style-check` **171/171**、`e2e` **536/536**、`verify` **exit 0**。
 > `e2e` 的总数是运行时的 `results.length`，不同批的拆分颗粒度会让它 ±3。
 
 ---

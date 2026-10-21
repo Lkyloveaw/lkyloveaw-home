@@ -793,6 +793,8 @@ map Notes 第 9 条要求「渐进披露：默认摘要、详情展开」。本�
 | 窄屏 / 打印其余 | 10 | **≈7** | 560 存在 + 表单竖排、print 存在、纸面、隐藏清单、`break-inside`、链接地址、无 `light-dark()` |
 | **合计** | **72** | **≈151** | 62 条是对比度数学（占四成）；±5 的抖动来自「拆分颗粒度」 |
 
+**实测（#75 收口回填）**：`node scripts/style-check.mjs` → **171/171**。比目标 ≈151 多 20 条，来自把「打印隐藏清单」「退场类名清零」「公开面的 inset 行/overlay」「管理台六页结构」拆成独立断言（只增不减，逐批数字见 `docs/ios-implementation-split-decision.md` §2）。`e2e` 最终 **536/536**（写路径全部动作回归），`npm run verify` **exit 0**。
+
 关键实现片段（#67 §8.2 已给；本文补三条）：
 
 ```js
@@ -892,11 +894,12 @@ T1 基座：token 17+24 / 字阶 / 打印灰阶 / boot+picker / style-check 第�
 | 断言 | §13 逐段列出 72 条的去向（保留 / 改写 / 退役 / 新增），给出目标项数公式 |
 | 原型一致 | 类名与视觉主要取自 `prototype/ios/base.css` + `a.css`（`.app-side`→`.site-rail`、`.inset-row`→`.cell` 是继承；`.sheet`→`details` 是修订，理由在 §8.9） |
 | 未验证 | 真机 Safari / Windows 的 `light-dark()` 观感、打印实际效果、窄屏目视（脚本只能证规则存在） |
+| **实测（#75）** | `style-check` **171/171** · `e2e` **536/536** · `verify` **exit 0** · 退场类名 `git grep` = **0** · 截图见 `.ios-batch{1..5}-shots/` 与 #75 的全站矩阵 |
 
 **落地时的自检命令**（谁实现谁跑）：
 
 ```bash
-node scripts/style-check.mjs          # 全绿（≈151 项）
+node scripts/style-check.mjs          # 全绿（171 项）
 node scripts/e2e-check.mjs            # 全绿（改写后的三组 + 主题组）
 git grep -n "plane-\|font-data\|font-prose\|bg-soft\|fg-faint\|admin-table\|admin-side\|nav-sep" \
   -- src public scripts                # 期望：只在注释里出现
