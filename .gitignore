@@ -27,3 +27,15 @@ npm-debug.log*
 
 # 单元断言的沙箱目录（scripts/unit-check.mjs）
 .unit-sandbox-*/
+
+# 视觉验收截图与一次性原型（本地产物，不入库；对应文档已注明）
+.ios-batch*-shots/
+.ios-final-shots/
+.prototype-ios-shots/
+.theme-preview-shots/
+.t4-shots/
+prototype/
+.tmp-t4-shots.mjs
+
+# DSH 会话的进度与临时目录
+.dsh-progress/

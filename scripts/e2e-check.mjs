@@ -75,13 +75,16 @@ const postForm = async (path, opts = {}) => {
  */
 const csrfFor = (cookie) => csrfToken(SECRET, cookie.replace(/^session=/, ''))
 
-// ── 导航断言的小工具（全站 rail / 管理组 / 当前项 / tab bar），多个块共用 ──
+// ── 导航断言的小工具（公开顶栏 / 文章侧栏 / 管理 rail / 当前项 / 抽屉），多个块共用 ──
 const railOf = (html) => (html.match(/<nav class="site-rail"[\s\S]*?<\/nav>/) ?? [''])[0]
 const adminGroupOf = (rail) => (rail.match(/<span class="rail-group-label">管理<\/span>[\s\S]*$/) ?? [''])[0]
 const currentIn = (nav) => [...nav.matchAll(/<a[^>]*href="([^"]+)"[^>]*aria-current="page"/g)].map((m) => m[1])
 const currentOf = (html) => currentIn(adminGroupOf(railOf(html)))
-const tabOf = (html) => (html.match(/<nav class="tab-bar"[\s\S]*?<\/nav>/) ?? [''])[0]
-const tabItems = (html) => (tabOf(html).match(/class="tab-item"/g) ?? []).length
+const topNavOf = (html) => (html.match(/<nav class="top-nav"[\s\S]*?<\/nav>/) ?? [''])[0]
+const docsSideOf = (html) => (html.match(/<nav class="docs-side"[\s\S]*?<\/nav>/) ?? [''])[0]
+const currentInTopNav = (html) => currentIn(topNavOf(html))
+const drawerOf = (html) => (html.match(/<details class="nav-drawer"[\s\S]*?<\/details>/) ?? [''])[0]
+const drawerLinks = (html) => (drawerOf(html).match(/<a\b/g) ?? []).length
 
 // 准备一个独立的临时数据目录与目标清单
 const tmpData = path.join(ROOT, '.e2e-tmp')
@@ -486,7 +489,10 @@ try {
     {
       const panel = await authed('/status')
       check('注入面6 面板：失败原因可见（证明这条通路在用）', panel.body.includes('target-error') || panel.body.includes('超时'))
-      check('注入面6 面板：错误文案里没有可执行标记', !/onerror=alert/.test(panel.body))
+      // 侧栏现在会在 /status 上列出同名文章，`onerror=alert` 会以**转义文本**出现；
+      // 要断言的是「没有可执行的标签」，不是「页面上没有这串字符」。
+      check('注入面6 面板：错误文案里没有可执行标记', !/<img[^>]*onerror=alert/.test(panel.body))
+      check('注入面6 面板：侧栏里的同名载荷是转义文本（证明不是恒真）', panel.body.includes('&lt;img src=x onerror=alert(2)&gt;'))
     }
 
     // ── 注入面 7：站点标题/描述（来自环境变量 SITE_TITLE）──
@@ -610,7 +616,7 @@ try {
       csrf: csrfFor(sessionCookie),
     })
     const newCookieHeader = res.setCookie
-    check('改密成功（200）', res.status === 200, `got ${res.status}`)
+    check('改密成功（302 PRG）', res.status === 302 && res.location === '/account?notice=password-changed', `got ${res.status} ${res.location}`)
     check('改密后重新下发了 cookie（自己不掉线）', /session=/.test(newCookieHeader), newCookieHeader.slice(0, 30))
     const rotated = newCookieHeader ? newCookieHeader.split(';')[0] : sessionCookie
 
@@ -628,6 +634,59 @@ try {
     const newPassLogin = await postLogin(TEST_USER, NEW_PASS)
     check('改密后新口令可以登录', newPassLogin.status === 302, `got ${newPassLogin.status}`)
     sessionCookie = newPassLogin.setCookie.split(';')[0]
+  }
+
+  // ══════════════════════════════════════════════════════════
+  console.log('\n[我的账户 / 用户菜单（#87）：胶囊 · 身份 · 主题 · 改密 PRG]')
+  // ══════════════════════════════════════════════════════════
+  {
+    const page = await get('/account', { cookie: sessionCookie })
+    check('登录后 GET /account → 200', page.status === 200, `got ${page.status}`)
+    check(
+      '账户页只有顶栏：无 docs-side / site-rail，顶栏零当前项',
+      !page.body.includes('class="docs-side"') &&
+        !page.body.includes('class="site-rail"') &&
+        currentInTopNav(page.body).length === 0,
+    )
+    check(
+      '账户页表单：current / next / confirm + csrf',
+      /<form[^>]*class="account-form"[^>]*action="\/password"/.test(page.body) &&
+        ['name="current"', 'name="next"', 'name="confirm"', 'name="csrf"'].every((x) => page.body.includes(x)),
+    )
+    check('账户页身份：e2euser · 只读', page.body.includes('e2euser') && page.body.includes('>只读<'))
+    check(
+      '胶囊 / 面板 / 修改口令 / 主题 / 登出都在',
+      ['class="user-menu"', 'class="user-pill"', 'class="user-panel"', 'href="/account"', 'data-theme-select', 'class="logout-form"'].every((x) => page.body.includes(x)),
+    )
+    check('只读菜单不渲染管理后台', !page.body.includes('href="/admin"'))
+    check('账户页没有第二个主题入口（菜单里 1 个）', page.body.split('<select data-theme-select aria-label="主题">').length === 2)
+
+    const bad = await postForm('/password', {
+      cookie: sessionCookie,
+      form: { current: 'wrong-password', next: NEW_PASS, confirm: NEW_PASS },
+      csrf: csrfFor(sessionCookie),
+    })
+    check(
+      '当前口令错 → 400 回账户页 + 错误文案（口令不回填）',
+      bad.status === 400 && bad.body.includes('class="account-form"') && /当前口令不正确/.test(bad.body) && !bad.body.includes('name="current" value='),
+      `got ${bad.status}`,
+    )
+    const notice = await get('/account?notice=password-changed', { cookie: sessionCookie })
+    check('成功 notice = 口令已更新', notice.body.includes('口令已更新。其他设备上的登录已失效。'))
+    const unknown = await get('/account?notice=evil', { cookie: sessionCookie })
+    check('未知 notice 不渲染（闭集）', !unknown.body.includes('口令已更新。'))
+
+    const loginNext = await get('/login?next=%2Faccount')
+    check('登录页保留 next=/account（KNOWN_PAGES 生效）', loginNext.body.includes('value="/account"'))
+    check('登录页没有用户胶囊', !loginNext.body.includes('class="user-menu"'))
+    const back = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/account' } })
+    check('登录后回跳 /account', back.status === 302 && back.location === '/account', `${back.status} ${back.location}`)
+    const unauth = await get('/account')
+    check(
+      '未登录 GET /account → 302 到 /login?next=/account',
+      unauth.status === 302 && unauth.location.includes('next=%2Faccount'),
+      `${unauth.status} ${unauth.location}`,
+    )
   }
 
   // ══════════════════════════════════════════════════════════
@@ -931,7 +990,7 @@ try {
         form: { current: NEW_PASS, next: NEW_PASS, confirm: NEW_PASS },
         csrf: oldToken,
       })
-      check('前提：改密成功', changed.status === 200, `got ${changed.status}`)
+      check('前提：改密成功（302 PRG）', changed.status === 302 && changed.location === '/account?notice=password-changed', `got ${changed.status} ${changed.location}`)
       const cookieD = changed.setCookie.split(';')[0]
       check(
         '**改密成功后，旧页面那枚 token → 403**（会话重签，token 随之全变）',
@@ -951,7 +1010,7 @@ try {
             form: { current: NEW_PASS, next: NEW_PASS, confirm: NEW_PASS },
             csrf: csrfFor(cookieD),
           })
-        ).status === 200,
+        ).status === 302,
       )
     }
   }
@@ -1026,6 +1085,10 @@ try {
 
     const overview = await get('/admin', { cookie: adminCookie })
     check('管理员 GET /admin → 200', overview.status === 200, `got ${overview.status}`)
+    check(
+      '管理员胶囊：身份行「管理员」+ 管理后台入口',
+      overview.body.includes('class="user-menu"') && overview.body.includes('>管理员<') && overview.body.includes('>管理后台<'),
+    )
     check('管理员看得到导航里的「管理」组', overview.body.includes('rail-group-label">管理<'))
     check('「概览」被标成当前页（aria-current）', /<a[^>]*href="\/admin"[^>]*aria-current="page"/.test(overview.body))
     check('概览页有四块摘要卡', (overview.body.match(/class="stat( stat-link)?"/g) || []).length >= 4)
@@ -1092,35 +1155,56 @@ try {
 
     const roTargets = await get('/admin/targets', { cookie: roCookie })
     check(
-      '只读 GET /admin/targets → 403；页面上有 rail，但**没有**管理组（403 不是管理台的一部分）',
-      roTargets.status === 403 && roTargets.body.includes('class="site-rail"') && !roTargets.body.includes('rail-group-label">管理<'),
+      '只读 GET /admin/targets → 403；403 只有顶栏，没有 rail / docs-side，零当前项',
+      roTargets.status === 403 &&
+        roTargets.body.includes('class="top-nav"') &&
+        !roTargets.body.includes('class="site-rail"') &&
+        !roTargets.body.includes('class="docs-side"') &&
+        roTargets.body.includes('class="user-menu"') &&
+        currentInTopNav(roTargets.body).length === 0,
       `got ${roTargets.status}`,
     )
 
+    // 公开页：顶栏四项 + docs-side；当前项在顶栏；管理 rail 只属于管理台。
+    const postsPageForSidebar = await get('/posts', { cookie: adminCookie })
+    const publicPostCount = (postsPageForSidebar.body.match(/class="cell post-card"/g) ?? []).length
     for (const p of ['/', '/status', '/about', '/posts']) {
       const page = await get(p, { cookie: adminCookie })
-      const rail = railOf(page.body)
+      const top = topNavOf(page.body)
+      const side = docsSideOf(page.body)
+      const sideLinks = (side.match(/<a\b/g) ?? []).length
       check(
-        `${p}：公开页也有 rail（站点组 4 + 管理组 6 = 10 条）`,
-        page.status === 200 && (rail.match(/class="rail-link/g) ?? []).length === 10,
-        `links=${(rail.match(/class="rail-link/g) ?? []).length}`,
+        `${p}：公开页有顶栏四项 + 文章侧栏（与 /posts 已发布数一致），没有管理 rail`,
+        page.status === 200 &&
+          (top.match(/<a\b/g) ?? []).length === 4 &&
+          sideLinks === publicPostCount &&
+          !page.body.includes('class="site-rail"') &&
+          !page.body.includes('rail-group-label">管理<'),
+        `top=${(top.match(/<a\b/g) ?? []).length} side=${sideLinks} posts=${publicPostCount}`,
       )
     }
-
     const roHomeForRail = await get('/', { cookie: roCookie })
     check(
-      '只读用户：rail 只有站点组 4 项（没有管理组）',
-      (railOf(roHomeForRail.body).match(/class="rail-link/g) ?? []).length === 4 && !roHomeForRail.body.includes('rail-group-label">管理<'),
+      '只读用户：顶栏四项 + 文章侧栏；没有管理 rail',
+      (topNavOf(roHomeForRail.body).match(/<a\b/g) ?? []).length === 4 &&
+        (docsSideOf(roHomeForRail.body).match(/<a\b/g) ?? []).length === publicPostCount &&
+        !roHomeForRail.body.includes('class="site-rail"'),
     )
     check(
       '公开页的当前项恰好一个且指向本页（`/status`）',
-      currentIn(railOf((await get('/status', { cookie: adminCookie })).body)).join(',') === '/status',
+      currentInTopNav((await get('/status', { cookie: adminCookie })).body).join(',') === '/status',
     )
 
-    // 手机：同源的 tab bar（管理员 5 项 / 只读 4 项）+ 管理台模块条
+    // 手机：公开页抽屉四项 + 文章索引；管理台抽屉四项；没有底部 tab bar
+    const publicHome = await get('/', { cookie: adminCookie })
+    const adminTargets = await get('/admin/targets', { cookie: adminCookie })
     check(
-      'tab bar 与 rail 同源：管理员 5 项、只读 4 项',
-      tabItems((await get('/', { cookie: adminCookie })).body) === 5 && tabItems(roHomeForRail.body) === 4,
+      '抽屉：公开页四项 + 文章索引，管理台四项；没有 tab bar',
+      drawerLinks(publicHome.body) === 4 + publicPostCount &&
+        drawerLinks(adminTargets.body) === 4 &&
+        !publicHome.body.includes('class="tab-bar"') &&
+        !adminTargets.body.includes('class="tab-bar"'),
+      `public=${drawerLinks(publicHome.body)} admin=${drawerLinks(adminTargets.body)}`,
     )
     check(
       '管理台页有模块条 `.admin-tabs`，公开页没有',
@@ -2070,10 +2154,14 @@ try {
         conn.close()
       }
     }
-    /** 页面上「这个用户名」附近的那一段 HTML（判它的角色 / 状态用）。 */
+    /** 页面上「这个用户名」所在的账号行；顶栏胶囊也会出现用户名，所以按 cell-title 锚定。 */
     const rowOf = (html, username) => {
-      const i = html.indexOf(username)
-      return i < 0 ? '' : html.slice(i, i + 700)
+      const marker = `<span class="cell-title">${username}</span>`
+      const i = html.indexOf(marker)
+      if (i < 0) return ''
+      const start = html.lastIndexOf('<div class="cell-stack">', i)
+      const next = html.indexOf('<div class="cell-stack">', i)
+      return html.slice(start >= 0 ? start : i, next >= 0 ? next : i + 700)
     }
 
     // ── 前提：页能开、领域词渲染、自己的行不给按钮 ──
@@ -2377,18 +2465,24 @@ try {
 
     const roP = await postForm('/login', { form: { username: TEST_USER, password: NEW_PASS, next: '/' } })
     const roHome = await get('/', { cookie: roP.setCookie.split(';')[0] })
-    // 站内框架：一套数据源，两处呈现（桌面 rail / 手机 tab bar）；当前项判据只有 aria-current
+    // 站内框架：公开页顶栏 + docs-side；管理台顶栏 + rail；没有 tab bar
     check(
-      '所有页面都带一条 rail 与一个 tab bar（同一份数据源的两处呈现）',
-      [home, statusPage, posts, about, adminPage].every((r) => r.body.includes('class="site-rail"') && r.body.includes('class="tab-bar"')),
+      '公开页有顶栏 + docs-side；管理台有顶栏 + site-rail；没有 tab bar',
+      [home, statusPage, posts, about].every((r) => r.body.includes('class="top-nav"') && r.body.includes('class="docs-side"')) &&
+        adminPage.body.includes('class="top-nav"') &&
+        adminPage.body.includes('class="site-rail"') &&
+        [home, statusPage, posts, about, adminPage].every((r) => !r.body.includes('class="tab-bar"')),
     )
+    const firstPostPath = (posts.body.match(/href="(\/posts\/[^"]+)"/) ?? [])[1]
+    const articlePage = firstPostPath ? await get(firstPostPath, { cookie: adminP }) : null
     check(
-      '当前项在每个页面的 rail 里恰好一个（`aria-current="page"`）',
-      [home, statusPage, posts, about, adminPage].every((r) => currentIn(railOf(r.body)).length === 1),
-    )
-    check(
-      '管理员在管理台页面看得到 tab bar 的「管理」项（且它是唯一的当前项）',
-      tabOf(adminPage.body).includes('<span>管理</span>') && (tabOf(adminPage.body).match(/aria-current="page"/g) ?? []).length === 1,
+      '公开页顶栏当前项恰好 1；文章页 docs-side 再 1；管理台 rail 当前项 1',
+      [home, statusPage, posts, about].every((r) => currentInTopNav(r.body).length === 1) &&
+        articlePage !== null &&
+        currentInTopNav(articlePage.body).length === 1 &&
+        currentIn(docsSideOf(articlePage.body)).length === 1 &&
+        currentOf(adminPage.body).length === 1,
+      `article=${firstPostPath ?? 'none'}`,
     )
     // 公开面（#68 §6 / #72）：文章列表是 inset 列表的一行，标签条是横向 chip row
     check('首页：最近分享是 inset 列表（`.inset-list.post-list` > `.cell.post-card`）', /class="inset-list post-list"/.test(home.body) && /class="cell post-card"/.test(home.body))
@@ -2412,7 +2506,7 @@ try {
     check('boot 脚本在 stylesheet 之前（layout 外壳）', home.body.indexOf("localStorage.getItem('theme')") > 0 && home.body.indexOf("localStorage.getItem('theme')") < home.body.indexOf('/style.css'))
     check('boot 脚本在 stylesheet 之前（登录外壳）', login.body.indexOf("localStorage.getItem('theme')") > 0 && login.body.indexOf("localStorage.getItem('theme')") < login.body.indexOf('/style.css'))
     const picker = '<select data-theme-select aria-label="主题">'
-    check('页头与登录页各有一个三态 picker（三项 + 中文标签）', home.body.split(picker).length === 2 && login.body.split(picker).length === 2 && ['system', 'light', 'dark'].every((v) => home.body.includes('<option value="' + v + '">')))
+    check('用户菜单与登录页各有一个三态 picker（三项 + 中文标签）', home.body.split(picker).length === 2 && login.body.split(picker).length === 2 && ['system', 'light', 'dark'].every((v) => home.body.includes('<option value="' + v + '">')))
     check('SSR 默认「跟随系统」：`<html>` 上没有 `data-theme`', !home.body.includes('data-theme=') && !login.body.includes('data-theme='))
     const noScript = '<noscript><style>[data-theme-select] { display: none }</style></noscript>'
     check('无 JS 时 picker 隐藏（两个外壳都有 `<noscript>` 规则）', home.body.split(noScript).length === 2 && login.body.split(noScript).length === 2)

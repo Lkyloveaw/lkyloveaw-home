@@ -7,7 +7,7 @@ import type { Post, PostMeta } from './content.js'
 import type { ProbeTarget } from './config.js'
 import type { TargetStats, TimelinePoint, OverviewPoint, ProbeResult, LatencyPoint } from './store.js'
 import { latencyChart, uptimeChart } from './charts.js'
-import { currentCsrfToken, currentIsAdmin } from './csrf.js'
+import { currentCsrfToken, currentIsAdmin, currentUserName } from './csrf.js'
 import { MIN_PASSWORD_LENGTH } from './users.js'
 import { icon, type IconName } from './icons.js'
 
@@ -69,24 +69,32 @@ export function formatUptime(uptime: number | null): string {
  */
 export type AdminSection = 'overview' | 'targets' | 'accounts' | 'backups' | 'settings' | 'articles'
 
+export interface PublicSidebar {
+  posts: Array<{ slug: string; title: string }>
+  currentSlug?: string
+}
+
 export interface LayoutOptions {
   title: string
   description: string
-  /** 高亮哪个导航项。**可省**：403 这类页面不属于任何一个导航项。 */
-  active?: 'home' | 'posts' | 'status' | 'about' | 'admin'
+  /** 高亮哪个公开导航项。管理台 / 403 这类页面不属于任何一个公开项。 */
+  active?: 'home' | 'posts' | 'status' | 'about'
   /**
-   * 管理台的哪个模块。**只有它存在时才长侧栏** —— 首页 / 面板 / 403 / 登录页都不传，
-   * 所以那些页面的渲染结果**逐字节不变**（「侧栏只在管理台内部」不是靠自觉，是靠这个分支）。
-   * ⚠ 忘了传的后果是「这一页没有侧栏」：肉眼可见，且 e2e 逐路由断言「侧栏里恰好一项高亮且指向当前路径」。
+   * 管理台的哪个模块。**只有它存在时才长管理 rail**；公开页用 sidebar，403/404 两者都空。
    */
   adminSection?: AdminSection
+  /**
+   * 公开文章侧栏。公开六页传数据；管理台 / 403 / 404 显式传 null。
+   * 必填是为了让 13 个调用点少传一个时直接编译失败，而不是悄悄渲染成没有侧栏。
+   */
+  sidebar: PublicSidebar | null
   body: string
   bodyClass?: string
 }
 
 /**
  * 主题三态（#67）：`color-scheme` 是**唯一**开关，三态只切它、不复制 token。
- * 这段控件在页头与登录页各出现一次（`[data-theme-select]` 恰好 2 处）。
+ * 这段控件在用户菜单与登录页各出现一次（`[data-theme-select]` 恰好 2 处）。
  */
 function themePicker(): string {
   return `<label class="theme-picker"><span class="sr">主题</span><select data-theme-select aria-label="主题">
@@ -107,12 +115,9 @@ function themeScript(): string {
 }
 
 /**
- * 站内导航的**唯一数据源**（#68 §5）：桌面 rail 与手机 tab bar 都从这里渲染，
+ * 公开面导航的**唯一数据源**（#86）：桌面顶栏与手机抽屉都从这里渲染，
  * 所以「哪几项、什么顺序、当前项怎么标」只有一份。
- *
- * 「管理」项只对管理员渲染（`docs/admin-console-ia-decision.md` §2）：只读用户看不到入口，
- * 而不是看到一个点了就 403 的项 —— 那等于每次点都吃一次错。
- * 角色从请求上下文读（渲染层不该被迫多接一个参数），见 `csrf.ts` 的 `currentIsAdmin()`。
+ * 管理台的模块走 ADMIN_GROUPS，不走这里；管理入口只在用户菜单（T3）。
  */
 interface NavItem {
   key: NonNullable<LayoutOptions['active']>
@@ -127,7 +132,6 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'status', href: '/status', label: '系统可用性', icon: 'pulse' },
   { key: 'about', href: '/about', label: '关于', icon: 'info' },
 ]
-const ADMIN_ITEM: NavItem = { key: 'admin', href: '/admin', label: '管理', icon: 'sliders' }
 
 /**
  * 管理台的模块分组（`docs/admin-console-sidebar-decision.md` §2）：分组与顺序写死在这里。
@@ -155,31 +159,88 @@ function railLink(href: string, label: string, iconName: IconName | null, curren
   }>${iconName ? icon(iconName) : ''}<span>${escapeHtml(label)}</span></a>`
 }
 
-/** 桌面：一条 rail = 站点组 +（管理员才有）管理组。 */
-function rail(active: LayoutOptions['active'], section?: AdminSection): string {
-  const site = NAV_ITEMS.map((item) => railLink(item.href, item.label, item.icon, item.key === active)).join('')
-  const admin = currentIsAdmin()
-    ? `<div class="rail-group"><span class="rail-group-label">管理</span>${ADMIN_GROUPS.map(
-        ([label, items]) =>
-          `<span class="rail-sub-label">${label}</span>${items
-            .map(([key, href, text]) => railLink(href, text, null, key === section, true))
-            .join('')}`,
-      ).join('')}</div>`
-    : ''
-  return site + admin
+/** 管理台 rail：只在 adminSection 存在时渲染；模块组来自 ADMIN_GROUPS。 */
+function adminRail(section: AdminSection): string {
+  return `<div class="rail-group"><span class="rail-group-label">管理</span>${ADMIN_GROUPS.map(
+    ([label, items]) =>
+      `<span class="rail-sub-label">${label}</span>${items
+        .map(([key, href, text]) => railLink(href, text, null, key === section, true))
+        .join('')}`,
+  ).join('')}</div>`
 }
 
-/** 手机：底部 tab bar（只读 4 项 / 管理员 5 项）——与 rail 同一张表。 */
-function tabBar(active: LayoutOptions['active']): string {
-  const items = currentIsAdmin() ? [...NAV_ITEMS, ADMIN_ITEM] : NAV_ITEMS
-  return items
-    .map(
-      (item) =>
-        `<a class="tab-item" href="${item.href}"${item.key === active ? ' aria-current="page"' : ''}>${icon(
-          item.icon,
-        )}<span>${item.label}</span></a>`,
-    )
-    .join('')
+/** 桌面顶栏：四项文字导航；当前项用 aria-current。 */
+function topNav(active?: LayoutOptions['active']): string {
+  return `<nav class="top-nav" aria-label="主导航">${NAV_ITEMS.map(
+    (item) =>
+      `<a href="${item.href}"${item.key === active ? ' aria-current="page"' : ''}>${escapeHtml(item.label)}</a>`,
+  ).join('')}</nav>`
+}
+
+/** 公开文章侧栏：只列已发布文章；当前文章 aria-current；空态一句。 */
+function docsSide(sidebar: PublicSidebar | null): string {
+  if (!sidebar) return ''
+  const list = sidebar.posts.length
+    ? `<ul class="docs-side-list">${sidebar.posts
+        .map(
+          (p) =>
+            `<li><a href="/posts/${encodeURIComponent(p.slug)}"${p.slug === sidebar.currentSlug ? ' aria-current="page"' : ''}>${escapeHtml(p.title)}</a></li>`,
+        )
+        .join('')}</ul>`
+    : '<p class="docs-side-empty">还没有已发布的文章。</p>'
+  return `<nav class="docs-side" aria-label="公开文章"><p class="docs-side-title">文章</p>${list}</nav>`
+}
+
+/** 手机抽屉：四项导航 +（公开页）文章索引；纯 <details>，无读面 JS。 */
+function drawer(sidebar: PublicSidebar | null, active?: LayoutOptions['active']): string {
+  const nav = `<nav class="drawer-nav" aria-label="主导航（手机）">${NAV_ITEMS.map(
+    (item) =>
+      `<a href="${item.href}"${item.key === active ? ' aria-current="page"' : ''}>${escapeHtml(item.label)}</a>`,
+  ).join('')}</nav>`
+  const articles = sidebar
+    ? `<div class="drawer-articles"><p class="drawer-articles-title">文章</p>${
+        sidebar.posts.length
+          ? `<ul>${sidebar.posts
+              .map(
+                (p) =>
+                  `<li><a href="/posts/${encodeURIComponent(p.slug)}"${p.slug === sidebar.currentSlug ? ' aria-current="page"' : ''}>${escapeHtml(p.title)}</a></li>`,
+              )
+              .join('')}</ul>`
+          : '<p class="docs-side-empty">还没有已发布的文章。</p>'
+      }</div>`
+    : ''
+  return `<details class="nav-drawer"><summary class="drawer-toggle" aria-label="菜单"><span class="hamburger" aria-hidden="true"></span></summary><div class="drawer-panel">${nav}${articles}</div></details>`
+}
+
+/** 右上角用户胶囊 + disclosure 面板；只有已登录时渲染。 */
+function userMenu(): string {
+  const name = currentUserName()
+  if (!name) return ''
+  const initial = [...name][0]?.toUpperCase() ?? '?'
+  const admin = currentIsAdmin()
+  const adminItem = admin ? '<a class="menu-item" href="/admin">管理后台</a>' : ''
+  return `<div class="user-menu" data-user-menu>
+  <button class="user-pill" type="button" aria-expanded="false" aria-controls="user-panel" aria-label="账户菜单：${escapeHtml(name)}" data-user-trigger>
+    <span class="avatar" aria-hidden="true">${escapeHtml(initial)}</span>
+    <span class="user-name">${escapeHtml(name)}</span>
+    <span class="chev" aria-hidden="true">${icon('chev')}</span>
+  </button>
+  <div class="user-panel" id="user-panel" data-user-panel>
+    <div class="user-identity">
+      <span class="avatar avatar-lg" aria-hidden="true">${escapeHtml(initial)}</span>
+      <span class="identity-main"><strong>${escapeHtml(name)}</strong><span class="role-tag">${admin ? '管理员' : '只读'}</span></span>
+    </div>
+    <a class="menu-item" href="/account">修改口令</a>
+    ${adminItem}
+    <div class="menu-theme"><span>主题</span>${themePicker()}</div>
+    <form class="logout-form" method="post" action="/logout">${csrfField()}<button class="menu-item" type="submit">登出</button></form>
+  </div>
+</div>`
+}
+
+/** 用户菜单的键盘增强：点击 / Escape / 点外 / focusout；无 focus trap，无 ARIA menu。 */
+function userMenuScript(): string {
+  return `<script>(()=>{const root=document.querySelector('[data-user-menu]');if(!root)return;const trigger=root.querySelector('[data-user-trigger]');const panel=root.querySelector('[data-user-panel]');if(!trigger||!panel)return;const close=()=>{root.classList.remove('is-open');trigger.setAttribute('aria-expanded','false');root.dataset.suppress=''};trigger.addEventListener('click',()=>{const open=!root.classList.contains('is-open');if(open){delete root.dataset.suppress;const drawer=document.querySelector('.nav-drawer[open]');if(drawer)drawer.removeAttribute('open');root.classList.add('is-open');trigger.setAttribute('aria-expanded','true')}else close()});document.addEventListener('click',(e)=>{if(!root.contains(e.target))close()});document.addEventListener('keydown',(e)=>{if(e.key==='Escape'&&root.contains(document.activeElement)){close();trigger.focus()}});root.addEventListener('focusout',(e)=>{if(!root.contains(e.relatedTarget)){close();setTimeout(()=>{if(!root.contains(document.activeElement))delete root.dataset.suppress},0)}});root.addEventListener('pointerleave',()=>{if(!root.contains(document.activeElement))delete root.dataset.suppress})})()</script>`
 }
 
 /** 手机：管理台的模块条（桌面由 rail 的管理组承担同一组条目）。 */
@@ -195,7 +256,11 @@ function adminTabs(section: AdminSection): string {
 export function layout(opts: LayoutOptions, site: { title: string; description: string }): string {
   // 页面自带的 bodyClass（403/404 用 `page-error`；其余页面没有额外类）。
   const bodyClass = opts.bodyClass ?? ''
-  const shellClass = opts.adminSection ? 'app-shell app-shell--admin' : 'app-shell'
+  const shellClass = opts.sidebar
+    ? 'app-shell app-shell--docs'
+    : opts.adminSection
+      ? 'app-shell app-shell--admin'
+      : 'app-shell app-shell--plain'
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -212,21 +277,23 @@ ${themeBoot()}
 <body class="${escapeHtml(bodyClass)}">
 <header class="site-header">
   <div class="header-inner">
-    <a class="brand" href="/">${escapeHtml(site.title)}</a>
-    <div class="header-actions">${themePicker()}<form class="logout-form" method="post" action="/logout">${csrfField()}<button type="submit">登出</button></form></div>
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">${icon('doc', 'brand-icon')}</span><span class="brand-name">${escapeHtml(site.title)}</span></a>
+    ${topNav(opts.active)}
+    <div class="header-actions">${drawer(opts.sidebar, opts.active)}${userMenu()}</div>
   </div>
 </header>
 <div class="${shellClass}">
-  <nav class="site-rail" aria-label="站内导航">${rail(opts.active, opts.adminSection)}</nav>
-  <main class="wrap app-main">${opts.adminSection ? adminTabs(opts.adminSection) : ''}${opts.body}</main>
+  ${opts.adminSection ? `<nav class="site-rail" aria-label="管理台导航">${adminRail(opts.adminSection)}</nav>` : ''}
+  ${docsSide(opts.sidebar)}
+  <main class="app-main">${opts.adminSection ? adminTabs(opts.adminSection) : ''}${opts.body}</main>
 </div>
-<nav class="tab-bar" aria-label="站内导航（手机）">${tabBar(opts.active)}</nav>
 <footer class="site-footer">
   <div class="wrap">
     <span>${escapeHtml(site.description)}</span>
   </div>
 </footer>
 ${themeScript()}
+${userMenuScript()}
 </body>
 </html>`
 }
@@ -270,7 +337,7 @@ export function forbiddenPage(
 <p><a href="/">回首页</a></p>`,
     },
   }[kind]
-  return layout({ title: page.title, description: site.description, body: page.body, bodyClass: 'page-error' }, site)
+  return layout({ title: page.title, description: site.description, sidebar: null, body: page.body, bodyClass: 'page-error' }, site)
 }
 
 /**
@@ -380,7 +447,7 @@ ${card('备份', backupValue, backupDetail, '/admin/backups')}
 ${card('站点设置', d.settings.title, `${d.settings.description} · 每 ${d.settings.intervalSeconds}s 探测`, '/admin/settings')}
 </div>`
 
-  return layout({ title: '管理台', description: site.description, active: 'admin', adminSection: 'overview', body }, site)
+  return layout({ title: '管理台', description: site.description, adminSection: 'overview', sidebar: null, body }, site)
 }
 
 /** 管理台目标页的一行（`docs/admin-console-ia-decision.md` §6.2）。 */
@@ -551,7 +618,7 @@ ${rows.length ? '' : '<p class="empty">库里还没有目标。用下面的表�
 ${newForm}
 ${list}`
 
-  return layout({ title: '目标 · 管理台', description: site.description, active: 'admin', adminSection: 'targets', body }, site)
+  return layout({ title: '目标 · 管理台', description: site.description, adminSection: 'targets', sidebar: null, body }, site)
 }
 
 /** 管理台设置页的一行（`docs/admin-console-ia-decision.md` §6.5）。 */
@@ -643,7 +710,7 @@ export function adminSettingsPage(
 <p class="admin-hint">这些改错了会删数据、或把人锁在外面 —— 所以它们不放进网页表单，只在这里让你一眼看到。</p>
 <dl class="inset-list kv">${envRows}</dl>`
 
-  return layout({ title: '站点设置 · 管理台', description: site.description, active: 'admin', adminSection: 'settings', body }, site)
+  return layout({ title: '站点设置 · 管理台', description: site.description, adminSection: 'settings', sidebar: null, body }, site)
 }
 
 /** 备份页的一行（`docs/admin-console-ia-decision.md` §6.4 · `docs/settings-source-decision.md` §5）。 */
@@ -740,7 +807,7 @@ ${listing}
 <p class="notice notice-warn">⚠ <strong>恢复一份旧备份会让那份备份里「当时还活着」的会话重新有效</strong>：
 <code>sessions</code> 表跟着库一起被搬回去了。恢复属于 SSH 操作，做之前想清楚这一点。</p>`
 
-  return layout({ title: '备份 · 管理台', description: site.description, active: 'admin', adminSection: 'backups', body }, site)
+  return layout({ title: '备份 · 管理台', description: site.description, adminSection: 'backups', sidebar: null, body }, site)
 }
 
 /** 账号页的一行（`docs/admin-console-ia-decision.md` §6.3）。 */
@@ -812,7 +879,7 @@ export function adminAccountsPage(
 ${roleCell}${stateCell}<span class="cell-meta">代次 ${u.tokenVersion}</span>
 </div>
 <div class="cell"><span class="cell-sub">自己的角色 / 启停不在这里改（服务端也会拒）—— 这是防自锁的第一道。
-改自己的口令请用「系统可用性」页上的那条入口（它不踢别的设备，也不需要确认框）。</span></div>
+改自己的口令请用右上角用户菜单 → 修改口令（/account）。</span></div>
 </div>`
     }
 
@@ -887,7 +954,7 @@ ${newForm}
 <h2>现有账号（${rows.length}）</h2>
 ${table}`
 
-  return layout({ title: '账号 · 管理台', description: site.description, active: 'admin', adminSection: 'accounts', body }, site)
+  return layout({ title: '账号 · 管理台', description: site.description, adminSection: 'accounts', sidebar: null, body }, site)
 }
 
 export interface LoginPageOptions {  /** 校验失败时显示的错误（已由调用方决定文案，此处只负责转义与渲染）。 */
@@ -957,7 +1024,7 @@ function postCard(post: PostMeta): string {
 </article>`
 }
 
-export function homePage(posts: PostMeta[], status: StatusSummary, site: { title: string; description: string }): string {
+export function homePage(posts: PostMeta[], status: StatusSummary, site: { title: string; description: string }, sidebar: PublicSidebar): string {
   const body = `
 <section class="hero">
   <h1 class="large-title">${escapeHtml(site.title)}</h1>
@@ -978,7 +1045,7 @@ ${statusBlock(status)}
   }
 </section>`
   return layout(
-    { title: '首页', description: site.description, active: 'home', body },
+    { title: '首页', description: site.description, active: 'home', sidebar, body },
     site,
   )
 }
@@ -1051,7 +1118,7 @@ function statusBlock(summary: StatusSummary): string {
 </section>`
 }
 
-export function postsPage(posts: PostMeta[], tags: Array<{ tag: string; count: number }>, site: { title: string; description: string }, heading = '分享', activeTag?: string): string {
+export function postsPage(posts: PostMeta[], tags: Array<{ tag: string; count: number }>, site: { title: string; description: string }, sidebar: PublicSidebar, heading = '分享', activeTag?: string): string {
   const tagBar = tags.length
     ? `<div class="chip-row">${
         activeTag
@@ -1070,10 +1137,10 @@ export function postsPage(posts: PostMeta[], tags: Array<{ tag: string; count: n
       : '<p class="empty">这里还没有内容。</p>'
   }
 </section>`
-  return layout({ title: heading, description: site.description, active: 'posts', body }, site)
+  return layout({ title: heading, description: site.description, active: 'posts', sidebar, body }, site)
 }
 
-export function postPage(post: Post, site: { title: string; description: string }): string {
+export function postPage(post: Post, site: { title: string; description: string }, sidebar: PublicSidebar): string {
   const tags = post.tags
     .map((t) => `<a class="tag" href="/tags/${encodeURIComponent(t)}">${escapeHtml(t)}</a>`)
     .join('')
@@ -1087,10 +1154,10 @@ export function postPage(post: Post, site: { title: string; description: string 
   <div class="prose">${post.html}</div>
 </article>
 <p class="back"><a href="/posts">← 返回分享列表</a></p>`
-  return layout({ title: post.title, description: post.summary, active: 'posts', body }, site)
+  return layout({ title: post.title, description: post.summary, active: 'posts', sidebar, body }, site)
 }
 
-export function aboutPage(site: { title: string; description: string }): string {
+export function aboutPage(site: { title: string; description: string }, sidebar: PublicSidebar): string {
   const body = `
 <section class="section prose">
   <h1 class="large-title">关于</h1>
@@ -1117,7 +1184,7 @@ URL:  http://10.0.0.10/
   导入一次，之后改它不再有任何效果 —— 那行警告会在每次启动时提醒你。</p>
   <p>状态数据也存在同一个 SQLite 里，不用手工维护。</p>
 </section>`
-  return layout({ title: '关于', description: site.description, active: 'about', body }, site)
+  return layout({ title: '关于', description: site.description, active: 'about', sidebar, body }, site)
 }
 
 /**
@@ -1165,8 +1232,7 @@ const STATUS_CLASS: Record<string, string> = { up: 'ok', degraded: 'warn', down:
 export function statusPage(
   summary: StatusSummary,
   site: { title: string; description: string },
-  /** 一次性提示（改密成功/失败）。属「更显眼」而非核心内容，故只在需要时出现。 */
-  notice?: string,
+  sidebar: PublicSidebar | null,
 ): string {
   const groups = new Map<string, Array<{ target: ProbeTarget; stats: TargetStats; timeline: TimelinePoint[]; latency: LatencyPoint[] }>>()
   for (const item of summary.targets) {
@@ -1250,7 +1316,6 @@ export function statusPage(
     <span class="live-tag"><span class="live-dot"></span>每 ${summary.probeIntervalSeconds} 秒探测 · 每 30 秒刷新数值（曲线随页面刷新）</span>
   </div>
   <p class="lede">统计窗口：${escapeHtml(summary.windowLabel)} · 最后更新 <span class="js-generated">${escapeHtml(formatAgo(summary.generatedAt))}</span></p>
-${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
   <div class="stat-strip">
     <div class="stat"><span class="stat-num">${upNow}/${summary.targets.length}</span><span class="stat-label">当前可用</span></div>
     <div class="stat"><span class="stat-num">${formatUptime(avgUptime)}</span><span class="stat-label">平均可用率</span></div>
@@ -1268,12 +1333,40 @@ ${notice ? `  <p class="notice">${escapeHtml(notice)}</p>\n` : ''}
 </section>
 <script src="/chart-path.js" defer></script>
 <script src="/status.js" defer></script>`
-  return layout({ title: '系统可用性', description: site.description, active: 'status', body }, site)
+  return layout({ title: '系统可用性', description: site.description, active: 'status', sidebar, body }, site)
+}
+
+/** 我的账户：只顶栏、无侧栏；改自己口令的成功 / 失败都回这张页。 */
+export function accountPage(
+  opts: { notice?: string; error?: string },
+  site: { title: string; description: string },
+): string {
+  const name = currentUserName()
+  const role = currentIsAdmin() ? '管理员' : '只读'
+  const notice = opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>` : ''
+  const error = opts.error ? `<p class="notice notice-bad">${escapeHtml(opts.error)}</p>` : ''
+  const body = `<section class="account-page">
+  <h1 class="large-title">我的账户</h1>
+  <p class="lede">${escapeHtml(name)} · ${role}</p>
+  ${notice}${error}
+  <div class="account-card">
+    <h2>修改口令</h2>
+    <p class="stat-sub">改完后其他设备会立即掉线；当前浏览器会重新签发，保持登录。</p>
+    <form class="account-form" method="post" action="/password">
+      ${csrfField()}
+      <label>当前口令 <input type="password" name="current" autocomplete="current-password" required></label>
+      <label>新口令 <input type="password" name="next" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required></label>
+      <label>再输一次 <input type="password" name="confirm" autocomplete="new-password" minlength="${MIN_PASSWORD_LENGTH}" required></label>
+      <button type="submit">更新口令</button>
+    </form>
+  </div>
+</section>`
+  return layout({ title: '我的账户', description: site.description, sidebar: null, bodyClass: 'page-account', body }, site)
 }
 
 export function notFoundPage(site: { title: string; description: string }): string {
   const body = `<section class="section"><h1>404</h1><p class="empty">这个页面不存在。</p><p class="back"><a href="/">← 回首页</a></p></section>`
-  return layout({ title: '404', description: site.description, body, bodyClass: 'page-error' }, site)
+  return layout({ title: '404', description: site.description, sidebar: null, body, bodyClass: 'page-error' }, site)
 }
 
 /** 管理台文章列表里的一行。 */
@@ -1516,5 +1609,5 @@ ${trashSection}
 ${editForm}
 ${revisions}`
 
-  return layout({ title: '文章 · 管理台', description: site.description, active: 'admin', adminSection: 'articles', body }, site)
+  return layout({ title: '文章 · 管理台', description: site.description, adminSection: 'articles', sidebar: null, body }, site)
 }

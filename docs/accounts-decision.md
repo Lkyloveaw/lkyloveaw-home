@@ -179,3 +179,9 @@ CREATE TABLE IF NOT EXISTS users (
   **⚠ 已修订（[权限模型](roles-decision.md) §6）**：那条「真实需要区分的能力」出现了——**管理台**
   （只读的人不该能改目标、账号、备份、站点设置）。`users` 表**加 `role` 列**（`admin` / `readonly`）。
   本文件其余各条不受影响。
+
+## 自助改密（#87）
+
+- 登录后 `/account` 改自己的口令（当前 / 新 / 确认）；成功 302 PRG 到 `/account?notice=password-changed`，
+  当前浏览器重签、其他设备会话失效；失败 400 回账户页。
+- 管理员重置**别人**口令仍在 `/admin/accounts`；管理台账号页的自述已改为指向 `/account`。

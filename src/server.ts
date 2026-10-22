@@ -79,6 +79,7 @@ import {
 } from './article-rules.js'
 import {
   aboutPage,
+  accountPage,
   adminAccountsPage,
   adminArticlesPage,
   adminBackupsPage,
@@ -96,6 +97,7 @@ import {
   type AdminArticleListItem,
   type AdminOverview,
   type AdminRevisionItem,
+  type PublicSidebar,
   type StatusSummary,
 } from './views.js'
 
@@ -114,6 +116,11 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
  */
 function siteOf(): { title: string; description: string } {
   return { title: getSiteTitle(), description: getSiteDescription() }
+}
+
+/** 公开文章侧栏的数据：只传 slug / title；当前文章页再传 currentSlug。 */
+function sidebarOf(posts: Array<{ slug: string; title: string }>, currentSlug?: string): PublicSidebar {
+  return { posts: posts.map(({ slug, title }) => ({ slug, title })), ...(currentSlug ? { currentSlug } : {}) }
 }
 
 /**
@@ -458,7 +465,12 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     // 管理台路由也据此判资格 —— **不重复查库**（闸门那次查询已经把角色带出来了）。
     // `userId` 一并进上下文：#44 的账号页要它来判「这一行是不是你自己」，
     // 写路径把它当 `actorId` 交给 users.ts 的守卫（**不重复查库**）。
-    csrfContext.enterWith({ token: csrf, isAdmin: decision.role === 'admin', userId: decision.userId })
+    csrfContext.enterWith({
+      token: csrf,
+      isAdmin: decision.role === 'admin',
+      userId: decision.userId,
+      userName: decision.username ?? '',
+    })
   })
 
   /**
@@ -1356,55 +1368,68 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     const form = parseFormBody(req.body)
     const fail = (notice: string): string => {
       reply.code(400).type('text/html; charset=utf-8')
-      return statusPage(buildSummary(), siteOf(), notice)
+      return accountPage({ error: notice }, siteOf())
     }
 
     if (!verifyPassword(user.username, form.current ?? '')) return fail('当前口令不正确')
-    if ((form.next ?? '').length < 8) return fail('新口令至少 8 位')
+    if ((form.next ?? '').length < MIN_PASSWORD_LENGTH) return fail(`新口令至少 ${MIN_PASSWORD_LENGTH} 位`)
     if (form.next !== form.confirm) return fail('两次输入的新口令不一致')
 
     setPassword(userId, form.next!)
     // 改密已递增 token_version（其他设备全部失配掉线），
     // 这里用**新版本**重新签发，自己才不会掉线。
     setSession(reply, userId, tokenVersionOf(userId))
-    reply.type('text/html; charset=utf-8')
-    return statusPage(buildSummary(), siteOf(), '口令已更新。其他设备上的登录已失效。')
+    return reply.redirect('/account?notice=password-changed', 302)
   })
 
   // ── 页面 ────────────────────────────────────────────────
 
   app.get('/', async (_req, reply) => {
+    const all = listPublishedPosts()
     reply.type('text/html; charset=utf-8')
-    return homePage(listPublishedPosts(), buildSummary(), siteOf())
+    return homePage(all, buildSummary(), siteOf(), sidebarOf(all))
   })
 
   app.get('/posts', async (_req, reply) => {
+    const all = listPublishedPosts()
     reply.type('text/html; charset=utf-8')
-    return postsPage(listPublishedPosts(), listTags(), siteOf())
+    return postsPage(all, listTags(), siteOf(), sidebarOf(all))
   })
 
   app.get('/tags/:tag', async (req, reply) => {
     const tag = decodeURIComponent((req.params as { tag: string }).tag)
-    const posts = listPublishedPosts().filter((p) => p.tags.includes(tag))
+    const all = listPublishedPosts()
+    const posts = all.filter((p) => p.tags.includes(tag))
     reply.type('text/html; charset=utf-8')
-    return postsPage(posts, listTags(), siteOf(), `标签：${tag}`, tag)
+    return postsPage(posts, listTags(), siteOf(), sidebarOf(all), `标签：${tag}`, tag)
   })
 
   app.get('/posts/:slug', async (req, reply) => {
     // ⚠ **必须解码**，与 /tags/:tag 对齐。少了这一步，「slug 允许中文」就是假的：
     // /posts/中文slug 会 404，而库里明明有那一篇（研究 §2.2 记过这个不对称）。
+    const all = listPublishedPosts()
     const post = getPublishedPost(decodeURIComponent((req.params as { slug: string }).slug))
     if (!post) {
       reply.code(404).type('text/html; charset=utf-8')
       return notFoundPage(siteOf())
     }
     reply.type('text/html; charset=utf-8')
-    return postPage(post, siteOf())
+    return postPage(post, siteOf(), sidebarOf(all, post.slug))
+  })
+
+  /** 我的账户（#87）：登录后改自己的口令；GET 只渲染；POST 走 /password 的 PRG。 */
+  app.get('/account', async (req, reply) => {
+    const notice =
+      (req.query as { notice?: string }).notice === 'password-changed'
+        ? '口令已更新。其他设备上的登录已失效。'
+        : undefined
+    reply.type('text/html; charset=utf-8')
+    return accountPage({ notice }, siteOf())
   })
 
   app.get('/status', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return statusPage(buildSummary(), siteOf())
+    return statusPage(buildSummary(), siteOf(), sidebarOf(listPublishedPosts()))
   })
 
   /** 给前端自动刷新用的 JSON。
@@ -1416,7 +1441,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   app.get('/about', async (_req, reply) => {
     reply.type('text/html; charset=utf-8')
-    return aboutPage(siteOf())
+    return aboutPage(siteOf(), sidebarOf(listPublishedPosts()))
   })
 
   /** 健康检查：**保持匿名 200**（HEALTHCHECK / systemd 都不带凭证）。计数读库（§7），不是读启动时的那份配置。 */

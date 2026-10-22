@@ -2,11 +2,11 @@
  * 样式断言。**不过 HTTP、不起服务**：它读 `public/style.css`、`src/views.ts` 与 `public/status.js`，
  * 把三者之间的一致性钉住。
  *
- * 这一版对应「iOS 化 · 批次①：基座」（map #64 / 票 #70）：
- *  - token 从 13 色浅色单套 → **17 色 `light-dark()` + 21 个非颜色**；三态只切 `color-scheme`；
- *  - 对比度从 19 对单模式 → **19 对文字 ×2 + 12 对非文字 ×2**（#67 §7 的表）；
- *  - 排版从两套平面 → **一套 iOS 字阶**（平面与 `--font-data|prose` 全部退役）；
- *  - 打印从「保留状态色」→ **17 个灰阶 token + 状态格带图案**（#68 §11）。
+ * 这一版对应「Claude 支持中心换装 · T1 基座」（#85 / #89）：
+ *  - token：**17 色 `light-dark()` + 29 个非颜色**；三态只切 `color-scheme`；
+ *  - 对比度：**16 对文字 ×2 + 10 对非文字 ×2**（#85 §2.3）；
+ *  - 排版：**一套 Claude 字阶**（10 字号 + 4 行高；`--font-display` 只给 ≥ `--fs-title3`）；
+ *  - 打印：**17 个灰阶 token + 状态格带图案**（#85 §5）。
  *
  * ⚠ 它证明不了的事：窄屏/深色的**目视观感**、打印出来的**实际效果**、真机字体回退。
  *   这些只能靠眼睛，脚本只能保证规则存在、数值达标。
@@ -99,7 +99,8 @@ const COLOR_TOKENS = new Set([
 const NON_COLOR = new Set([
   // 形状 / 栏宽 / 字体
   'radius', 'radius-sm', 'radius-lg', 'tap', 'wrap', 'wrap-admin', 'rail-w', 'font', 'mono',
-  // iOS 字阶（10 字号 + 4 行高）
+  'font-display', 'wrap-docs', 'side-w', 'gap-docs', 'header-h',
+  // Claude 字阶（10 字号 + 4 行高）
   'fs-large', 'fs-title1', 'fs-title2', 'fs-title3', 'fs-headline',
   'fs-body', 'fs-callout', 'fs-subhead', 'fs-footnote', 'fs-caption',
   'lh-tight', 'lh-title', 'lh-ui', 'lh-prose',
@@ -117,7 +118,7 @@ const printWhole = blockWithBraces(cssNoComments, cssNoComments.lastIndexOf('@me
 const cssOutsideTokens = cssNoComments.replace(rootWhole, '').replace(printWhole, '')
 
 // ════════════════════════════════════════════════════
-section('token 表：17 色 light-dark + 21 非色，三态只切 color-scheme（#67）')
+section('token 表：17 色 light-dark + 29 非色，三态只切 color-scheme（#85）')
 // ════════════════════════════════════════════════════
 {
   const rootCount = (css.match(/:root\s*\{/g) ?? []).length
@@ -129,7 +130,7 @@ section('token 表：17 色 light-dark + 21 非色，三态只切 color-scheme�
   const colorKeys = Object.keys(tokens).filter((k) => !NON_COLOR.has(k))
   const missingNonColor = [...NON_COLOR].filter((k) => !(k in tokens))
   check('颜色 token 恰好 17 个（精确集合）', colorKeys.length === 17 && colorKeys.every((k) => COLOR_TOKENS.has(k)) && [...COLOR_TOKENS].every((k) => colorKeys.includes(k)), colorKeys.join(', '))
-  check('21 个非颜色 token 全在同一个 `:root` 里', missingNonColor.length === 0, missingNonColor.join(', '))
+  check('29 个非颜色 token 全在同一个 `:root` 里', missingNonColor.length === 0, missingNonColor.join(', '))
 
   const defs = (text) => {
     let n = 0
@@ -158,7 +159,7 @@ section('token 表：17 色 light-dark + 21 非色，三态只切 color-scheme�
 }
 
 // ════════════════════════════════════════════════════
-section('对比度：19 对文字 ×2 模式 ≥4.5、12 对非文字 ×2 模式 ≥3（#67 §7）')
+section('对比度：16 对文字 ×2 模式 ≥4.5、10 对非文字 ×2 模式 ≥3（#85 §2.3）')
 // ════════════════════════════════════════════════════
 {
   const tokens = globalThis.__rootTokens
@@ -170,7 +171,6 @@ section('对比度：19 对文字 ×2 模式 ≥4.5、12 对非文字 ×2 模式
   const TEXT_PAIRS = [
     ['label', 'bg'], ['label', 'bg-card'], ['label', 'bg-elev'], ['label', 'fill'],
     ['label-2', 'bg'], ['label-2', 'bg-card'], ['label-2', 'bg-elev'], ['label-2', 'fill'],
-    ['accent', 'bg'], ['accent', 'bg-card'], ['accent', 'bg-elev'],
     ['on-accent', 'accent'],
     ['ok', 'bg-card'], ['ok', 'bg-elev'],
     ['warn', 'bg-card'], ['warn', 'bg-elev'],
@@ -179,8 +179,13 @@ section('对比度：19 对文字 ×2 模式 ≥4.5、12 对非文字 ×2 模式
   const NON_TEXT_PAIRS = [
     ['label-3', 'bg'], ['label-3', 'bg-card'], ['label-3', 'bg-elev'], ['label-3', 'fill'],
     ['border-strong', 'bg'], ['border-strong', 'bg-card'], ['border-strong', 'bg-elev'], ['border-strong', 'fill'],
-    ['accent', 'bg'], ['accent', 'bg-card'], ['accent', 'bg-elev'], ['accent', 'fill'],
+    ['accent', 'bg'], ['accent', 'bg-card'],
   ]
+  const FORBIDDEN_ACCENT_PAIRS = [['accent', 'bg-elev'], ['accent', 'fill']]
+  check(
+    'accent 的失败对已禁用（不在 NON_TEXT_PAIRS）',
+    FORBIDDEN_ACCENT_PAIRS.every(([fg, bg]) => !NON_TEXT_PAIRS.some(([f, b]) => f === fg && b === bg)),
+  )
   const ALLOWED = {} // 空表：全部达标，不为任何一对登记例外
   for (const mode of ['light', 'dark']) {
     for (const [fgKey, bgKey] of TEXT_PAIRS) {
@@ -251,7 +256,7 @@ section('服务端渲染的类名，CSS 里都有定义')
 }
 
 // ════════════════════════════════════════════════════
-section('排版：一套 iOS 字阶（平面与两套字体已退役，#68）')
+section('排版：一套 Claude 字阶（#85 §3）')
 // ════════════════════════════════════════════════════
 {
   check('CSS 代码里没有 `plane-`（平面已退役，只许出现在注释里）', !cssNoComments.includes('plane-'))
@@ -264,7 +269,8 @@ section('排版：一套 iOS 字阶（平面与两套字体已退役，#68）')
   check('Large Title 落在页面主标题（`.hero h1` / `h1.large-title` → `--fs-large`）', /\.hero h1\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css) && /h1\.large-title\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css))
   check('Title 1 落在文章标题（`.post-header h1` → `--fs-title1`）', /\.post-header h1\s*\{[^}]*font-size:\s*var\(--fs-title1\)/s.test(css))
   check('Title 2 落在区块标题与统计数字（`.prose h2` / `.stat-num` → `--fs-title2`）', /\.prose h2\s*\{[^}]*font-size:\s*var\(--fs-title2\)/s.test(css) && /\.stat-num\s*\{[^}]*font-size:\s*var\(--fs-title2\)/s.test(css))
-  check('Title 3 落在小标题（`.prose h3` → `--fs-title3`）', /\.prose h3\s*\{[^}]*font-size:\s*var\(--fs-title3\)/s.test(css))
+  check('Title 3 落在状态页分组标题（`.group-title` → `--fs-title3`）', /\.group-title\s*\{[^}]*font-size:\s*var\(--fs-title3\)/s.test(css))
+  check('Headline 落在 `.prose h3`（18 sans，不再回到衬线 20）', /\.prose h3\s*\{[^}]*font-size:\s*var\(--fs-headline\)/s.test(css))
   check('Body 落在长文（`.prose` → `--fs-body` + `--lh-prose`）', /\.prose\s*\{[^}]*font-size:\s*var\(--fs-body\)[^}]*line-height:\s*var\(--lh-prose\)/s.test(css))
   check('Caption 落在徽标 / 标签 / 格带说明 / 图表轴（`--fs-caption`）', ['.badge', '.tag', '.cell-caption', '.chart-axis'].every((sel) => new RegExp(`${sel.replace('.', '\\.')}\\s*\\{[^}]*font-size:\\s*var\\(--fs-caption\\)`, 's').test(css)))
   check('Footnote 落在 meta / stat-sub / kv（`--fs-footnote`）', ['.post-card .meta, .post-header .meta', '.stat-sub', '.kv dd'].every((sel) => new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{[^}]*font-size:\\s*var\\(--fs-footnote\\)`, 's').test(css)))
@@ -275,6 +281,15 @@ section('排版：一套 iOS 字阶（平面与两套字体已退役，#68）')
   check('`--label-3` 只做非文字（不出现在任何带 `font-size` 的规则里）', label3WithFont === 0, `实际 ${label3WithFont} 处`)
 
   check('正文栏宽 68ch（`.prose` 用 `var(--measure-prose)`）', /\.prose\s*\{[^}]*max-width:\s*var\(--measure-prose\)/s.test(css))
+  const serifRules = cssNoComments.split('}').filter((b) => b.includes('font-family: var(--font-display)') && b.includes('font-size: var(--fs-'))
+  // 头像首字母是装饰性字形，不是标题；它是唯一允许 <21px 的衬线例外（#87 §3.1）。
+  const smallSerif = serifRules.filter((b) => !/\.avatar\b/.test(b) && /font-size:\s*var\(--fs-(headline|subhead|footnote|caption|body|callout)\)/.test(b))
+  check('--font-display 只给标题（--fs-title3 及以上；头像首字母例外）', smallSerif.length === 0, smallSerif.map((b) => b.slice(0, 60)).join(' | '))
+  check('`--font-display` 是系统衬线栈（无 @font-face / 外部字体）', /--font-display:\s*ui-serif/.test(rootBody) && !/@font-face/.test(css))
+  check('`--measure-prose` 的值是 68ch', /--measure-prose:\s*68ch/.test(rootBody))
+  check('`--radius-lg` 已收到 12px', /--radius-lg:\s*12px/.test(rootBody))
+  check('B 外壳 token：--header-h:56 / --side-w:224 / --gap-docs:28 / --wrap-docs:1360', ['header-h: 56px', 'side-w: 224px', 'gap-docs: 28px', 'wrap-docs: 1360px'].every((t) => rootBody.includes(t)))
+  check('`.dot.unknown` 有 `--label-3` 描边（不只靠 --unknown 填充）', /\.dot\.unknown\s*\{[^}]*var\(--label-3\)/s.test(css))
   check('窄栏在画布里居中（`.prose` 与 `.post` 都有 `margin-inline: auto`）', /\.prose\s*\{[^}]*margin-inline:\s*auto/s.test(css) && /\.post\s*\{[^}]*margin-inline:\s*auto/s.test(css))
   check('页脚贴底：body 是撑满一屏的 flex 列，`.app-shell` 吃掉剩余高度', /body:not\(\.login-body\)\s*\{[^}]*display:\s*flex[^}]*min-height:\s*100vh/s.test(css) && /body:not\(\.login-body\)\s*>\s*\.app-shell\s*\{[^}]*flex:\s*1 0 auto/s.test(css))
   check('登录页被排除在贴底布局之外（它自己是 100vh 居中块）', /body:not\(\.login-body\)/.test(css))
@@ -303,7 +318,7 @@ section('主题三态：boot 在 stylesheet 前，picker 两处，无 JS 时降�
 }
 
 // ════════════════════════════════════════════════════
-section('打印：17 个灰阶 token + 格带图案（#68 §11）')
+section('打印：17 个灰阶 token + 格带图案（#85 §5）')
 // ════════════════════════════════════════════════════
 {
   const printTokens = globalThis.__printTokens
@@ -322,25 +337,27 @@ section('打印：17 个灰阶 token + 格带图案（#68 §11）')
   check('`print-color-adjust: exact` 只给状态格带', /\.cell-strip i\s*\{[^}]*print-color-adjust:\s*exact/s.test(printBody) && (printBody.match(/print-color-adjust:\s*exact/g) ?? []).length === 2)
 }
 
-// ════════════════════════════════════════════════════
-section('外壳与导航：全站 rail / 手机 tab bar / 管理模块条（#68 §5）')
+/// ════════════════════════════════════════════════════
+section('外壳与导航：公开顶栏 / docs-side / 管理 rail + admin-tabs（#86）')
 // ════════════════════════════════════════════════════
 {
   const narrow = (css.match(/@media \(max-width: 720px\)\s*\{([\s\S]*?)\n\}/) ?? [, ''])[1]
-  check('`layout()` 输出 `.app-shell`，管理台页加 `--admin` 修饰', views.includes('class="${shellClass}"') && views.includes("const shellClass = opts.adminSection ? 'app-shell app-shell--admin' : 'app-shell'"))
-  check('桌面 rail 是唯一的 `<nav class="site-rail" aria-label="站内导航">`', views.includes('<nav class="site-rail" aria-label="站内导航">'))
-  check('导航只有一张数据源：`NAV_ITEMS` 4 项（首页 / 分享 / 系统可用性 / 关于）', views.includes('const NAV_ITEMS: ReadonlyArray<NavItem> = [') && ['首页', '分享', '系统可用性', '关于'].every((label) => views.includes(`label: '${label}'`)))
-  check('管理组只在 `currentIsAdmin()` 时渲染，六模块顺序写死（#59 §2）', views.includes('currentIsAdmin()') && views.includes('? `<div class="rail-group"><span class="rail-group-label">管理</span>') && ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`['${k}', '/admin`)))
-  check('管理组里有「运维」「内容」两个 sub-label', views.includes('<span class="rail-sub-label">') && views.includes("'运维',") && views.includes("['内容', [['articles'"))
-  check('当前项判据唯一：`key === active`（站点）/ `key === section`（模块）', views.includes("item.key === active ? ' aria-current=\"page\"' : ''") && views.includes("key === section ? ' aria-current=\"page\"' : ''"))
-  check('tab bar 与 rail 同源（同一张 `NAV_ITEMS` + `ADMIN_ITEM`），只读 4 / 管理员 5', views.includes('const items = currentIsAdmin() ? [...NAV_ITEMS, ADMIN_ITEM] : NAV_ITEMS'))
-  check('`.admin-tabs` 只在 `adminSection` 存在时渲染', views.includes("${opts.adminSection ? adminTabs(opts.adminSection) : ''}"))
+  check('`layout()` 三态外壳：docs / admin / plain', views.includes('class="${shellClass}"') && views.includes('opts.sidebar') && views.includes("'app-shell app-shell--docs'") && views.includes("'app-shell app-shell--admin'") && views.includes("'app-shell app-shell--plain'"))
+  check('公开顶栏是 `<nav class="top-nav" aria-label="主导航">`，四项来自 NAV_ITEMS', views.includes('<nav class="top-nav" aria-label="主导航">') && views.includes('const NAV_ITEMS: ReadonlyArray<NavItem> = ['))
+  check('公开文章侧栏是 `<nav class="docs-side" aria-label="公开文章">`', views.includes('<nav class="docs-side" aria-label="公开文章">'))
+  check('管理台 rail 是唯一 `<nav class="site-rail" aria-label="管理台导航">`', views.includes('<nav class="site-rail" aria-label="管理台导航">'))
+  check('管理 rail 六模块 + 运维 / 内容两段', ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`['${k}', '/admin`)) && views.includes("'运维',") && views.includes("['内容', [['articles'"))
+  check('管理 rail 只在 adminSection 存在时渲染', views.includes('opts.adminSection ? `<nav class="site-rail"'))
+  check('当前项：顶栏 key === active；管理 rail key === section', views.includes("item.key === active ? ' aria-current=\"page\"' : ''") && views.includes("key === section ? ' aria-current=\"page\"' : ''"))
+  check('文章侧栏当前项：p.slug === sidebar.currentSlug', views.includes("p.slug === sidebar.currentSlug ? ' aria-current=\"page\"' : ''"))
+  check('tab bar / ADMIN_ITEM / tabBar 已退役', !views.includes('tabBar') && !views.includes('ADMIN_ITEM') && !views.includes('class="tab-bar"') && !css.includes('.tab-bar'))
+  check('`.admin-tabs` 只在 adminSection 存在时渲染', views.includes("${opts.adminSection ? adminTabs(opts.adminSection) : ''}"))
   check('页头**不透明**：`background: var(--bg)`，全站无 `backdrop-filter`', /\.site-header\s*\{[^}]*background:\s*var\(--bg\)/s.test(css) && !/backdrop-filter:/.test(css))
-  check('外壳两列：`var(--rail-w) minmax(0, 1fr)`', /grid-template-columns:\s*var\(--rail-w\)\s+minmax\(0,\s*1fr\)/.test(css))
-  check('栏宽 token：`--wrap-admin` 与 `--rail-w` 都在且是 px', /--wrap-admin\s*:\s*\d+px/.test(css) && /--rail-w\s*:\s*\d+px/.test(css))
-  check('720px 断点：rail 隐藏、tab bar 出现、外壳单列', /\.site-rail\s*\{\s*display:\s*none/.test(narrow) && /\.tab-bar\s*\{\s*display:\s*flex/.test(narrow) && /\.app-shell\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(narrow))
+  check('外壳：docs 224 + 1fr；admin 248 + 1fr', /\.app-shell--docs\s*\{[^}]*grid-template-columns:\s*var\(--side-w\)\s+minmax\(0,\s*1fr\)/s.test(css) && /\.app-shell--admin\s*\{[^}]*grid-template-columns:\s*var\(--rail-w\)\s+minmax\(0,\s*1fr\)/s.test(css))
+  check('栏宽 token：wrap-admin / rail-w / wrap-docs / side-w / gap-docs / header-h', ['--wrap-admin', '--rail-w', '--wrap-docs', '--side-w', '--gap-docs', '--header-h'].every((k) => new RegExp(`${k}\\s*:`).test(css)))
+  check('720px：top-nav / docs-side / site-rail 隐藏，nav-drawer 出现，无 tab-bar', /\.top-nav\s*\{\s*display:\s*none/.test(narrow) && /\.docs-side[^{]*\{[^}]*display:\s*none/s.test(narrow) && /\.site-rail[^{]*\{[^}]*display:\s*none/s.test(narrow) && /\.nav-drawer\s*\{\s*display:\s*block/.test(narrow) && !/\.tab-bar/.test(narrow))
   check('720px 断点：管理台模块条出现（横向可滚）', /\.admin-tabs\s*\{[^}]*overflow-x:\s*auto/s.test(narrow))
-  check('打印时导航整块隐藏、外壳退回单列', printBody.includes('.site-rail') && printBody.includes('.tab-bar') && printBody.includes('.admin-tabs') && /display:\s*none/.test(printBody) && /\.app-shell\s*\{\s*display:\s*block/.test(printBody))
+  check('打印：site-rail / docs-side / nav-drawer / admin-tabs / header-actions 隐藏，外壳单列', printBody.includes('.site-rail') && printBody.includes('.docs-side') && printBody.includes('.nav-drawer') && printBody.includes('.admin-tabs') && printBody.includes('.header-actions') && /display:\s*none/.test(printBody) && /\.app-shell[^{]*\{[^}]*display:\s*block/s.test(printBody))
 }
 
 // ════════════════════════════════════════════════════
@@ -352,7 +369,7 @@ section('公开面：inset 列表 / 大标题 / 整行可点（#68 §6）')
   check('整行可点：标题链接的 `::after` 铺满行（不嵌套交互元素）', /\.post-card \.cell-title a::after\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0/s.test(css))
   check('标签仍可点：`.post-card .tags a` 抬到覆盖层之上', /\.post-card \.tags a\s*\{[^}]*position:\s*relative[^}]*z-index:\s*1/s.test(css))
   check('标签条是 `.chip-row`（旧的 `.tag-bar` 已退役）', views.includes('class="chip-row"') && !views.includes('tag-bar') && !/\.tag-bar/.test(css))
-  check('大标题落在三类页上（首页 hero / 分享 / 关于），且 CSS 是 34/700', (views.match(/class="large-title"/g) ?? []).length >= 3 && /h1\.large-title\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css) && /h1\.large-title\s*\{[^}]*font-weight:\s*700/s.test(css))
+  check('大标题落在三类页上（首页 hero / 分享 / 关于），且 CSS 是 38/600', (views.match(/class="large-title"/g) ?? []).length >= 3 && /h1\.large-title\s*\{[^}]*font-size:\s*var\(--fs-large\)/s.test(css) && /h1\.large-title\s*\{[^}]*font-weight:\s*600/s.test(css))
   check('空态是实色块（没有虚线占位框）', /\.empty\s*\{[^}]*background:\s*var\(--fill\)/s.test(css) && !/\.empty\s*\{[^}]*dashed/s.test(css))
   check('状态摘要行也用同一套 `.cell`（旧的 `.mini-*` 已退役）', views.includes('<div class="inset-list">${rows}</div>') && !views.includes('mini-') && !/\.mini-[a-z]/.test(css))
 }
@@ -382,12 +399,13 @@ section('窄屏断点与打印其余')
   check('560px 断点存在，且表单行改成竖排', tight.length > 0 && /\.form-row\s*\{\s*flex-direction:\s*column/.test(tight))
   check('存在 `@media print`', printBody.length > 0)
   check('打印时把配色就地改成纸面（黑字白底）', /--bg:\s*#ffffff/.test(printBody) && /--label:\s*#000000/.test(printBody))
-  check('打印时藏掉只在屏幕上成立的东西（页头 / rail / tab bar / 模块条 / 登出 / 按钮 / picker）', /\.site-header[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.site-rail/.test(printBody) && /\.tab-bar/.test(printBody) && /\.admin-tabs/.test(printBody) && /\bbutton\b[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.theme-picker/.test(printBody))
+  check('打印时藏掉只在屏幕上成立的东西（页头 / docs-side / rail / 抽屉 / 模块条 / 登出 / 按钮 / picker）', /\.site-header[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.docs-side/.test(printBody) && /\.site-rail/.test(printBody) && /\.nav-drawer/.test(printBody) && /\.admin-tabs/.test(printBody) && /\bbutton\b[^{]*\{[^}]*display:\s*none/s.test(printBody) && /\.theme-picker/.test(printBody))
   check('打印时卡片不许被切成两页（`break-inside: avoid`）', /break-inside:\s*avoid/.test(printBody))
-  check('打印隐藏站内框架（页头 / 页脚 / rail / tab bar / 模块条 / picker / 登出）', ['.site-header', '.site-footer', '.site-rail', '.tab-bar', '.admin-tabs', '.theme-picker', '.logout-form'].every((sel) => printBody.includes(sel)))
+  check('打印隐藏站内框架（页头 / 页脚 / rail / docs-side / 抽屉 / 模块条 / 工具区 / picker / 登出）', ['.site-header', '.site-footer', '.site-rail', '.docs-side', '.nav-drawer', '.header-actions', '.admin-tabs', '.theme-picker', '.logout-form'].every((sel) => printBody.includes(sel)))
+  check('打印隐藏公开侧栏 / 抽屉 / 顶栏工具区（#85 / #86 预留）', ['.docs-side', '.nav-drawer', '.header-actions'].every((sel) => printBody.includes(sel)))
   check('打印隐藏表单与提示（button / form-actions / form-row / confirm / admin-hint / notice）', ['button', '.form-actions', '.form-row', '.confirm', '.admin-hint', '.notice'].every((sel) => printBody.includes(sel)))
   check('打印隐藏输入控件与折叠内容（input/select/textarea + details + 编辑器）', printBody.includes('input, select, textarea') && printBody.includes('details') && printBody.includes('.article-editor'))
-  check('打印放开滚动与限宽（table-wrap 可见 / app-shell 单列 / app-main 不限宽）', /\.table-wrap\s*\{[^}]*overflow:\s*visible/s.test(printBody) && /\.app-shell\s*\{[^}]*display:\s*block/s.test(printBody) && /\.app-main\s*\{[^}]*max-width:\s*none/s.test(printBody))
+  check('打印放开滚动与限宽（table-wrap 可见 / app-shell 单列 / app-main 不限宽）', /\.table-wrap\s*\{[^}]*overflow:\s*visible/s.test(printBody) && /\.app-shell[^{]*\{[^}]*display:\s*block/s.test(printBody) && /\.app-main\s*\{[^}]*max-width:\s*none/s.test(printBody))
   check('打印保留可读结构（行 / 卡片不被切开 + 站内链接地址）', /\.cell[^{]*\{[^}]*break-inside:\s*avoid/s.test(printBody) && printBody.includes('a[href^="/"]::after'))
   check('打印里没有 `light-dark()`（灰阶是字面量）', !printBody.includes('light-dark('))
   check('打印时正文里的站内链接把地址写出来', /\.prose a\[href\^="\/"\]::after/.test(printBody))

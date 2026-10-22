@@ -47,6 +47,8 @@ export const KNOWN_PAGES: ReadonlySet<string> = new Set([
   '/posts',
   '/status',
   '/about',
+  // 我的账户（#87）：只能登录后进；登记是为了未登录时 next 能回到它。
+  '/account',
   // 管理台（#39）。它**不在** PUBLIC_PATHS 里 —— `/admin*` 本来就该受闸门保护，
   // 这里登记只是为了 `next` 校验能把它当成一个「登录后可以回跳的站内地址」。
   '/admin',
@@ -78,6 +80,8 @@ export interface RequestDecision {
   deny?: 'redirect' | 'unauthorized'
   /** 放行时的当前用户 id（用于渲染「你是谁」与改密）。 */
   userId?: number
+  /** 放行时的用户名；同样来自闸门那一次查询，不新增查询。 */
+  username?: string
   /**
    * 放行时的角色。它来自闸门**那一次**查询，**不进 cookie**（`docs/roles-decision.md` §2）——
    * 所以降级/提权在下一个请求就生效，不需要踢会话。
@@ -153,7 +157,7 @@ export function decideRequest(req: FastifyRequest): RequestDecision {
     return denyShape()
   }
 
-  return { allow: true, userId: state.session.uid, role: state.user.role }
+  return { allow: true, userId: state.session.uid, username: state.user.username, role: state.user.role }
 }
 
 /** 从 token 里取出 uid（不校验签名，仅用于查库；签名由 verifySession 负责）。 */

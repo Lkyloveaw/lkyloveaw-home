@@ -29,6 +29,8 @@ export const csrfContext = new AsyncLocalStorage<{
   isAdmin: boolean
   /** 当前登录者的 `users.id`。管理台的账号页要它来判「这一行是不是你自己」（#44）。 */
   userId?: number
+  /** 当前登录者的用户名；顶栏胶囊用它显示身份。 */
+  userName?: string
 }>()
 /** 当前请求的 token；**没有上下文时返回空串**（渲染出的表单会提交失败，而不是悄悄放行）。 */
 export function currentCsrfToken(): string {
@@ -55,6 +57,11 @@ export function currentIsAdmin(): boolean {
  */
 export function currentUserId(): number | undefined {
   return csrfContext.getStore()?.userId
+}
+
+/** 当前登录者的用户名；无上下文返回空串（胶囊据此决定是否渲染）。 */
+export function currentUserName(): string {
+  return csrfContext.getStore()?.userName ?? ''
 }
 
 /**

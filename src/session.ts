@@ -257,7 +257,7 @@ export interface SessionRecord {
  */
 export interface SessionState {
   session: SessionRecord
-  user: { id: number; enabled: number; tokenVersion: number; role: Role } | null
+  user: { id: number; username: string; enabled: number; tokenVersion: number; role: Role } | null
 }
 
 /** 判决值。闸门只判断 `=== 'ok'`，其余全部进日志。 */

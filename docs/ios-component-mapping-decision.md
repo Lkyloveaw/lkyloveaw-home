@@ -1,5 +1,7 @@
 # iOS 组件映射与全站导航呈现：一套字阶、一条侧栏、零新增 JS
 
+> **已被 #86 / #87 取代（2026-10-22）**：公开面导航 / 外壳 / 组件 / 打印 / e2e 清单以 `docs/public-shell-decision.md` 和 `docs/user-menu-decision.md` 为准；本文件保留 iOS 时期的历史，不再作为实现依据。
+
 本文件是「落地设计：iOS 组件映射与全站导航呈现」这张票的产出（map：[整站 iOS 化](https://github.com/Lkyloveaw/lkyloveaw-home/issues/64)）。
 
 票：[#68 落地设计：iOS 组件映射与全站导航呈现](https://github.com/Lkyloveaw/lkyloveaw-home/issues/68)

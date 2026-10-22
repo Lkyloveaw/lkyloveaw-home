@@ -69,7 +69,7 @@ export function findSessionState(sid: string): SessionState | null {
     .prepare(
       `SELECT s.sid AS sid, s.uid AS uid, s.pv AS pv,
               s.expires_at AS expiresAt, s.revoked_at AS revokedAt,
-              u.enabled AS enabled, u.token_version AS tokenVersion, u.role AS role
+              u.username AS username, u.enabled AS enabled, u.token_version AS tokenVersion, u.role AS role
          FROM sessions s
          LEFT JOIN users u ON u.id = s.uid
         WHERE s.sid = ?`,
@@ -81,6 +81,7 @@ export function findSessionState(sid: string): SessionState | null {
         pv: number
         expiresAt: number
         revokedAt: number | null
+        username: string | null
         enabled: number | null
         tokenVersion: number | null
         role: Role | null
@@ -98,9 +99,9 @@ export function findSessionState(sid: string): SessionState | null {
   }
   // `LEFT JOIN` 没配上时右侧全是 NULL —— 用它来判「账号行在不在」，而不是把 NULL 当 0。
   const user =
-    row.tokenVersion === null || row.role === null
+    row.tokenVersion === null || row.role === null || row.username === null
       ? null
-      : { id: row.uid, enabled: row.enabled ?? 0, tokenVersion: row.tokenVersion, role: row.role }
+      : { id: row.uid, username: row.username, enabled: row.enabled ?? 0, tokenVersion: row.tokenVersion, role: row.role }
 
   return { session, user }
 }
