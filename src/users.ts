@@ -353,7 +353,7 @@ export function listUsers(): Array<Omit<UserRow, 'password_hash'>> {
  *
  * ⚠ **只在表为空时生效**：一旦有任何账号，这两个变量被**完全忽略**。
  * 否则一个残留的环境变量就是一个隐藏的后门账号——环境变量会长期留在
- * `docker-compose.yml` 与 shell 历史里，是最容易被忘记的泄漏面。
+ * `.env` 与 shell 历史里，是最容易被忘记的泄漏面。
  */
 export function ensureFirstUserFromEnv(username: string, password: string): boolean {
   if (countUsers() > 0) return false

@@ -313,8 +313,8 @@ git diff --check
 git status --short
 ```
 
-- `check:all` = `verify`（typecheck / docker / unit / media / article / editor / leak / chart / style / backup / restart）+ `check:e2e`。
-- 若 `check:docker` 因环境没有 Docker 上下文而失败：记录**确切失败原因**，其余 `verify` 子命令必须全过；不要静默跳过。
+- `check:all` = `verify`（typecheck / unit / media / article / editor / leak / chart / style / backup / restart）+ `check:e2e`。
+  （2026-10-22 起 `check:docker` 已随 Docker 制品一起移除，`verify` 里不再有这一段。）
 - e2e 的最终条数以复跑为准；`style-check` 同理，不为了凑 171 / 536 保留失效断言。
 
 ### 6.4 1440 / 390 浅深目视

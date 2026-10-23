@@ -41,6 +41,11 @@
 > **部署形状（本文件后续会话可照抄）**：`/opt/personal-wiki` 放代码与数据（`data/` 由默认路径生成），
 > `git` 不进部署产物、用 **tar over ssh 同步工作树**（仓库有未推送提交，不为了部署去 push），
 > `npm ci` + `npm run build` 在机器上跑，`systemd` 单元托管，`SESSION_SECRET` 写进 `/opt/personal-wiki/.env`。
+>
+> **2026-10-22：部署方式收敛为「仅 systemd」。** 仓库里的 Docker 制品（`Dockerfile`、`docker-compose.yml`、
+> `.dockerignore`、`scripts/check-docker-context.mjs`）已删除，`npm run verify` 不再包含 `check:docker`。
+> 下面 §1–§10 里关于 Docker 的分析（旧机有 Docker、属主问题、`Dockerfile` 行号）保留为**历史记录**：
+> 它们解释的是「当时为什么选裸机」，不是当前可执行路径。当前部署**只有**本节这一段。
 
 采集时间：2026-10-15（旧机 `10.0.0.226`）。采集方式：SSH 登入后实跑命令（不是推断）。
 

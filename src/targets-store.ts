@@ -76,6 +76,16 @@ let importDone = false
 /** 本进程刚做过一次**真的**首次导入（导入了 ≥1 行）—— 用来避免把同一件事说两遍。 */
 let importedThisProcess = false
 
+// 单进程内的在途结果失效标记，不缓存目标配置；重启后没有旧请求需要失效。
+// ponytail: 每个删过的 id 留一个计数；若改成多进程探测，改用库内 incarnation id。
+const targetGenerations = new Map<string, number>()
+export function targetGeneration(id: string): number {
+  return targetGenerations.get(id) ?? 0
+}
+function invalidateTarget(id: string): void {
+  targetGenerations.set(id, targetGeneration(id) + 1)
+}
+
 /**
  * 建表 + 首次导入。启动顺序 `initStore → initUsers → initTargets`（§2）；
  * 每个导出函数也都会走一遍（幂等、廉价），这样直接 import 本模块的脚本不会因为
@@ -148,7 +158,7 @@ export function warnTargetsFileIsNoLongerInput(): void {
   if (!config.targets.length) return
   console.warn(
     `[targets] ${targetsSourceLabel()} 里的 ${config.targets.length} 个目标**不再是输入**` +
-      `（真源已搬到 SQLite）；要增删改目标请在 管理台 → 目标 里改`,
+      `（真源已搬到 SQLite）；要增删改目标请在 管理台 → 系统可用性 里改`,
   )
 }
 
@@ -304,7 +314,41 @@ export function removeOrDisableTarget(
     db.prepare(`DELETE FROM targets WHERE id = ?`).run(targetId)
     return 'deleted'
   })
-  return tx(id)
+  const result = tx(id)
+  if (result === 'deleted') invalidateTarget(id)
+  return result
+}
+
+/**
+ * 「删除并清空历史」：**唯一**会删 `probes` 行的目标写路径。
+ *
+ * 这是 §4「不做彻底删除」的**显式例外**（2026-10-23 用户要求）：演示目标的历史是假数据，
+ * 留着会污染真实系统的曲线；而「停用 + 等保留期把历史自然清掉」对一次性清理太绕。
+ *
+ * 两条纪律：
+ * - 仍在**同一个事务**里：查存在 → 删 `probes` → 删 `targets`，中途不可能有人插进新探针。
+ * - 默认的「删除 = 停用」**不变**（`removeOrDisableTarget`）：本函数只由显式动作调用，
+ *   不与它共用入口，避免哪天有人把普通「删除」接到这里。
+ */
+export interface PurgeResult {
+  status: 'purged' | 'missing'
+  /** 连同目标一起删掉的探测记录条数（日志与测试要看）。 */
+  probes: number
+}
+
+export function purgeTarget(id: string): PurgeResult {
+  initTargets()
+  const db = initStore()
+  const tx = db.transaction((targetId: string): PurgeResult => {
+    const row = db.prepare(`SELECT id FROM targets WHERE id = ?`).get(targetId)
+    if (!row) return { status: 'missing', probes: 0 }
+    const info = db.prepare(`DELETE FROM probes WHERE target_id = ?`).run(targetId)
+    db.prepare(`DELETE FROM targets WHERE id = ?`).run(targetId)
+    return { status: 'purged', probes: info.changes }
+  })
+  const result = tx(id)
+  if (result.status === 'purged') invalidateTarget(id)
+  return result
 }
 
 /** 库里每一行 `targets` 的原始形态（测试与诊断用）。 */

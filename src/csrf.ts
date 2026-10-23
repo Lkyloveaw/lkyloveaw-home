@@ -31,6 +31,7 @@ export const csrfContext = new AsyncLocalStorage<{
   userId?: number
   /** 当前登录者的用户名；顶栏胶囊用它显示身份。 */
   userName?: string
+  avatar?: string | null
 }>()
 /** 当前请求的 token；**没有上下文时返回空串**（渲染出的表单会提交失败，而不是悄悄放行）。 */
 export function currentCsrfToken(): string {
@@ -62,6 +63,10 @@ export function currentUserId(): number | undefined {
 /** 当前登录者的用户名；无上下文返回空串（胶囊据此决定是否渲染）。 */
 export function currentUserName(): string {
   return csrfContext.getStore()?.userName ?? ''
+}
+
+export function currentUserAvatar(): string | null {
+  return csrfContext.getStore()?.avatar ?? null
 }
 
 /**

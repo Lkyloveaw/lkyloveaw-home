@@ -5,7 +5,7 @@
  */
 import { config, type ProbeTarget } from './config.js'
 import { recordResults, pruneOldProbes, checkpoint, type ProbeResult } from './store.js'
-import { listEnabledTargets } from './targets-store.js'
+import { listEnabledTargets, targetGeneration } from './targets-store.js'
 import { getProbeIntervalMs } from './settings-store.js'
 import { sweepSessions } from './sessions-store.js'
 import { classifyRuntimeError } from './sanitize.js'
@@ -30,7 +30,7 @@ async function probeOne(target: ProbeTarget, roundAt: number): Promise<ProbeResu
       //
       // 注意语义变化：`manual` 之后 3xx 会**原样返回**，而默认判定区间是 200-399，
       // 所以 302 仍会被判为 `up`。这是**有意的**——改默认会静默变更所有既有部署的语义。
-      // 想让 302 算失败，请在管理台 → 目标里把该目标的状态码填成 `200`（旧写法是 targets.json 的 `expectStatus`）。
+      // 想让 302 算失败，请在管理台 → 系统可用性 里把该目标的状态码填成 `200`（旧写法是 targets.json 的 `expectStatus`）。
       redirect: 'manual',
       signal: controller.signal,
       headers: { 'user-agent': 'personal-wiki-uptime/0.1' },
@@ -95,9 +95,12 @@ export async function probeAll(): Promise<ProbeResult[]> {
   // 一轮共用一个 roundAt：并发发起的各目标 at 会相差几毫秒，
   // 整体可用率必须按轮聚合，否则一个点只有 1 个目标，曲线在 0%/100% 之间乱跳。
   const roundAt = Date.now()
+  const generations = targets.map((t) => targetGeneration(t.id))
   const results = await Promise.all(targets.map((t) => probeOne(t, roundAt)))
-  recordResults(results)
-  return results
+  // 物理删除期间已发出的请求不能复活历史，更不能污染复用同一 id 的新目标。
+  const current = results.filter((r, i) => targetGeneration(r.targetId) === generations[i])
+  recordResults(current)
+  return current
 }
 
 let timer: NodeJS.Timeout | null = null

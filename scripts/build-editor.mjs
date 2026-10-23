@@ -4,8 +4,8 @@
  * 为什么单独一个脚本而不是 package.json 里一条 esbuild 命令行：**配置只有一份**，
  * 且 \`scripts/editor-check.mjs\` 要拿同一份配置重新打一遍来断言「提交的产物没过期」。
  *
- * 产物 \`public/article-editor.js\` 是**构建产物、不进 git**（.gitignore）；
- * Dockerfile 的 build 阶段生成它，runtime 阶段从 build 阶段取。
+ * 产物 \`public/article-editor.js\` 是**构建产物、不进 git**（.gitignore），
+ * 由 `npm run build` 生成；部署时同步工作树后在服务器上跑同一条命令。
  */
 import { build } from 'esbuild'
 

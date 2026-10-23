@@ -163,6 +163,43 @@ for (const id of ['ok', 'dead']) {
   doc._byId['card-' + id] = card
   cards[id] = { card, dot, badge, strip, count, up }
 }
+// 「页面打开时还没有数据」的卡片：曲线容器是空态，但骨架已经就位（与服务端同构）。
+// 这是 2026-10-23 修的那个坑：旧实现只会更新已有 svg，空态容器永远升不成曲线。
+const lateCard = new El('article')
+lateCard.setAttribute('data-target', 'later')
+const lateDot = new El('span'); lateDot.className = 'dot unknown'
+const lateBadge = new El('span'); lateBadge.className = 'badge'; lateBadge.textContent = '无数据'
+lateCard.appendChild(lateDot); lateCard.appendChild(lateBadge)
+for (let i = 0; i < 4; i++) lateCard.appendChild(new El('dd'))
+const lateChart = new El('figure')
+lateChart.className = 'chart chart-empty'
+lateChart.setAttribute('data-chart', '')
+lateChart.setAttribute('data-chart-kind', 'latency')
+lateChart.setAttribute('data-fill-id', 'lgidle0')
+const lateSvg = new El('svg')
+lateSvg.setAttribute('viewBox', '0 0 232 54')
+const lateGrad = new El('linearGradient'); lateGrad.id = 'lgidle0'
+const lateArea = new El('path'); lateArea.setAttribute('d', '')
+const lateLine = new El('path'); lateLine.setAttribute('d', '')
+lateSvg.appendChild(lateGrad); lateSvg.appendChild(lateArea); lateSvg.appendChild(lateLine)
+lateChart.appendChild(lateSvg)
+const lateAvg = new El('span'); lateAvg.className = 'chart-avg'
+const lateMax = new El('span'); lateMax.className = 'chart-max'
+lateChart.appendChild(lateAvg); lateChart.appendChild(lateMax)
+const lateNote = new El('div'); lateNote.className = 'chart-idle-note'
+lateNote.appendChild(new El('span'))
+lateChart.appendChild(lateNote)
+lateCard.appendChild(lateChart)
+docRoot.appendChild(lateCard)
+
+// 横轴：服务端会渲染 data-axis，客户端每 tick 重算
+const axisEl = new El('div')
+axisEl.className = 'chart-axis'
+axisEl.setAttribute('data-axis', '')
+const axisA = new El('span'); const axisB = new El('span'); const axisC = new El('span')
+axisEl.appendChild(axisA); axisEl.appendChild(axisB); axisEl.appendChild(axisC)
+docRoot.appendChild(axisEl)
+
 // 可用率曲线
 const wide = new El('figure')
 wide.className = 'chart chart-wide'
@@ -197,15 +234,21 @@ const PAYLOAD = {
       timeline: [pt(1, 'up', 9), pt(2, 'degraded', 40), pt(3, 'down', 0)],
       latency: [pt(1, 'up', 9), pt(2, 'degraded', 40)],
     },
+    {
+      id: 'later', lastStatus: 'up', uptime: 1, avgLatencyMs: 22, p95LatencyMs: 30, lastError: null,
+      timeline: [],
+      latency: [pt(10, 'up', 20), pt(11, 'up', 24)],
+    },
   ],
 }
+let currentPayload = PAYLOAD
 
 let tickFn = null
 const sandbox = {
   document: doc,
   console,
   setInterval: (fn) => { tickFn = fn; return 0 },
-  fetch: () => Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve(PAYLOAD) }),
+  fetch: () => Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve(currentPayload) }),
   Promise,
   setTimeout,
   Date,
@@ -256,6 +299,8 @@ check('调用了 ChartPath.linePath', /CP\.linePath\(/.test(code))
 check('调用了 ChartPath.areaPath', /CP\.areaPath\(/.test(code))
 check('调用了 expandDomain（只扩不缩）', /CP\.expandDomain\(/.test(code))
 check('重写了折线/面积的 d', /setAttribute\('d'/.test(code))
+check('能切换空态类（空 ↔ 有数据双向）', /classList\.(add|remove)\('chart-empty'\)/.test(code))
+check('同步横轴（[data-axis]）', /\[data-axis\]/.test(code))
 console.log('\n[格带：客户端重建必须守住服务端契约]')
 {
   const { strip, count } = cards.ok
@@ -303,6 +348,28 @@ console.log('\n[状态词：服务端与客户端必须是同一套映射]')
   check('服务端 STATUS_CLASS 三档齐全', serverClass.up && serverClass.degraded && serverClass.down, JSON.stringify(serverClass))
   check('客户端 STATE_CLASS 与服务端逐项一致', JSON.stringify(serverClass) === JSON.stringify(clientClass), `服务端 ${JSON.stringify(serverClass)} / 客户端 ${JSON.stringify(clientClass)}`)
   check('客户端 STATE_TEXT 与服务端逐项一致', JSON.stringify(serverText) === JSON.stringify(clientText), `服务端 ${JSON.stringify(serverText)} / 客户端 ${JSON.stringify(clientText)}`)
+}
+
+console.log('\n[空态曲线：30 秒内原地升级，不需要刷新页面]')
+{
+  check('空态容器升级后去掉 chart-empty', !lateChart.classList.contains('chart-empty'), `class="${lateChart.className}"`)
+  check('两个 path 的 d 都被补上', lateArea.getAttribute('d') !== '' && lateLine.getAttribute('d') !== '')
+  const latePoints = [...lateLine.getAttribute('d').matchAll(/[ML]([\d.]+),([\d.]+)/g)]
+  check('真实 232×54 viewBox 内重画，所有点都未越界', latePoints.length >= 2 && latePoints.every((p) => Number(p[1]) <= 232 && Number(p[2]) <= 54), lateLine.getAttribute('d'))
+  check('caption 从空白变成延迟平均值', /延迟（平均/.test(lateAvg.textContent), `"${lateAvg.textContent}"`)
+  check(
+    '横轴跟着共享 xRange 重算',
+    /^\d{2}:\d{2}$/.test(axisA.textContent) && /覆盖/.test(axisB.textContent) && /^\d{2}:\d{2}$/.test(axisC.textContent),
+    `"${axisA.textContent}"/"${axisB.textContent}"/"${axisC.textContent}"`,
+  )
+
+  // 反方向：数据再次不足 → 空态类回来、path 清空（防「空态只能升、不能降」）
+  currentPayload = { ...PAYLOAD, targets: PAYLOAD.targets.map((t) => (t.id === 'later' ? { ...t, latency: [] } : t)) }
+  tickFn()
+  await new Promise((r) => setTimeout(r, 0))
+  check('数据再次不足 → chart-empty 回来', lateChart.classList.contains('chart-empty'), `class="${lateChart.className}"`)
+  check('空态时两个 path 的 d 都是空串', lateArea.getAttribute('d') === '' && lateLine.getAttribute('d') === '')
+  check('回到空态不保留旧平均/峰值，SVG 标签同步数据不足', lateAvg.textContent === '' && lateMax.textContent === '' && /数据不足/.test(lateSvg.getAttribute('aria-label') || ''))
 }
 
 console.log('\n[CSS 类名：客户端与视图发出的类必须真的有样式]')

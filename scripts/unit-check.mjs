@@ -719,6 +719,16 @@ if (scenario === 'write') {
   out.rowAfter = { exists: !!row, enabled: row ? row.enabled : null, hasHistory: row ? row.hasHistory : null }
   // 停用后的目标不再进探测清单
   out.probeListAfterDisable = T.listEnabledTargets().map((t) => t.id).includes('fresh')
+
+  // ── 显式逃生口：删除并清空历史（docs/targets-source-decision.md §4 修订）──
+  // 用**另一条**目标做实验：fresh 还要留给后面的 listAllTargets 断言（它有历史、已停用）。
+  T.createTarget({ id: 'purge-me', name: '待清空', url: 'https://example.com/', enabled: true })
+  S.recordResults([{ targetId: 'purge-me', at: now, roundAt: now, status: 'up', latencyMs: 4, statusCode: 200, error: null }])
+  out.probesBeforePurge = probeCount()
+  out.purgeResult = T.purgeTarget('purge-me')
+  out.afterPurge = rowIds()
+  out.probesAfterPurge = probeCount()
+  out.purgeMissing = T.purgeTarget('nope').status
 }
 
 if (scenario === 'streak') {
@@ -864,6 +874,17 @@ console.log(JSON.stringify(out))
   check('有历史 → **只停用**，probes 行数一行不变', w.deleteWithHistory === 'disabled' && w.probesAfterDelete === w.probesBefore + 1, `${w.deleteWithHistory} · ${w.probesBefore}→${w.probesAfterInsert}→${w.probesAfterDelete}`)
   check('停用后该行还在（enabled=0、hasHistory=true）', w.rowAfter.exists && w.rowAfter.enabled === false && w.rowAfter.hasHistory === true, JSON.stringify(w.rowAfter))
   check('停用后不再进探测清单', w.probeListAfterDisable === false, String(w.probeListAfterDisable))
+  check(
+    '⑲ 删除并清空历史：只删本条目标的 probes、目标行也没了（返回删了几条）',
+    w.purgeResult?.status === 'purged' &&
+      w.purgeResult.probes === 1 &&
+      !String(w.afterPurge).includes('purge-me') &&
+      String(w.afterPurge).includes('fresh') &&
+      w.probesBeforePurge === 2 &&
+      w.probesAfterPurge === 1,
+    JSON.stringify({ purge: w.purgeResult, rows: w.afterPurge, probes: `${w.probesBeforePurge}→${w.probesAfterPurge}` }),
+  )
+  check('⑲ 删不存在的 id → `missing`（不误删别的行）', w.purgeMissing === 'missing', String(w.purgeMissing))
 
   // ── ⑩ getUptimeRaw 的口径回归（期望目标数由调用方给）──
   const up = json(run('uptime', db1, { TARGETS_JSON: JSON.stringify(FILE3) }))
@@ -881,7 +902,7 @@ console.log(JSON.stringify(out))
    * 两个进程同时读 `PRAGMA table_info` 以为缺列，先到的补完，后到的执行 `ALTER TABLE`
    * 拿到 `duplicate column name` → 进程直接退出 1（服务起不来）。
    * 处置：`isDuplicateColumnError()` 容忍这一种错（补列迁移因此幂等），其余错误照抛。
-   * 这里跑 4 个进程（更接近 `docker restart` 与 `up` 撞在一起的真实形状），并**把 stderr 读走**，
+   * 这里跑 4 个进程（更接近 `systemctl restart` 与并发首启撞在一起的真实形状），并**把 stderr 读走**，
    * 失败时原文就摆在 detail 里。
    */
   const raceDb = path.join(tdir, 't7.sqlite')

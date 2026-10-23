@@ -8,10 +8,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { execFileSync } from 'node:child_process'
 
 const root = path.resolve(import.meta.dirname, '..')
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-media-'))
 process.env.MEDIA_DIR = sandbox
+process.env.DATABASE_PATH = path.join(sandbox, 'identity.sqlite')
 
 // ⚠ 必须在设好 MEDIA_DIR 之后 import：`config.ts` 在模块加载时读 env（本仓反复踩过的那个坑）。
 const media = await import(pathToFileURL(path.join(root, 'dist/media.js')).href)
@@ -112,6 +114,31 @@ const orphans = media.orphanMedia(refs)
 check("**孤图 = 目录里有、引用里没有的那些**", orphans.length === 1 && orphans[0] === changed.name, orphans.map((o) => o.slice(0,8)).join(","))
 check("被引用的那个**不是**孤图", !orphans.includes(first.name))
 check("临时文件与杂物本来就不在 listMedia 里，所以也不会被当成孤图", !orphans.some((o) => o.startsWith(".tmp-") || o.endsWith(".txt")))
+
+console.log('\n[身份图片：持久化、账号隔离与媒体清理]')
+const identityUrl = pathToFileURL(path.join(root,'dist/identity-images.js')).href
+const identities = await import(identityUrl)
+check('未设置的头像默认无图片', identities.getIdentityImage('avatar:1') === null)
+identities.setIdentityImage('avatar:1', first.name)
+identities.setIdentityImage('avatar:2', changed.name)
+identities.setIdentityImage('site-logo', first.name)
+check('头像按用户隔离', identities.getIdentityImage('avatar:1') === first.name && identities.getIdentityImage('avatar:2') === changed.name)
+check('网站徽标独立保存', identities.getIdentityImage('site-logo') === first.name)
+const restart = execFileSync(process.execPath,['--input-type=module','-e',
+  `import {getIdentityImage} from ${JSON.stringify(identityUrl)}; console.log(JSON.stringify([getIdentityImage('avatar:1'),getIdentityImage('site-logo')]));`
+],{env:process.env,encoding:'utf8'})
+check('重启后的进程仍能读取头像与徽标', restart.includes(JSON.stringify([first.name,first.name])))
+check('非法媒体路径拒绝且不改旧值', (()=>{try{identities.setIdentityImage('avatar:1','../x.png');return false}catch{return identities.getIdentityImage('avatar:1')===first.name}})())
+const unreferenced = media.saveMedia(Buffer.concat([PNG,Buffer.from('identity-orphan')]))
+execFileSync(process.execPath,[path.join(root,'dist/cli/media.js'),'--yes','--force'],{env:process.env,stdio:'pipe'})
+check('强制清理仍保留头像和徽标引用', fs.existsSync(path.join(sandbox,first.name)) && fs.existsSync(path.join(sandbox,changed.name)))
+check('同次清理删掉未引用图片', !fs.existsSync(path.join(sandbox,unreferenced.name)))
+identities.setIdentityImage('avatar:1',null)
+check('恢复默认只解除当前用户引用', identities.getIdentityImage('avatar:1')===null && identities.getIdentityImage('avatar:2')===changed.name && identities.getIdentityImage('site-logo')===first.name)
+identities.setIdentityImage('site-logo',null)
+check('恢复默认徽标不会删除文件', identities.getIdentityImage('site-logo')===null && fs.existsSync(path.join(sandbox,first.name)))
+const { closeStore } = await import(pathToFileURL(path.join(root,'dist/store.js')).href)
+closeStore()
 fs.rmSync(sandbox, { recursive: true, force: true })
 console.log(`\n${passed}/${passed + failures.length} 通过`)
 if (failures.length) {

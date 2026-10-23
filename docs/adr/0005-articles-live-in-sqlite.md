@@ -3,6 +3,10 @@
 日期：2026-10-17
 状态：已采纳
 
+> 2026-10-22 注：Docker 部署已从仓库移除（**仅 systemd**），本文提到的 `docker-compose.yml`
+> 与 `:ro` 挂载**不复存在**。「文章真源 = SQLite」这个决定不受影响——现在连挂载都没有了，
+> `content/` 只作为首次导入的来源存在。
+
 ## 背景
 
 「分享」栏目原本是 `content/` 下的 Markdown 文件（front-matter 六个键 + 正文），由 `src/content.ts` 读。

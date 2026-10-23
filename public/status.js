@@ -132,15 +132,25 @@
   /**
    * 重画一个曲线容器。
    *
-   * 值域策略是「**只扩不缩**」：读容器上的 `data-y-min/max` 作为当前域，
+   * 结构由**服务端固定**（figure + svg + 两个 path 永远都在），空态只是多一个
+   * `chart-empty` 类让覆盖层显示。所以「空 → 有数据 → 又空」只需要切类名：
+   * 不会再有「页面打开时还没数据，之后曲线永远不出现」。
+   *
+   * 值域策略仍是「**只扩不缩**」：读容器上的 `data-y-min/max` 作为当前域，
    * 用新数据算是否需要扩张，扩张了就写回 DOM。**老点在域不变时纹丝不动**——
    * 朴素重算 min/max 会让尖峰进窗口时老点位移到图高的 87%（实测），看起来像曲线自己在跳。
    */
   function redrawChart(container, values, ats) {
     if (!CP) return
-    var w = container.classList.contains('chart-wide') ? 760 : 520
-    var h = container.classList.contains('chart-wide') ? 130 : 110
-    var pad = container.classList.contains('chart-wide') ? 8 : 6
+    var wide = container.classList.contains('chart-wide')
+    var w = wide ? 760 : 520
+    var h = wide ? 130 : 110
+    var pad = wide ? 8 : 6
+    var svg = container.querySelector('svg')
+    var box = svg ? (svg.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number) : []
+    if (box.length === 4 && isFinite(box[2]) && box[2] > 0 && isFinite(box[3]) && box[3] > 0) {
+      w = box[2]; h = box[3]
+    }
     var kind = container.getAttribute('data-chart-kind') || 'latency'
 
     var cur = {
@@ -151,28 +161,37 @@
 
     // 可用率天然 0-100，不扩域；延迟才需要只扩不缩。
     var domain = kind === 'uptime' ? { min: 0, max: 100 } : CP.expandDomain(cur, values, 10)
-    if (!domain) return
+    var d = CP.linePath(values, w, h, pad, ats, xRange, domain)
 
-    var d = CP.linePath(values, w, h, pad, ats, xRange)
-    if (!d) return // 点不足：保持原样，等下一轮
+    var paths = svg ? svg.querySelectorAll('path') : []
+
+    // 数据不足 → 覆盖层；足够 → 原地补图。两个方向都走这里，空态不会「粘住」。
+    if (!d || !domain || paths.length < 2) {
+      container.classList.add('chart-empty')
+      if (paths.length >= 2) {
+        paths[0].setAttribute('d', '')
+        paths[1].setAttribute('d', '')
+      }
+      text(container.querySelector('.chart-avg'), '')
+      text(container.querySelector('.chart-max'), '')
+      if (svg) svg.setAttribute('aria-label', kind === 'uptime' ? '可用率曲线需要至少两轮探测数据' : '延迟数据不足（至少 2 次有效探测后显示曲线）')
+      return
+    }
+    container.classList.remove('chart-empty')
 
     // 值域变了才写回（避免每 tick 都改 DOM）
     if (kind !== 'uptime') {
-      container.setAttribute('data-y-min', domain.min.toFixed(2))
-      container.setAttribute('data-y-max', domain.max.toFixed(2))
+      container.setAttribute('data-y-min', String(domain.min))
+      container.setAttribute('data-y-max', String(domain.max))
     }
 
-    var svg = container.querySelector('svg')
-    if (!svg) return
-    var paths = svg.querySelectorAll('path')
-    if (paths.length < 2) return
-    var gid = container.getAttribute('data-fill-id')
     paths[0].setAttribute('d', CP.areaPath(d, w, h, pad))
     paths[1].setAttribute('d', d)
+    if (svg) svg.setAttribute('aria-label', kind === 'uptime' ? '可用率曲线' : '延迟曲线')
 
     // 渐变 id 跟着 d 走，否则同页多图会串色（与服务端同名规则一致）
     var newGid = (kind === 'uptime' ? 'ug' : 'lg') + Math.abs(CP.hash(d))
-    if (gid && newGid !== gid) {
+    if (container.getAttribute('data-fill-id') !== newGid) {
       var grad = svg.querySelector('linearGradient')
       if (grad) grad.id = newGid
       paths[0].setAttribute('fill', 'url(#' + newGid + ')')
@@ -180,26 +199,24 @@
     }
 
     // 同步 figcaption：不更新的话，数值在变、图上的「平均/峰值」却是旧的。
-    var caption = container.querySelector('.chart-avg')
-    if (caption) {
-      var nums = []
-      for (var i = 0; i < values.length; i++) {
-        if (values[i] != null && isFinite(values[i]) && values[i] >= 0) nums.push(values[i])
-      }
-      if (nums.length) {
-        if (kind === 'uptime') {
-          var sum = 0
-          for (var j = 0; j < nums.length; j++) sum += nums[j]
-          text(caption, '窗口内平均可用率 ' + (sum / nums.length).toFixed(1) + '%')
-        } else {
-          var s = 0
-          for (var k = 0; k < nums.length; k++) s += nums[k]
-          text(caption, '延迟（平均 ' + Math.round(s / nums.length) + ' ms）')
-        }
-      }
+    var nums = []
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] != null && isFinite(values[i]) && values[i] >= 0) nums.push(values[i])
+    }
+    if (!nums.length) return
+    var sum = 0
+    for (var j = 0; j < nums.length; j++) sum += nums[j]
+    var avgEl = container.querySelector('.chart-avg')
+    var maxEl = container.querySelector('.chart-max')
+    var failed = values.length - nums.length
+    if (kind === 'uptime') {
+      text(avgEl, '窗口内平均可用率 ' + (sum / nums.length).toFixed(1) + '%')
+      text(maxEl, '范围 ' + Math.min.apply(null, nums) + '% – ' + Math.max.apply(null, nums) + '%')
+    } else {
+      text(avgEl, '延迟（平均 ' + Math.round(sum / nums.length) + ' ms）')
+      text(maxEl, '峰值 ' + Math.max.apply(null, nums) + ' ms' + (failed ? ' · ' + failed + ' 次失败已断开' : ''))
     }
   }
-
   /** 从 items 里抽出某个 `[data-chart]` 容器的数据。 */
   function chartValues(container, byId) {
     var card = container.closest ? container.closest('[data-target]') : null
@@ -224,6 +241,28 @@
     ;(api.overview || []).forEach(function (p) { all.push(p.at) })
     if (!all.length) return
     xRange = { min: Math.min.apply(null, all), max: Math.max.apply(null, all) }
+  }
+
+  /** 横轴标注：每次 tick 跟着共享 xRange 更新（否则曲线在动、时间轴停在首屏）。 */
+  function clock(ts) {
+    var d = new Date(ts)
+    var pad = function (n) { return String(n).padStart(2, '0') }
+    return pad(d.getHours()) + ':' + pad(d.getMinutes())
+  }
+
+  function paintAxis() {
+    if (!xRange || !(xRange.max > xRange.min)) return
+    var mins = Math.round((xRange.max - xRange.min) / 60000)
+    var span = mins < 60 ? mins + ' 分钟' : (mins / 60).toFixed(1) + ' 小时'
+    var els = document.querySelectorAll('[data-axis]')
+    for (var i = 0; i < els.length; i++) {
+      var spans = els[i].querySelectorAll('span')
+      if (spans.length >= 3) {
+        text(spans[0], clock(xRange.min))
+        text(spans[1], '覆盖 ' + span)
+        text(spans[2], clock(xRange.max))
+      }
+    }
   }
 
   function paintCharts(api, byId) {
@@ -304,6 +343,7 @@
 
     window.__overview = api.overview || []
     recomputeXRange(api)
+    paintAxis()
 
     paintNumbers(byId)
     paintCharts(api, byId)

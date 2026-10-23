@@ -1,6 +1,6 @@
 /**
  * 历史存储：每次探测写一行，查询时按时间窗口聚合。
- * 为什么用 SQLite：单文件、零运维、可直接挂 Docker volume；个人站这个写入量（分钟级、几十个目标）远未到需要 TSDB 的程度。
+ * 为什么用 SQLite：单文件、零运维、可直接放本机目录并随备份打包；个人站这个写入量（分钟级、几十个目标）远未到需要 TSDB 的程度。
  */
 import fs from 'node:fs'
 import path from 'node:path'

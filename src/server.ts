@@ -1,6 +1,6 @@
 /**
  * HTTP 层：路由 + 组装页面数据 + 登录闸门。
- * 一台进程同时负责页面渲染和周期探测，Docker 里就只有一个容器、一个 volume。
+ * 一台进程同时负责页面渲染和周期探测，部署时就只有一个 systemd 服务、一个数据目录。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -23,6 +23,7 @@ import {
   initTargets,
   listAllTargets,
   listEnabledTargets,
+  purgeTarget,
   removeOrDisableTarget,
   setTargetEnabled,
   updateTarget,
@@ -33,6 +34,7 @@ import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } f
 import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
 import { listRevisions, revertToRevision } from './store.js'
 import { isSafeMediaName, MEDIA_MAX_BYTES, mediaMime, mediaPath, mediaSnippet, saveMedia } from './media.js'
+import { getIdentityImage, setIdentityImage, type IdentityImageKey } from './identity-images.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackupFiles, listBackups, runBackup } from './backup.js'
@@ -114,8 +116,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
  * **有的页面变、有的不变**（取决于那个路由何时求值），正是本仓最防的那种静默失败。
  * 所以这里没有任何缓存：一次单表主键 SELECT 是微秒级，而缓存要引入失效逻辑。
  */
-function siteOf(): { title: string; description: string } {
-  return { title: getSiteTitle(), description: getSiteDescription() }
+function siteOf(): { title: string; description: string; logo: string | null } {
+  return { title: getSiteTitle(), description: getSiteDescription(), logo: getIdentityImage('site-logo') }
 }
 
 /** 公开文章侧栏的数据：只传 slug / title；当前文章页再传 currentSlug。 */
@@ -265,10 +267,14 @@ function parseTargetForm(form: Record<string, string>, requireId: boolean): Targ
   if (rawCodes) {
     const parts = rawCodes.split(',').map((s) => s.trim()).filter(Boolean)
     const codes = parts.map((p) => Number(p))
-    if (!codes.length || codes.some((n) => !Number.isInteger(n) || n < 100 || n > 599)) {
+    // ⚠ 上界是 **999 而不是 599**：导入路径不校验这个区间，而 `targets.json` 的演示条目
+    // 与测试都用一个「永不匹配」的哨兵值（`demo-degraded` 就是 `[999]`）。
+    // 写路径若只收 100–599，那条目标就**永远存不回去** —— 改个名字也会被 400 拒掉。
+    // 100–599 是真实 HTTP 状态码；600 以上只可能是哨兵。
+    if (!codes.length || codes.some((n) => !Number.isInteger(n) || n < 100 || n > 999)) {
       return {
         ok: false,
-        message: `状态码只能是 100–599 的整数、逗号分隔（收到：${rawCodes}）。`,
+        message: `状态码只能是 100–999 的整数、逗号分隔（收到：${rawCodes}）。100–599 是真实状态码；600 以上只用于「永不匹配」。`,
       }
     }
     // 去重：`200,200` 与 `200` 是同一件事，没必要让库里的 JSON 记住重复项。
@@ -470,6 +476,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       isAdmin: decision.role === 'admin',
       userId: decision.userId,
       userName: decision.username ?? '',
+      avatar: decision.userId === undefined ? null : getIdentityImage(`avatar:${decision.userId}`),
     })
   })
 
@@ -486,7 +493,8 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
    * 但文案**不解释**这个内部原因。
    */
   const csrfGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const submitted = parseFormBody(req.body).csrf
+    const raw = (req.body as Record<string, unknown> | undefined)?.csrf
+    const submitted = typeof raw === 'string' ? raw : (raw as { value?: string } | undefined)?.value
     if (!verifyCsrf(config.sessionSecret, readSessionCookie(req.headers.cookie), submitted)) {
       // 记 path 与失败原因，**不记 token 值**（OWASP 明文要求 token 不进日志）。
       console.warn(`[auth] L3 拒绝：path=${req.url}（token 缺失或不匹配）`)
@@ -664,16 +672,51 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
    *
    * 只兜这一类错误；**其它错误照旧 500**（不吞、不假装成功）。
    */
-  app.setErrorHandler(async (err: Error & { code?: string }, _req, reply) => {
+  app.setErrorHandler(async (err: Error & { code?: string }, req, reply) => {
     const code = err.code ?? ''
     if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT' || /file size limit|too large/i.test(err.message)) {
       console.warn('[media] 上传被拒（超过上限）：' + err.message)
-      return reply.redirect('/admin/articles?notice=media-too-big', 302)
+      const pathname = req.url.split('?')[0]
+      const back = pathname === '/account/avatar' ? '/account'
+        : pathname === '/admin/settings/logo' ? '/admin/settings' : '/admin/articles'
+      return reply.redirect(back + '?notice=media-too-big', 302)
     }
     console.error('[server] 未处理的请求错误：', err.message)
     reply.code(500).type('text/plain; charset=utf-8')
     return '服务器内部错误'
   })
+
+  for (const image of [
+    { path: '/account/avatar', back: '/account', kind: 'avatar', admin: false },
+    { path: '/admin/settings/logo', back: '/admin/settings', kind: 'logo', admin: true },
+  ]) {
+    app.post(image.path, { preValidation: image.admin ? adminWriteGuard : csrfGuard }, async (req, reply) => {
+      const userId = currentUserId()
+      if (userId === undefined) return reply.code(401).send('请先登录')
+      const owner: IdentityImageKey = image.admin ? 'site-logo' : `avatar:${userId}`
+      const body = req.body as Record<string, unknown> | undefined
+      const action = typeof body?.action === 'string' ? body.action : (body?.action as { value?: string } | undefined)?.value
+      if (action === 'clear') {
+        setIdentityImage(owner, null)
+        return reply.redirect(image.back + '?notice=' + image.kind + '-cleared', 302)
+      }
+      if (action !== undefined && action !== 'upload') return reply.code(400).send('未知的动作')
+      const file = body?.file as { toBuffer?: () => Promise<Buffer> } | undefined
+      if (!file || typeof file.toBuffer !== 'function') return reply.redirect(image.back + '?notice=media-no-file', 302)
+      let bytes: Buffer
+      try { bytes = await file.toBuffer() }
+      catch { return reply.redirect(image.back + '?notice=media-too-big', 302) }
+      let name: string
+      try { name = saveMedia(bytes).name }
+      catch (err) {
+        console.warn('[identity-images] 图片保存失败：' + (err as Error).message)
+        const invalid = /空文件|不是支持的图片类型/.test((err as Error).message)
+        return reply.redirect(image.back + '?notice=' + (invalid ? 'media-rejected' : 'image-save-failed'), 302)
+      }
+      setIdentityImage(owner, name)
+      return reply.redirect(image.back + '?notice=' + image.kind + '-saved', 302)
+    })
+  }
 
   app.get('/admin/articles', async (req, reply) => {
     if (!currentIsAdmin()) {
@@ -937,6 +980,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     'target-enable',
     'target-disable',
     'target-delete',
+    'target-purge',
   ])
 
   /** 页面数据：清单与状态点**各读一次**（两个 map 一次请求，不给列表逐行查库）。 */
@@ -994,6 +1038,19 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
         `/admin/targets?notice=${out === 'deleted' ? 'target-deleted' : 'target-disabled'}`,
         302,
       )
+    }
+
+    // 「删除并清空历史」：**唯一的逃生口**（§4 的显式例外）。必须勾确认框，
+    // 服务端独立校验 —— 与「重置口令」同一档，不依赖前端的 `required`。
+    if (action === 'target-purge') {
+      if (!id) return back('缺少 id。')
+      if (form.confirm !== 'yes') {
+        return back('删除并清空历史不可恢复，请先勾选确认框。')
+      }
+      const out = purgeTarget(id)
+      if (out.status === 'missing') return back(`找不到这个目标：${id}`)
+      console.log(`[targets] 删除并清空历史 ${id}（${out.probes} 条探测记录）`)
+      return reply.redirect('/admin/targets?notice=target-purged', 302)
     }
 
     // 字段校验（第 6 步）—— URL 复用 `config.validateTargetUrl()`，**不在这里重写一份**。
@@ -1424,7 +1481,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
         ? '口令已更新。其他设备上的登录已失效。'
         : undefined
     reply.type('text/html; charset=utf-8')
-    return accountPage({ notice }, siteOf())
+    return accountPage({ notice, noticeKey: (req.query as { notice?: unknown }).notice }, siteOf())
   })
 
   app.get('/status', async (_req, reply) => {
@@ -1465,7 +1522,7 @@ async function main(): Promise<void> {
   console.log(`  监控目标    ${targetCount} 个（真源：SQLite · 共 ${countAllTargets()} 条，含停用）`)
   console.log(`  登录账号    ${countUsers()} 个`)
   if (!targetCount) {
-    console.warn('  提示：还没有启用中的被监控系统 —— 登录后在 管理台 → 目标 里新增。')
+    console.warn('  提示：还没有启用中的被监控系统 —— 登录后在 管理台 → 系统可用性 里新增。')
   }
   console.log('')
 

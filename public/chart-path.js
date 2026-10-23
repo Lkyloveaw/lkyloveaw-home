@@ -1,8 +1,8 @@
 /**
  * 曲线几何核心（**浏览器与测试共用**，无构建步骤的 classic script）。
  *
- * 为什么有这个文件：曲线在页面加载后是冻结的（第 3 条既有取舍见 ADR 0001：不引图表库、
- * 不做客户端重绘）。要做到「跟着 30 秒刷新」，映射必须搬到前端。
+ * 为什么有这个文件：曲线每 30 秒要跟着刷新，而首屏是服务端渲染的同一张图——
+ * 不引图表库（ADR 0001）就得把映射搬到前端自己重算。两份实现由交叉断言钉住。
  * 但服务端也要画同一张图的**首屏版本**，于是同一份几何存在两份实现——
  * **两份实现迟早漂移**。所以把它抽成这个纯函数文件，并用交叉断言钉住：
  * 同一份输入，服务端渲染出的 `d` 必须与这里算出的 `d` **逐字符相等**。
@@ -22,7 +22,7 @@
    * 断点（null / 非有限 / 负数）会让路径**重新起段**（`M` 而不是 `L`）——
    * 把失败连成一条线会把「断档」伪装成「很快就好了」，是那种一眼看不出却会误导的错。
    */
-  function linePath(values, w, h, pad, xAt, xRange) {
+  function linePath(values, w, h, pad, xAt, xRange, domain) {
     var nums = []
     for (var i = 0; i < values.length; i++) {
       var v = values[i]
@@ -48,7 +48,7 @@
       var x = useTime
         ? pad + (w - pad * 2) * ((xAt[j] - xRange.min) / (xRange.max - xRange.min))
         : pad + j * stepX
-      var y = pad + (h - pad * 2) * (1 - (val - min) / span)
+      var y = domain ? clampY(val, domain, h, pad) : pad + (h - pad * 2) * (1 - (val - min) / span)
       d += (open ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1) + ' '
       open = true
     }

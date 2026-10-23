@@ -6,7 +6,7 @@
 - **内网业务系统可用性**：服务端按固定间隔探测**库里的目标清单**（首次启动时从 `targets.json` 导入一次），把每次结果写进 SQLite，面板展示当前状态、可用率、延迟、连续可用时长、状态时间线，以及整体可用率曲线与各系统延迟曲线。
 - **自管**：登录后有管理台 —— 目标、账号、备份、站点设置都在网页上管（见「管理台」一节）。
 
-一台机器、一个容器、一个 SQLite 文件即可运行。曲线是服务端渲染的内联 SVG，不依赖任何图表库，禁用 JS 也能看。
+一台机器、一个 systemd 服务、一个 SQLite 文件即可运行。曲线是服务端渲染的内联 SVG，每 30 秒由前端原地重绘，不依赖任何图表库，禁用 JS 也能看。
 
 面板的**数值每 30 秒自动刷新**。
 
@@ -16,7 +16,7 @@
 
 ## 首次部署：先建一个账号
 
-**没有账号时站点仍会启动**（拒绝启动会让容器陷入重启循环），但所有页面都会跳到登录页。
+**没有账号时站点仍会启动**（拒绝启动会让 systemd 在 `Restart=always` 下陷入重启循环），但所有页面都会跳到登录页。
 建号用 CLI：
 
 ```bash
@@ -57,7 +57,7 @@ node dist/cli/passwd.js --user alice --enable            # 重新启用
 ```
 
 改口令、重置口令、`--revoke-sessions` 都会递增该账号的**凭据代次**（`users.token_version`），
-使**已签发的全部 cookie 立即失效**。登录后也可以直接在面板上自助改密。
+使**已签发的全部 cookie 立即失效**。登录后可从右上角用户菜单 →「修改口令」进入 `/account` 自助改密。
 
 ### 登出 = 服务端**真吊销**（这是对旧行为的修订）
 
@@ -78,18 +78,18 @@ node dist/cli/passwd.js --user alice --enable            # 重新启用
 
 | 页面 | 能做什么 | 明确不做 |
 | --- | --- | --- |
-| `/admin`（概览） | 四块摘要：目标启用/总数、账号总数与管理员数、最近一次备份、当前站点设置；零管理员会在这里告警 | 不渲染目标明细（详情去目标页，不造第二份真相） |
-| `/admin/targets` | 新增 / 编辑（名称、URL、分组、期望状态码、超时）/ 停用 / 启用；「删除」两岔：**没有任何历史**才真删，否则只停用 | 不让改 `id`（它是历史库的关联键）；不做「连历史一起删」 |
+| `/admin`（概览） | 四块摘要：目标启用/总数、账号总数与管理员数、最近一次备份、当前站点设置；零管理员会在这里告警 | 不渲染目标明细（详情去系统可用性页，不造第二份真相） |
+| `/admin/targets` | 新增 / 编辑（名称、URL、分组、期望状态码、超时）/ 停用 / 启用；「删除」两岔：**没有任何历史**才真删，否则只停用；有历史时另有显式的「删除并清空历史」（必勾确认框，不可恢复） | 不让改 `id`（它是历史库的关联键）；普通「删除」不会动历史 |
 | `/admin/accounts` | 新增（**默认只读**）/ 改角色 / 停用 / 启用 / 重置口令 | 不做删除账号；不做会话管理 UI（看设备 / 踢单台） |
 | `/admin/backups` | 列出产物（名 / 大小 / 时间）、「立即备份一次」、只读展示 `BACKUP_DIR` / `BACKUP_KEEP` | 不做下载 / 恢复 / 单份删除 —— 整库含口令哈希，恢复属 SSH 上的操作 |
-| `/admin/settings` | 改标题 / 描述 / 探测间隔；只读展示留在 `.env` 的那些参数 | 不搬会删数据或会锁人的配置（判据见上面「站点设置」一节） |
+| `/admin/settings`（站点设置） | 改标题 / 描述 / 探测间隔；只读展示留在 `.env` 的那些参数 | 不搬会删数据或会锁人的配置（判据见上面「站点设置」一节） |
 
 **几条一致的规矩**：
 
 - **真源都是 SQLite**。改完立刻生效（探测间隔是「下一轮生效」），不需要重启；
 - 成功 → `302` 回同一页并带一句 `?notice=<键>`（闭集，不认识的键不渲染）；
   失败 → **`400` 就地重渲染**并保留你填的内容（口令字段**永不回填**），**不用重定向表达失败**；
-- **三类破坏性动作要勾一个确认框**（不用 JS `confirm()`，禁用 JS 也拦得住）：**重置口令 · 停用账号 · 降级角色**。
+- **四类破坏性动作要勾一个确认框**（不用 JS `confirm()`，禁用 JS 也拦得住）：**重置口令 · 停用账号 · 降级角色 · 删除并清空目标历史**。
   确认框写的是后果，不是「确定吗」；服务端独立校验那个勾；
 - 账号有两个守卫，**网页与 CLI 共用同一个函数**：①不能改自己的角色、不能停用自己；
   ②不能把**启用中的管理员**减到零（最后一个人不许降级 / 停用）；
@@ -109,8 +109,8 @@ node dist/cli/passwd.js --user alice --enable            # 重新启用
    之后新建账号默认**只读**。
 4. **`targets.json` 与 `SITE_TITLE` / `SITE_DESCRIPTION` / `PROBE_INTERVAL_SECONDS` 变成「首次初始值」**：
    升级后第一次启动会把当前生效值落进库，此后改 `.env` 不再有效（值不同时启动日志有一行警告）。
-   **目标清单从此在 管理台 → 目标 里改**。
-5. 新增 `data/media/`（文章配图）。Docker 里它与数据库同在一个 volume。
+   **目标清单从此在 管理台 → 系统可用性 里改**。
+5. 新增 `data/media/`（文章配图）。它与数据库同在 `data/` 下，备份时一起打包。
 
 **升级前先备一份**（不需要停服）：
 
@@ -149,7 +149,7 @@ npm start
 
 ## 配置被监控的系统
 
-**真源是数据库**：登录后在 **管理台 → 目标**里增删改（`/admin/targets`），改完**下一轮探测生效**，
+**真源是数据库**：登录后在 **管理台 → 系统可用性**里增删改（`/admin/targets`），改完**下一轮探测生效**，
 不用改文件、也不用重启。
 
 `targets.json`（或环境变量 `TARGETS_JSON`，它优先）**只有一个用途**：`targets` 表还是空的时候
@@ -198,7 +198,7 @@ npm start
 ```
 
 这样只有 200 算可用，302 会被判成「异常」。`targets.json` 里有一条 `demo-redirect` 就是这个用法的示例
-（导入之后改文件不再生效 —— 在管理台的目标页把「状态码」填成 `200` 是一样的效果）。
+（导入之后改文件不再生效 —— 在管理台的「系统可用性」页把「状态码」填成 `200` 是一样的效果）。
 
 ### `targets.json` 是**授权清单**，不是不可信输入
 
@@ -371,35 +371,139 @@ npm run media -- --yes   # 真删
 - **零引用保护**：库里一篇文章都没有、而媒体目录非空时会**拒绝清理**，要显式 `--force`（**读库失败时即使 `--force` 也一个都不删**）。
 - 清理**只动媒体目录**，不碰备份快照与数据库。
 
-## Docker 部署
+## 部署（systemd）
+
+**唯一部署方式：裸机 + systemd。** 仓库里**没有** Docker 制品（`Dockerfile`、`docker-compose.yml`、
+`.dockerignore` 已于 2026-10-22 删除，`check:docker` 也从 `verify` 里摘掉了）。
+历史决定文档里残留的 `Dockerfile:23-25`、`docker-compose.yml` 行号引用是**存档，不要照做**。
+目标机的实测事实（系统、Node 版本、端口、安全组）见 [`docs/deploy-environment.md`](docs/deploy-environment.md)。
+
+### 1. 同步工作树
 
 ```bash
-docker compose up -d --build
+tar -czf - --exclude=node_modules --exclude=dist --exclude=data --exclude=.git --exclude=.env --exclude=.env.local -C . . \
+  | ssh root@<部署机> 'mkdir -p /opt/personal-wiki && tar -xzf - -C /opt/personal-wiki'
 ```
 
-`docker-compose.yml` 已把 `targets.json`、`content/` 只读挂进容器，SQLite 数据落在 `./data`：
+- **不要**在服务器上 `git pull`：仓库可能有未推送提交，部署走工作树同步。
+- `data/` 不同步：数据库、备份、上传的媒体都在服务器上，同步会覆盖它们。
 
-- **改目标不再需要重启**：登录后在 管理台 → 目标 里改，下一轮探测生效。
+### 2. 装依赖并构建（在服务器上）
+
+```bash
+ssh root@<部署机> 'cd /opt/personal-wiki && npm ci && npm run build'
+```
+
+`devDependencies` 必须装：`npm run build` 用 `esbuild` 产出编辑面产物 `public/article-editor.js`。
+
+> ⚠ 实测坑：该机到 `nodejs.org` **不通**，而 Node 22.23.3 没有 `better-sqlite3` 的预编译包 →
+> `npm ci` 会回退 `node-gyp` 去拉 Node 头文件并超时。解药是
+> `npm_config_nodedir=/usr/include/node npm ci`（NodeSource 的 deb 自带 Node 头文件）。
+
+**构建完立刻断言原生模块可用**（否则问题会拖到服务启动才暴露）：
+
+```bash
+ssh root@<部署机> 'cd /opt/personal-wiki && node -e "require(\"better-sqlite3\")(\":memory:\").prepare(\"select 1\").get()"'
+```
+
+### 3. 配置 `.env`
+
+写在 `/opt/personal-wiki/.env`，并 `chmod 600`：
+
+```ini
+# 必填：没配就拒绝启动。在机器上生成，别经过聊天记录或 shell 历史：
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+SESSION_SECRET=<在机器上生成的值>
+# 写路径的来源白名单：浏览器地址栏里的 origin，逗号分隔多个
+SITE_ORIGIN=http://<域名>:3000,http://<域名>,http://<IP>:3000,http://127.0.0.1:3000,http://localhost:3000
+# 站点还是 HTTP 时必须为 0：设成 1 浏览器不存 cookie，症状是「输对密码又跳回登录页」
+SESSION_COOKIE_SECURE=0
+```
+
+⚠ 换掉 `SESSION_SECRET` 会让**所有人立刻掉线**。其余变量见 `.env.example`。
+
+### 4. systemd 单元
+
+`/etc/systemd/system/personal-wiki.service`：
+
+```ini
+[Unit]
+Description=personal-wiki
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ⚠ ROOT = process.cwd()：.env、data/、public/ 都按工作目录解析，这行不能省
+WorkingDirectory=/opt/personal-wiki
+ExecStart=/usr/bin/node /opt/personal-wiki/dist/server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable --now personal-wiki
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/healthz   # 期望 200
+journalctl -u personal-wiki -f
+```
+
+### 5. 更新一次
+
+同步 → 装依赖 → 构建 → 重启：
+
+```bash
+tar -czf - --exclude=node_modules --exclude=dist --exclude=data --exclude=.git --exclude=.env --exclude=.env.local -C . . \
+  | ssh root@<部署机> 'tar -xzf - -C /opt/personal-wiki && cd /opt/personal-wiki && npm ci && npm run build && systemctl restart personal-wiki'
+```
+
+> ⚠ 从含 Docker 的旧版本升上来时，`tar` 只覆盖不删除：同步完要手动清掉服务器上的
+> `Dockerfile` / `docker-compose.yml` / `.dockerignore`（否则它们会一直留在部署目录里，误导下一个人）。
+
+### 运行时数据
+
+- **改目标不再需要重启**：登录后在 管理台 → 系统可用性 里改，下一轮探测生效。
   `targets.json` 只在数据库里的 `targets` 表为空时（全新部署的第一次启动）被导入一次，之后完全忽略。
 - **文章也不再来自 `content/`**：真源是同一个 SQLite 的 `articles` 表，`content/` 只在首次导入时读一次（见「写一篇文章」）。
-- 历史数据在宿主机的 `./data/availability.sqlite`
+- 历史数据、备份、上传媒体都在服务器的 `/opt/personal-wiki/data/` 下。
 
 ## 自检
 
 ```bash
 npm run verify        # 下面这一串，一条命令跑完（不含 e2e）
 npm run check:all     # = verify + check:e2e（全量，提交前该跑这个）
-npm run check:unit    # 凭据 / 会话 / 目标 / 设置 / 目录三态等纯函数与子进程断言（245 项，不需要起服务）
+npm run check:unit    # 凭据 / 会话 / 目标 / 设置 / 目录三态等纯函数与子进程断言（247 项，不需要起服务）
 npm run check:media   # 媒体落盘、去重、拒绝、引用提取与孤图判定（35 项）
-npm run check:article # 文章流水线 Markdown→文档→HTML：结构等价、闭集、图片（96 项）
-npm run check:editor  # 编辑面：打包产物新鲜度 + 闸门白名单 + 编辑器/读面 schema 对齐（35 项）
+npm run check:article # 文章流水线 Markdown→文档→HTML：结构等价、闭集、图片（98 项）
+npm run check:editor  # 编辑面：打包产物新鲜度 + schema 对齐 + 六组工具栏（43 项）
 npm run check:leak    # 真实起服务，断言含凭证的 URL 不会从 /api/status 出网（32 项）
-npm run check:chart   # 曲线几何的交叉断言（40 项）+ 面板 DOM 行为（47 项）
-npm run check:style   # 样式：WCAG 对比度逐对算比值、类名覆盖、两套平面、窄屏与打印（71 项）
-npm run check:backup  # 入口校验、checkpoint、备份三件套与恢复（92 项）+ 探测循环里真的调了备份（11 项）
+npm run check:chart   # 曲线几何的交叉断言（43 项）+ 面板 DOM 行为（57 项）
+npm run check:style   # Claude token / 字阶、WCAG 对比度、外壳、侧栏密度、工具栏、菜单、窄屏与打印（187 项）
+npm run check:menu    # 执行实际用户菜单脚本，验证点击 / hover / Tab / Escape / 点外与抽屉互斥（10 项）
+npm run check:backup  # 备份与恢复（92 项）+ 探测循环备份（11 项）+ 在途删除不复活历史（3 项）
 npm run check:restart # 真杀进程再起：历史与会话是否活过重启（17 项）
-npm run check:e2e     # 真实起服务、真实探测、逐项断言（501 项，需要先 npm run build）
+npm run check:e2e     # 真实起服务、真实探测、逐项断言（563 项，需要先 npm run build）
 ```
+
+### Claude 风格页面与打印验收
+
+先运行 `npm run build`，再运行 `node scripts/claude-preview.mjs`，访问脚本打印的本地地址
+（默认 `http://127.0.0.1:4387`）。脚本使用独立 `.dsh-progress/claude-preview-*` 数据库、
+媒体与备份目录，以及本机合成探测目标；不使用真实 `data/`。
+
+合成账号为 `preview-admin`、`preview-reader` 和 `preview-user-with-a-very-long-display-name`，
+密码均为 `preview-only-pass-123`。Ctrl+C 停止。设置 `CLAUDE_PREVIEW_PORT` 可改端口，
+并需同时空出下一端口供模拟探测使用。
+
+预览运行时，在另一个终端执行 `node scripts/claude-print-check.mjs`（需要本机 Edge），
+将文章与可用性页按实际打印样式导出到 `output/pdf/`。改端口时两个脚本使用相同环境变量。
+规格对照、修复和验收证据见 [接手审查报告](docs/claude-takeover-review.md)；其余旧票与总图的处理见 [剩余 issue 收口报告](docs/remaining-issues-closeout.md)。
 
 ### ⚠ 写安全断言时的一条硬规矩
 
@@ -438,16 +542,17 @@ npm run check:e2e     # 真实起服务、真实探测、逐项断言（501 项�
 `check:e2e` 还会断言并发访问（24 个并发请求全部成功且数据自洽）与**无目标清单**时
 面板不崩、明说「还没有配置被监控的系统」。
 
-## Docker 部署中的原生模块
+## 原生模块（better-sqlite3）
 
 `better-sqlite3` 是原生模块，但 **v13 自带 N-API 预编译产物**（`prebuilds/linux-x64.node`、`linuxmusl-x64.node` 等），
-且 lockfile 中不含 install script，所以 Linux 上 `npm ci` 不会触发 node-gyp，运行期镜像无需保留编译器。
+且 lockfile 中不含 install script，所以 Linux 上 `npm ci` **通常**不触发 node-gyp。
 
-Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('better-sqlite3')` 并执行一次查询：
-如果预编译产物缺失，**构建阶段就会失败**，而不是等到容器起来才发现连不上数据库。
+例外是**没有匹配的预编译包**时（实测：Node 22.23.3 就没有）——它会回退 `node-gyp` 现场编译，需要
+gcc/g++/make/python3 与 **Node 头文件**；部署机到 `nodejs.org` 不通，所以用
+`npm_config_nodedir=/usr/include/node`（NodeSource 的 deb 自带）。详见「部署」第 2 步。
 
-> 注意：在 **Windows 上直接 `npm ci` 可能失败**（回退到 node-gyp 去找 Visual Studio）。这是本地环境的差异，
-> 与容器内行为无关——`prebuilds/win32-x64.node` 存在时用预编译产物，不存在时才需要编译工具链。
+> 在 **Windows 上直接 `npm ci` 可能失败**（回退到 node-gyp 去找 Visual Studio）。那是本地环境差异，
+> 与服务器无关——`prebuilds/win32-x64.node` 存在时用预编译产物，不存在时才需要编译工具链。
 
 ## 环境变量
 
@@ -467,8 +572,8 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | `SITE_ORIGIN` | **无（必填）** | 写路径的来源白名单（逗号分隔多值）。**没配就拒绝启动**；写浏览器地址栏里那个 origin，不带路径与结尾斜杠 |
 | `TRUST_PROXY` | 关 | 反向代理 CIDR（逗号分隔）。**不许填 `true`**（会拒绝启动）——本仓的判定不读 `X-Forwarded-*` |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | — | 首个账号，**仅当库里没有任何账号时生效** |
-| `MEDIA_DIR` | `./data/media` | 上传媒体的落盘目录（文章配图）。Docker 里与数据库同在一个 volume |
-| `BACKUP_DIR` | `./data/backups` | 备份目录。默认与数据库同目录，两种部署方式都不用加挂载 |
+| `MEDIA_DIR` | `./data/media` | 上传媒体的落盘目录（文章配图）。与数据库同在 `data/` 下，备份时一起打包 |
+| `BACKUP_DIR` | `./data/backups` | 备份目录。默认与数据库同目录，不需要额外配置 |
 | `BACKUP_KEEP` | `7` | 滚动保留几份 |
 | `CHECKPOINT_EVERY_ROUNDS` | `60` | 每几轮探测做一次 checkpoint（0 = 关闭） |
 | `BACKUP_EVERY_ROUNDS` | `60` | 每几轮探测尝试一次备份（0 = 关闭） |
@@ -501,9 +606,10 @@ Dockerfile 在 `npm ci --omit=dev` 之后加了一条断言，直接 `require('b
 | `/login` | 匿名 | 登录页（GET 表单 / POST 校验） |
 | `/logout` | 已登录 | 登出（POST）：**吊销这一条会话行** + 清本机 cookie |
 | `/password` | 已登录 | 自助改密（POST）：改完会重签当前浏览器，其它设备掉线 |
+| `/account` | 已登录 | 我的账户：从用户菜单进入，显示自助改口令表单 |
 | `/admin` | **管理员** | 管理台概览（只读用户直访得 **403**） |
 | `/admin/targets` · `/admin/accounts` · `/admin/backups` · `/admin/settings` | **管理员** | 四个子页，GET 看、POST 改（`action` 闭集；动作见「管理台」一节） |
-| `/healthz` | **匿名** | 健康检查。**必须保持匿名**，否则 HEALTHCHECK / systemd 会误判服务不健康 |
+| `/healthz` | **匿名** | 健康检查。**必须保持匿名**，否则 systemd / 运维脚本会误判服务不健康 |
 | `/style.css`、`/status.js`、`/chart-path.js`、`/favicon.ico` | 匿名 | 静态资源。**登录页自己要用，必须放行** |
 
 未登录时：页面请求 `302 → /login?next=<原路径>`；API 请求（`Accept: application/json`）

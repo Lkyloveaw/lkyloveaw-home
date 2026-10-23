@@ -2,7 +2,7 @@
  * 备份：checkpoint → `db.backup()` → 校验产物 → 滚动清理。
  *
  * 刻意**部署方式无关**：只依赖 `DATABASE_PATH` 与 `BACKUP_DIR` 两个路径，
- * 不写死 `/app/data`。这样 Docker 与裸机自建都能用（见 `docs/deploy-environment.md`）。
+ * 不写死 `/app/data`。这样换机器或换部署目录都能用（见 `docs/deploy-environment.md`）。
  *
  * 三条硬规矩（`docs/backup-checkpoint-decision.md`）：
  * 1. **先 checkpoint 再备份**——实测 `db.backup()` 不改动源库 WAL，

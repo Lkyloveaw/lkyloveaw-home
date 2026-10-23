@@ -67,10 +67,14 @@ for (const [label, values, ats] of cases) {
   const points = values.map((v, i) => ({ at: ats[i], avgLatencyMs: v }))
   const html = charts.latencyChart(points, W, H, XR)
   const paths = serverPaths(html)
-  const fe = CP.linePath(values, W, H, PAD, ats, XR)
+  const fe = CP.linePath(values, W, H, PAD, ats, XR, serverDomain(html))
 
-  if (!paths) {
-    check(`${label}：服务端判定「数据不足」`, fe === '', `前端=${JSON.stringify(fe)}`)
+  if (!paths || !paths.line) {
+    check(
+      `${label}：判定「数据不足」，但保留可原地升级的骨架（svg + 两个空 path）`,
+      fe === '' && !!paths && paths.area === '' && html.includes('chart-empty'),
+      `前端=${JSON.stringify(fe)} 服务端=${JSON.stringify(paths)}`,
+    )
     continue
   }
   check(`${label}：折线 d 逐字符相等`, paths.line === fe, `\n      服务端=${JSON.stringify(paths.line)}\n      前端  =${JSON.stringify(fe)}`)
@@ -105,7 +109,7 @@ console.log('\n[可用率曲线交叉断言]')
   const paths = serverPaths(html)
   const values = pts.map((p) => (p.total > 0 ? (p.up / p.total) * 100 : null))
   const ats = pts.map((p) => p.at)
-  const fe = CP.linePath(values, 760, 130, 8, ats, XR)
+  const fe = CP.linePath(values, 760, 130, 8, ats, XR, { min: 0, max: 100 })
   check('可用率：折线 d 逐字符相等', paths && paths.line === fe, `\n      服务端=${JSON.stringify(paths?.line)}\n      前端  =${JSON.stringify(fe)}`)
   const dom = serverDomain(html)
   check('可用率值域固定 0-100', dom && dom.min === 0 && dom.max === 100, JSON.stringify(dom))
@@ -125,9 +129,17 @@ console.log('\n[值域不抖动：只扩不缩]')
 
   // 位移恒为 0：同一老点在「已扩张的域」与「扩张前的域」下算出的 y 必须相同，
   // 因为不收缩意味着域没变。这里直接验证同一域下重复计算稳定。
-  const y1 = CP.clampY(11, dom, 110, 6)
-  const y2 = CP.clampY(11, dom, 110, 6)
-  check('同域下同点的 y 稳定（无回跳）', y1 === y2, `${y1} vs ${y2}`)
+  const yOfMiddle = (values) => [...CP.linePath(values, 232, 54, 6, undefined, undefined, dom).matchAll(/[ML][\d.]+,([\d.]+)/g)][1]?.[1]
+  check('尖峰离场后，实际 path 中同一老点的 y 不跳', yOfMiddle([10, 11, 400]) === yOfMiddle([10, 11, 12]))
+}
+
+console.log('\n[真实卡片尺寸与固定可用率值域]')
+{
+  const html = charts.latencyChart([{ at: XR.min, avgLatencyMs: 20 }, { at: XR.max, avgLatencyMs: 24 }], 232, 54, XR)
+  check('232×54 卡片 SSR 与指定值域的客户端 path 一致', serverPaths(html)?.line === CP.linePath([20, 24], 232, 54, 6, [XR.min, XR.max], XR, serverDomain(html)))
+  const fixed = CP.linePath([25, 75], 520, 110, 6, undefined, undefined, { min: 0, max: 100 })
+  check('可用率 25% / 75% 按固定 0–100 映射，不拉伸到两端', fixed === 'M6.0,79.5 L514.0,30.5', fixed)
+  check('真正无数据的 SSR 仍保留三个横轴槽位', /data-axis><span><\/span><span><\/span><span><\/span>/.test(charts.latencyChart([], 232, 54)))
 }
 
 console.log('\n[断开不被连上]')

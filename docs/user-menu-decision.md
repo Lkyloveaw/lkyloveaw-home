@@ -1,5 +1,7 @@
 # 用户胶囊、下拉菜单与账户入口（B · 紧凑工作台）
 
+> 2026-10-23 更新：用户已确认[个人设置设计](superpowers/specs/2026-10-23-personal-settings-design.md)。菜单的「修改口令」升级为「个人设置」，继续指向 `/account`；页面包含账户信息、外观主题与改密。设置页与胶囊各有一个同步主题控件。下文保留 #87 的原始论证，冲突处以新设计为准。
+
 > 票：[#87 落地设计：用户胶囊、下拉菜单与账户入口](https://github.com/Lkyloveaw/lkyloveaw-home/issues/87)（父地图：[公开面换装](https://github.com/Lkyloveaw/lkyloveaw-home/issues/82)）
 > 上游：[#86 外壳契约](https://github.com/Lkyloveaw/lkyloveaw-home/issues/86) → `docs/public-shell-decision.md`；[#85 token / 字阶](https://github.com/Lkyloveaw/lkyloveaw-home/issues/85) → `docs/claude-theme-decision.md`；[#84 原型 B](https://github.com/Lkyloveaw/lkyloveaw-home/issues/84)
 > 本票**只出契约，不写产品代码**。这是 #88 切实现前的最后一份决定书。

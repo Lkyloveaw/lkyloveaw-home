@@ -8,11 +8,20 @@
 已确认的前提（不再论证）：曲线也跟着 30 秒重绘，手写 SVG path，**不加图表库**。
 前置票：「/api/status 字段收敛」（已关闭）——本票的字段名以 `docs/api-status-fields-decision.md` 为准。
 
+> 🔁 **2026-10-23 修订**：§5 的「整块重建 innerHTML」改为**统一结构 + 切类**——
+> 空态与正常态共用同一个 `figure + svg + 两个 path`，空态只是多一个 `chart-empty` 类
+> 让覆盖层（`.chart-idle-note`）显示。客户端每 30 秒原地补 `d`、切类、同步 caption 与横轴。
+> 目标（空 ↔ 有数据双向可切）不变，还省掉 innerHTML 拼接与结构漂移的风险。
+> 这次修订同时补上了原实现漏掉的一半：先前的客户端只更新**已有 svg**，空态容器永远升级不成曲线。
+
+> 同日独立审查后的回归补强：重绘读取实际 SVG `viewBox`（卡片为 232×54），SSR 与客户端均把保存的值域传入 y 映射，可用率固定 0–100，延迟域只扩不缩并越界夹紧。空数据首屏也保留三槽横轴，回到空态时清除旧 caption 并恢复 SVG 的数据不足标签。几何断言比较真实 path 中同一老点的 y，不再用重复计算同一函数的恒等式证明稳定。
+
 ---
 
 ## 0. 现状（读码 + 实测确认）
 
-- 曲线现在是**服务端渲染的内联 SVG**（`src/charts.ts`）。页面加载后就冻结。
+- 曲线当时是**服务端渲染的内联 SVG**（`src/charts.ts`），页面加载后就冻结
+  （2026-10-23 起已改为每 30 秒由前端原地重绘，见顶部修订）。
 - `public/status.js` 的 `tick()` 每 30 秒 `fetch('/api/status')`，`paint()` 只更新 `.dot` / `.uptime` / `.kv dd[0..1]` / `.target-error` / `.js-generated`——**对 SVG 的更新命中数为 0**。实测确认。
 - 数据通路已存在：`/api/status` 返回 `latency` 与 `timeline`（字段收敛票保住了它们，并固定了形状：`latency[]={at,avgLatencyMs}`、`timeline[]={at,status,latencyMs}`、`overview[]={at,up,total}`）。
 - 服务端画线的核心是 `charts.ts` 的 `linePath(values, w, h, pad, xAt, xRange)`：
@@ -140,6 +149,11 @@ end=26 min= 142ms max=5000ms 跨度=4858  老点最大 y 位移 = 95.4px ★★�
 
 **决定：每次重绘直接重建图表容器的 innerHTML，空态与非空态走同一条渲染路径。**
 
+> 🔁 **2026-10-23 修订（已落地）**：改为**结构固定 + 切类**。服务端在空态也输出
+> `figure + svg + 两个 path`（`d` 为空串），只多 `chart-empty` 类；客户端按数据是否足够
+> 增删这个类并补/清 `d`。这样「空 ↔ 有数据」双向可切，且不需要客户端拼 HTML
+> （拼错一个属性就是静默的样式事故）。原方案担心的「结构不同无法原地切换」已被消除。
+
 理由：空态与非空态的 DOM **结构不同**（`.chart-empty` 是个 `div`，正常态是 `figure + svg + figcaption + .chart-axis`）。若按「原地改属性」实现，就会出现：
 
 - 一开始没数据 → 渲染了 `.chart-empty`；
@@ -159,7 +173,7 @@ end=26 min= 142ms max=5000ms 跨度=4858  老点最大 y 位移 = 95.4px ★★�
 | 文件 | 改动 |
 | --- | --- |
 | `public/chart-path.js`（新） | 可移植几何核心：`linePath` / `areaPath` / `hash` / 值域策略。classic script，挂 `globalThis`（与 `status.js` 同风格，无构建步骤） |
-| `public/status.js` | `paint()` 增加曲线重绘：算共享 `xRange`、按 `data-y-min/max` 取初始值域并「只扩不缩」、整块重建每个 `[data-chart]` 容器、同步 `figcaption` 与 `axisLabel` |
+| `public/status.js` | `paint()` 增加曲线重绘：算共享 `xRange`、按 `data-y-min/max` 取初始值域并「只扩不缩」、按数据是否足够切换 `chart-empty`、原地补 `d`、同步 `figcaption` 与横轴（2026-10-23 修订：不再重建 innerHTML） |
 | `src/charts.ts` | 图表容器加 `data-chart` 与 `data-y-min` / `data-y-max`；几何逻辑保持与 `chart-path.js` 等价（由 §1.1 的交叉断言保证） |
 | `src/views.ts` | `status.js` 之前引入 `chart-path.js`（`<script src="/chart-path.js" defer>`，顺序在前） |
 | `src/server.ts` | **不动**。重绘只读 `/api/status`，不需要新端点（字段收敛票已把所需字段留在响应里） |
@@ -175,7 +189,7 @@ end=26 min= 142ms max=5000ms 跨度=4858  老点最大 y 位移 = 95.4px ★★�
 2. **形状断言**：每个曲线容器带 `data-chart` 与 `data-y-min`/`data-y-max`；`data-y-min ≤ data-y-max` 且域含住该图所有点（除非页面开了很久，见 §2.4 第 4 条）。
 3. **值域不抖动断言**（纯函数，可不启浏览器）：喂 §2.1 那串含尖峰的序列，断言「同一个老点的 y 位移」在值域策略下**恒为 0**（直到发生一次真实扩张）——即**没有回跳**。这是防 §2.2 那种「修得比不修还差」的回归。
 4. **断开不被连上**：含 `null` 的序列，渲染结果里必须有 `M`（新段起点），且**不得**出现跨越失败点的连线。
-5. **空态双向可切**：给「空 → 有数据 → 又空」三次输入，断言 DOM 在 `.chart-empty` 与 `figure` 之间**能来回切**（防「第一次有数据后永远不再显示无曲线」）。
+5. **空态双向可切**：给「空 → 有数据 → 又空」三次输入，断言**同一个容器**在 `chart-empty` 类与空类之间**能来回切**，且空态时两个 `path` 的 `d` 都为空（防「第一次有数据后永远不再显示无曲线」）。
 6. **`/chart-path.js` 匿名可取**：闸门落地后仍在白名单里（`GET /chart-path.js` 不该 302/401）。
 
 > **顺序提醒**：本票的 §2 值域改动会改变**服务端**渲染出的 `data-y-min/max` 语义，而 `/api/status` 的字段形状由字段收敛票决定、本票不改。两票在 `src/charts.ts` 与 `public/status.js` 上有交叠，实现时**先合字段收敛票的字段名**再落本票。

@@ -15,20 +15,23 @@
  * - **读失败或解析失败 → 一个文件都不删**（user story 40/50）——
  *   「**读失败**」和「**真的没有引用**」必须走两条完全不同的路，
  *   否则一次读库失败就会把全部图片当成孤图清掉。
- * - 草稿与**历史修订**里引用的图也算被引用（user story 38）—— 退回旧版时不能断图。
+ * - 草稿、历史修订、头像及网站徽标的当前引用均保留。
  */
 import fs from 'node:fs'
 import { imageNamesInDoc, listMedia, mediaPath, orphanMedia } from '../media.js'
 import { allArticleBodies, closeStore, initStore } from '../store.js'
+import { identityImageReferences } from '../identity-images.js'
 
 function main(): void {
   const yes = process.argv.includes('--yes')
   const force = process.argv.includes('--force')
 
   let bodies: string[]
+  const referenced = new Set<string>()
   try {
     initStore()
     bodies = allArticleBodies()
+    for (const name of identityImageReferences()) referenced.add(name)
   } catch (err) {
     console.error('❌ 读不到文章正文，**一个文件都没删**：' + (err as Error).message)
     process.exitCode = 1
@@ -36,7 +39,6 @@ function main(): void {
   }
 
   // 解析失败也是「读失败」的一种 —— 同样一个都不删。
-  const referenced = new Set<string>()
   const unparsable: number[] = []
   bodies.forEach((body, i) => {
     try {
@@ -64,7 +66,7 @@ function main(): void {
   })
   const totalBytes = sizes.reduce((a, b) => a + b, 0)
 
-  console.log(`文章与修订里引用的媒体：**${referenced.size}** 个`)
+  console.log(`文章、修订与身份图片引用的媒体：**${referenced.size}** 个`)
   console.log(`孤图：**${orphans.length}** 个，合计 ${(totalBytes / 1024).toFixed(1)} KiB`)
   orphans.forEach((name, i) => console.log(`  ${name}  ${((sizes[i] ?? 0) / 1024).toFixed(1)} KiB`))
 

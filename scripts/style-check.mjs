@@ -312,9 +312,19 @@ section('主题三态：boot 在 stylesheet 前，picker 两处，无 JS 时降�
   const bootSplits = views.split('${themeBoot()}')
   check('boot 脚本在 `<link rel="stylesheet">` 之前（两个外壳各一处）', bootSplits.length === 3 && bootSplits.slice(1).every((part) => part.slice(0, 200).includes('<link rel="stylesheet" href="/style.css">')))
   check('boot 只读 `theme` 键、用 `dataset.theme`、有 try/catch', /localStorage\.getItem\('theme'\)/.test(views) && /dataset\.theme\s*=/.test(views) && /try\{[\s\S]*?catch\(e\)\{\}/.test(views))
-  check('picker 是原生 `<select data-theme-select>`，三项 + `aria-label="主题"`，两个外壳各调用一次', /<select data-theme-select aria-label="主题">/.test(views) && ['system', 'light', 'dark'].every((v) => new RegExp(`<option value="${v}">`).test(views)) && (views.match(/\$\{themePicker\(\)\}/g) ?? []).length === 2)
+  check('主题用原生 select，菜单 / 登录页 / 个人设置复用同一三态控件', /<select data-theme-select aria-label="主题">/.test(views) && ['system', 'light', 'dark'].every((v) => new RegExp(`<option value="${v}">`).test(views)) && (views.match(/\$\{themePicker\(\)\}/g) ?? []).length === 3)
   check('无 JS 时 picker 隐藏（`<noscript>` 里的 `[data-theme-select]` 规则出现 2 次）', (views.match(/<noscript><style>\[data-theme-select\] \{ display: none \}<\/style><\/noscript>/g) ?? []).length === 2)
-  check('不监听 matchMedia、不写 cookie', !views.includes('matchMedia(') && !views.includes('document.cookie'))
+  const themeFunctions = views.match(/function theme(?:Boot|Script)\(\): string \{[\s\S]*?\n\}/g) ?? []
+  check('主题脚本不监听 matchMedia、不写 cookie（不限制菜单检测输入能力）', themeFunctions.length === 2 && themeFunctions.every((fn) => !fn.includes('matchMedia(') && !fn.includes('document.cookie')))
+}
+
+section('用户菜单：输入能力、可达性与控件边界（#87）')
+{
+  const panel = blockAfter(css, css.indexOf('.user-panel {'))
+  const hover = blockAfter(css, css.indexOf('@media (hover: hover)'))
+  check('菜单面板受视口高度限制且能纵向滚动', /max-height:\s*calc\(100(?:d)?vh/.test(panel) && /overflow-y:\s*auto/.test(panel))
+  check('hover 只用于可悬停输入，间距中有命中区域连接胶囊与面板', hover.includes('.user-menu:hover .user-panel') && hover.includes('.user-menu::after') && /height:\s*8px/.test(hover) && /\.user-menu:hover::after\s*\{[^}]*pointer-events:\s*auto/s.test(hover))
+  check('胶囊和抽屉开关使用可见控件边界', ['.user-pill {', '.drawer-toggle {'].every((selector) => /border:\s*1px solid var\(--border-strong\)/.test(blockAfter(css, css.indexOf(selector)))))
 }
 
 // ════════════════════════════════════════════════════
@@ -347,6 +357,13 @@ section('外壳与导航：公开顶栏 / docs-side / 管理 rail + admin-tabs�
   check('公开文章侧栏是 `<nav class="docs-side" aria-label="公开文章">`', views.includes('<nav class="docs-side" aria-label="公开文章">'))
   check('管理台 rail 是唯一 `<nav class="site-rail" aria-label="管理台导航">`', views.includes('<nav class="site-rail" aria-label="管理台导航">'))
   check('管理 rail 六模块 + 运维 / 内容两段', ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`['${k}', '/admin`)) && views.includes("'运维',") && views.includes("['内容', [['articles'"))
+  const railLink = blockAfter(css, css.indexOf('.rail-link {'))
+  const railGroup = blockAfter(css, css.indexOf('.rail-group {'))
+  const siteRail = blockAfter(css, css.indexOf('.site-rail {'))
+  check('管理 rail 条目最小高 34px、上下 padding 4px（#80）', /min-height:\s*34px/.test(railLink) && /padding:\s*4px 10px/.test(railLink))
+  check('管理 rail 组内 gap 0、组间 gap 20px（#80）', /gap:\s*0\s*[;}]/.test(railGroup) && /gap:\s*20px/.test(siteRail))
+  check('管理子项缩进保留 38px，移动点击目标保留 44px（#80）', /\.rail-link--sub\s*\{[^}]*padding-inline-start:\s*38px/s.test(css) && /--tap:\s*44px/.test(rootBody))
+  check('移动管理模块链接实际使用 44px 触控高度（#85）', /\.admin-tabs a\s*\{[^}]*min-height:\s*var\(--tap\)/s.test(narrow))
   check('管理 rail 只在 adminSection 存在时渲染', views.includes('opts.adminSection ? `<nav class="site-rail"'))
   check('当前项：顶栏 key === active；管理 rail key === section', views.includes("item.key === active ? ' aria-current=\"page\"' : ''") && views.includes("key === section ? ' aria-current=\"page\"' : ''"))
   check('文章侧栏当前项：p.slug === sidebar.currentSlug', views.includes("p.slug === sidebar.currentSlug ? ' aria-current=\"page\"' : ''"))
@@ -378,10 +395,14 @@ section('公开面：inset 列表 / 大标题 / 整行可点（#68 §6）')
 section('管理台：六页列表化与 details 折叠（#68 §8）')
 // ════════════════════════════════════════════════════
 {
-  check('六个模块各自的 `adminSection` 都在（概览 / 目标 / 账号 / 备份 / 设置 / 文章）', ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`adminSection: '${k}'`)))
+  check('六个模块各自的 `adminSection` 都在（概览 / 系统可用性 / 账号 / 备份 / 站点设置 / 文章）', ['overview', 'targets', 'accounts', 'backups', 'settings', 'articles'].every((k) => views.includes(`adminSection: '${k}'`)))
   check('目标列表：每行是 `cell-stack`，编辑表单收进 `<details class="cell-detail">`', views.includes('<div class="cell-stack">') && views.includes('<details class="cell-detail"') && views.includes('<summary>编辑「'))
   check('新增表单收进 `<details class="create-card">`（账号页同款）', (views.match(/class="create-card"/g) ?? []).length >= 2)
   check('破坏性动作仍是原生 `required` 复选框（不用 JS confirm）', (views.match(/name="confirm" value="yes" required/g) ?? []).length >= 3)
+  check(
+    '有历史的目标提供「删除并清空历史」，且确认框是原生 required（§4 修订）',
+    views.includes('value="target-purge"') && /name="confirm" value="yes" required>[\s\S]{0,300}删除并清空历史/.test(views),
+  )
   check('`.admin-table` 已从视图与样式表里彻底退役', !views.includes('admin-table') && !css.includes('admin-table'))
   check('账号页三个动作表单仍在（改角色 / 停用或启用 / 重置口令）', ['account-role', 'account-disable', 'account-enable', 'account-reset-password'].every((a) => views.includes(`value="${a}"`)))
   check('目标行仍保留 `target-id`（e2e 按它数行）', (views.match(/class="target-id/g) ?? []).length === 1)
@@ -438,6 +459,10 @@ section('面板那两条实现要点没被抽变形')
   check('跨文件契约类名没被顺手改掉（`.cell-strip` / `.badge` / `.dot` 都在）', ['cell-strip', 'badge', 'dot'].every((c) => new RegExp(`\\.${c}\\b`).test(css)))
   check('客户端状态映射仍在一处（`status.js` 的 `STATE_CLASS`）', /STATE_CLASS/.test(statusJs))
   check('曲线网格用 CSS 纸纹（`repeating-linear-gradient` + `--separator`），不往 SVG 里塞网格', /\.chart\s*\{[^}]*repeating-linear-gradient/s.test(css) && /--separator/.test(css) && !/<line\s/.test(chartsTs))
+  check(
+  '空态覆盖层不切换结构（.chart 相对定位 + .chart-empty 显示 .chart-idle-note）',
+  /\.chart\s*\{[^}]*position:\s*relative/s.test(css) && /\.chart-empty \.chart-idle-note\s*\{[^}]*display:\s*flex/s.test(css),
+)
   check('`charts.ts` 里没有颜色字面量（颜色只来自 CSS / currentColor）', !/#[0-9a-f]{3,8}/i.test(chartsTs))
 }
 

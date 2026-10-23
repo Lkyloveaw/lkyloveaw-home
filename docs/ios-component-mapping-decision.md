@@ -1,5 +1,7 @@
 # iOS 组件映射与全站导航呈现：一套字阶、一条侧栏、零新增 JS
 
+> 2026-10-23 修订指针（#78 / #80 / #81）：管理模块名统一为「站点设置」，管理 rail 密度改为 34px / 4px padding / 0 gap；子项缩进 38px、分组间距 20px 与移动点击目标 44px 保留。正文 68ch、管理外壳 1140px 按后续 #85 / #86 保留；账户入口以 #87 的 `/account` 为准。见 [界面一致性决定](ui-consistency-decision.md)，不改写下文历史论证。
+
 > **已被 #86 / #87 取代（2026-10-22）**：公开面导航 / 外壳 / 组件 / 打印 / e2e 清单以 `docs/public-shell-decision.md` 和 `docs/user-menu-decision.md` 为准；本文件保留 iOS 时期的历史，不再作为实现依据。
 
 本文件是「落地设计：iOS 组件映射与全站导航呈现」这张票的产出（map：[整站 iOS 化](https://github.com/Lkyloveaw/lkyloveaw-home/issues/64)）。
@@ -656,7 +658,7 @@ map Notes 第 9 条要求「渐进披露：默认摘要、详情展开」。本�
   ```
   虚线不画（`repeating-linear-gradient` 做虚线成本高、观感也不稳）。网格是**非文字装饰**，`--separator` 不承诺 3:1 是允许的（#67 §7.3）。
 - 轴标签：`.chart-axis`、`.chart figcaption` → `--fs-caption` 12 / `--label-2`（**不是** `--label-3`）。
-- 空态：`.chart-empty` → `--fill` 底、`--radius`、`--label-2`、无虚线。
+- 空态：`.chart-empty .chart-idle-note` → `--fill` 底、`--radius-sm`、`--label-2`、无虚线（覆盖层，不改曲线结构）。
 - 打印：`--accent/--ok` 都变 `#000`，曲线变黑线；面积填充的 `stop-opacity` 保留（灰阶）；`break-inside: avoid` 保留。
 
 ---

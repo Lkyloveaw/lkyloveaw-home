@@ -1,6 +1,6 @@
 /**
  * 运行期配置：全部来自环境变量，带安全默认值。
- * 为什么集中在这一处：Docker 部署时只靠环境变量区分环境，配置散落会让「本机跑通、服务器跑不通」难以排查。
+ * 为什么集中在这一处：部署时只靠环境变量区分环境，配置散落会让「本机跑通、服务器跑不通」难以排查。
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -256,7 +256,7 @@ export const config = {
 
   /**
    * 会话签名密钥。**为空即拒绝启动**（见 `assertSessionSecret`）。
-   * 不自动生成：自动生成 = 容器每次重启所有人掉线，而用户看不到任何原因。
+   * 不自动生成：自动生成 = 服务每次重启所有人掉线，而用户看不到任何原因。
    */
   sessionSecret: process.env.SESSION_SECRET?.trim() || '',
   /** `Secure` 属性开关，**默认关**。站点还是 HTTP 时开着它会让浏览器不存 cookie。 */
@@ -268,13 +268,13 @@ export const config = {
   adminPassword: process.env.ADMIN_PASSWORD?.trim() || '',
 
   /**
-   * 备份目录。**默认与数据库同目录**（同一个 volume），这样 Docker 与裸机部署都不需要加挂载点。
+   * 备份目录。**默认与数据库同目录**（同在 `data/` 下），这样部署时不需要额外配置路径。
    * 刻意不写死 `/app/data`：备份逻辑要**部署方式无关**。
    */
   backupDir: resolveFromRoot(process.env.BACKUP_DIR?.trim() || './data/backups'),
   /**
-   * 媒体目录（上传的原图）。**默认与数据库同目录**（同一个 volume）—— 与备份目录同一条理由：
-   * 两种部署方式都不需要加挂载点。规格要求「与数据库同卷」。
+   * 媒体目录（上传的原图）。**默认与数据库同目录**（同在 `data/` 下）—— 与备份目录同一条理由：
+   * 不需要额外配置挂载点。规格要求「与数据库同卷」。
    */
   mediaDir: resolveFromRoot(process.env.MEDIA_DIR?.trim() || './data/media'),
   /** 滚动保留几份。实测产物 ≈ 主库大小，7 份约 1.4 MB，故不压缩。 */
@@ -310,8 +310,8 @@ const SECRET_HINT = `  node -e "console.log(require('crypto').randomBytes(32).to
  * 启动前检查会话密钥。
  *
  * 判据是「**重启能不能自愈**」：
- * - `users` 表为空 → 允许启动（拒绝会进 `restart: unless-stopped` 的重启循环，
- *   日志被刷屏、`docker ps` 一直重启，排查者反而看不出真正原因；而服务本身是健康的）。
+ * - `users` 表为空 → 允许启动（拒绝会进 systemd `Restart=always` 的重启循环，
+ *   日志被刷屏、`systemctl status` 一直重启，排查者反而看不出真正原因；而服务本身是健康的）。
  * - `SESSION_SECRET` 为空 → **拒绝启动**：它不会因重启而自行好转，反复重启只会掩盖原因。
  */
 export function assertSessionSecret(): void {
@@ -352,11 +352,11 @@ export function assertSiteOrigins(): void {
         '  它是「哪些来源算本站」的白名单，写路径的来源校验（L2）靠它 fail-closed。',
         '  写**浏览器地址栏里那个 origin**（协议 + 主机 + 端口，不带路径、不带结尾斜杠）：',
         '',
-        '    SITE_ORIGIN=http://10.0.0.226:3000',
+        '    SITE_ORIGIN=http://127.0.0.1:3000',
         '',
         '  多个来源用逗号分隔（例如同时用 IP 与域名访问）：',
         '',
-        '    SITE_ORIGIN=http://10.0.0.226:3000,https://wiki.example.com',
+        '    SITE_ORIGIN=http://127.0.0.1:3000,https://wiki.example.com',
         '',
       ].join('\n'),
     )
@@ -382,7 +382,7 @@ export function assertSiteOrigins(): void {
           `[config] SITE_ORIGIN 里的这一条不是合法 origin：「${v}」`,
           '',
           '  要的是「协议://主机[:端口]」，不带路径、不带结尾斜杠。例如：',
-          '    http://10.0.0.226:3000',
+          '    http://127.0.0.1:3000',
           '    https://wiki.example.com',
           '',
         ].join('\n'),

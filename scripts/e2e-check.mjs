@@ -334,6 +334,19 @@ try {
     // 空态也要带 data-chart，否则「空 → 有数据」时前端找不到容器
     const empty = (st.body.match(/chart-empty[^>]*data-chart|data-chart[^>]*chart-empty/g) || []).length
     check('空态容器也带 data-chart（否则双向切换失败）', empty >= 1 || !st.body.includes('chart-empty'), `命中 ${empty}`)
+    {
+      // 2026-10-23：空态不再是一个孤立 div，而是「figure+svg+两个空 path + 覆盖层」，
+      // 这样 30 秒刷新时前端可以**原地**补图，不需要等整页刷新。
+      const emptyFigure = (st.body.match(/<figure class="chart[^"]*chart-empty"[\s\S]*?<\/figure>/) || [''])[0]
+      check(
+        '空态曲线仍是 figure+svg+两个空 path（前端可原地升级）',
+        !!emptyFigure &&
+          emptyFigure.includes('<svg viewBox') &&
+          (emptyFigure.match(/<path /g) || []).length >= 2 &&
+          /<path d="" /.test(emptyFigure),
+      )
+    }
+    check('横轴带 data-axis（30 秒刷新时跟着重算）', st.body.includes('data-axis'))
   }
 
   console.log('\n[API 数据（本票断言依赖闸门 + 拍平后的形状）]')
@@ -637,11 +650,13 @@ try {
   }
 
   // ══════════════════════════════════════════════════════════
-  console.log('\n[我的账户 / 用户菜单（#87）：胶囊 · 身份 · 主题 · 改密 PRG]')
+  console.log('\n[个人设置 / 用户菜单：胶囊 · 身份 · 主题 · 改密 PRG]')
   // ══════════════════════════════════════════════════════════
   {
     const page = await get('/account', { cookie: sessionCookie })
     check('登录后 GET /account → 200', page.status === 200, `got ${page.status}`)
+    check('个人设置集中展示账户、外观和改密',
+      ['个人设置', '账户', '外观', '修改口令'].every((text) => new RegExp(`<h[12][^>]*>${text}</h[12]>`).test(page.body)))
     check(
       '账户页只有顶栏：无 docs-side / site-rail，顶栏零当前项',
       !page.body.includes('class="docs-side"') &&
@@ -653,13 +668,21 @@ try {
       /<form[^>]*class="account-form"[^>]*action="\/password"/.test(page.body) &&
         ['name="current"', 'name="next"', 'name="confirm"', 'name="csrf"'].every((x) => page.body.includes(x)),
     )
+    const passwordFields = [...page.body.matchAll(/<input\b[^>]*type="password"[^>]*>/g)].map((m) => m[0])
+    check(
+      '账户页三个口令字段 autocomplete 正确且均不带 value（#77 / #87）',
+      passwordFields.length === 3 && passwordFields.every((field) => !/\bvalue\s*=/.test(field)) &&
+        passwordFields.filter((field) => field.includes('autocomplete="current-password"')).length === 1 &&
+        passwordFields.filter((field) => field.includes('autocomplete="new-password"')).length === 2,
+    )
     check('账户页身份：e2euser · 只读', page.body.includes('e2euser') && page.body.includes('>只读<'))
     check(
-      '胶囊 / 面板 / 修改口令 / 主题 / 登出都在',
+      '胶囊 / 面板 / 个人设置 / 主题 / 登出都在',
       ['class="user-menu"', 'class="user-pill"', 'class="user-panel"', 'href="/account"', 'data-theme-select', 'class="logout-form"'].every((x) => page.body.includes(x)),
     )
+    check('胶囊菜单中的个人设置链接进入 /account', /<a class="menu-item" href="\/account">个人设置<\/a>/.test(page.body))
     check('只读菜单不渲染管理后台', !page.body.includes('href="/admin"'))
-    check('账户页没有第二个主题入口（菜单里 1 个）', page.body.split('<select data-theme-select aria-label="主题">').length === 2)
+    check('个人设置与胶囊菜单各提供一个主题控件', page.body.split('<select data-theme-select aria-label="主题">').length === 3)
 
     const bad = await postForm('/password', {
       cookie: sessionCookie,
@@ -668,9 +691,26 @@ try {
     })
     check(
       '当前口令错 → 400 回账户页 + 错误文案（口令不回填）',
-      bad.status === 400 && bad.body.includes('class="account-form"') && /当前口令不正确/.test(bad.body) && !bad.body.includes('name="current" value='),
+      bad.status === 400 && bad.body.includes('class="account-form"') && /当前口令不正确/.test(bad.body) &&
+        !bad.body.includes('wrong-password') && !bad.body.includes(NEW_PASS) &&
+        bad.body.split('<select data-theme-select aria-label="主题">').length === 3,
       `got ${bad.status}`,
     )
+    for (const [next, confirm, error] of [
+      ['short77', 'short77', '新口令至少 8 位'],
+      ['account-mismatch-next-77', 'account-mismatch-confirm-77', '两次输入的新口令不一致'],
+    ]) {
+      const rejected = await postForm('/password', {
+        cookie: sessionCookie, csrf: csrfFor(sessionCookie),
+        form: { current: NEW_PASS, next, confirm },
+      })
+      check(
+        `${error} → 400 回账户页、不签发新会话且三项输入均不泄漏（#77 / #87）`,
+        rejected.status === 400 && rejected.body.includes('class="account-form"') && rejected.body.includes(error) &&
+          !rejected.setCookie && [NEW_PASS, next, confirm].every((value) => !rejected.body.includes(value)),
+        `got ${rejected.status}`,
+      )
+    }
     const notice = await get('/account?notice=password-changed', { cookie: sessionCookie })
     check('成功 notice = 口令已更新', notice.body.includes('口令已更新。其他设备上的登录已失效。'))
     const unknown = await get('/account?notice=evil', { cookie: sessionCookie })
@@ -876,7 +916,7 @@ try {
         const panel = await fetch(BASE2 + '/status', { headers: { cookie: ck } })
         const html = await panel.text()
         check('无目标时面板 200（不是 500）', panel.status === 200, `got ${panel.status}`)
-        check('面板明说「还没有配置被监控的系统」而不是空白', /还没有配置被监控的系统/.test(html), html.slice(0, 200).replace(/\s+/g, ' '))
+        check('无目标时显示面向读者的空状态', /暂时没有可展示的系统状态/.test(html), html.slice(0, 200).replace(/\s+/g, ' '))
         const api = await fetch(BASE2 + '/api/status', { headers: { cookie: ck } })
         const body = await api.json()
         check('空清单时 API 返回空数组（不是 null/undefined）', Array.isArray(body.targets) && body.targets.length === 0, JSON.stringify(body.targets))
@@ -1142,11 +1182,19 @@ try {
     }
 
     const adminRail = railOf((await get('/admin', { cookie: adminCookie })).body)
+    const railNames = [...adminRail.matchAll(/<a\b[^>]*><span>([^<]+)<\/span><\/a>/g)].map((m) => m[1])
     check(
       'rail 管理组：六个模块名 +「运维」「内容」两个组标签',
-      ['概览', '目标', '账号', '备份', '设置', '文章'].every((t) => adminRail.includes(`>${t}</span>`)) &&
+      JSON.stringify(railNames) === JSON.stringify(['概览', '系统可用性', '账号', '备份', '站点设置', '文章']) &&
         adminRail.includes('>运维<') &&
         adminRail.includes('>内容<'),
+    )
+    const adminTabs = ((await get('/admin', { cookie: adminCookie })).body.match(/<nav class="admin-tabs"[\s\S]*?<\/nav>/) ?? [''])[0]
+    const tabNames = [...adminTabs.matchAll(/<a\b[^>]*>([^<]+)<\/a>/g)].map((m) => m[1])
+    check(
+      '手机管理模块条同序同名：概览 / 系统可用性 / 账号 / 备份 / 站点设置 / 文章（#78）',
+      JSON.stringify(tabNames) === JSON.stringify(['概览', '系统可用性', '账号', '备份', '站点设置', '文章']),
+      JSON.stringify(tabNames),
     )
     check(
       'rail 条目**不带计数**（#58 Notes 10：把图标 SVG 去掉后一个数字都没有）',
@@ -1714,7 +1762,7 @@ try {
     const fake = Buffer.from('<html><body>not an image</body></html>')
 
     /** 手搓 multipart —— 一次一个文件（规格契约），所以不需要通用解析器。 */
-    const upload = async ({ cookie, csrf, bytes, filename = 'x.png', origin = BASE, omitCsrf = false }) => {
+    const upload = async ({ cookie, csrf, bytes, filename = 'x.png', origin = BASE, omitCsrf = false, route = '/admin/articles/media' }) => {
       const B = '----e2eboundary' + Math.random().toString(16).slice(2)
       const parts = []
       if (!omitCsrf) parts.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="csrf"\r\n\r\n${csrf}\r\n`))
@@ -1724,7 +1772,7 @@ try {
       const headers = { 'content-type': `multipart/form-data; boundary=${B}` }
       if (cookie) headers.cookie = cookie
       if (origin !== null) headers.origin = origin
-      const res = await fetch(BASE + '/admin/articles/media', { method: 'POST', redirect: 'manual', headers, body: Buffer.concat(parts) })
+      const res = await fetch(BASE + route, { method: 'POST', redirect: 'manual', headers, body: Buffer.concat(parts) })
       return { status: res.status, location: res.headers.get('location') || '' }
     }
 
@@ -1768,6 +1816,36 @@ try {
     const before = fs.readdirSync(path.join(tmpData, 'media')).length
     await upload({ cookie: adminUp, csrf: token, bytes: fake, filename: 'again.png' })
     check('⑦ **失败不落盘**（被拒的上传没有留下任何文件）', fs.readdirSync(path.join(tmpData, 'media')).length === before, `${before} → ${fs.readdirSync(path.join(tmpData, 'media')).length}`)
+
+    console.log('\n[个人头像与网站徽标：账号隔离 · 权限 · 上传失败 · 默认恢复]')
+    const avatarRoute = '/account/avatar'
+    const logoRoute = '/admin/settings/logo'
+    const roToken = csrfFor(roCookieUp)
+    const avatar = await upload({route:avatarRoute,cookie:roCookieUp,csrf:roToken,bytes:png})
+    check('只读账号可上传自己的头像', avatar.status === 302 && avatar.location === '/account?notice=avatar-saved', avatar.location)
+    const own = await get('/account', {cookie:roCookieUp})
+    check('头像出现在个人设置和胶囊中', (own.body.match(new RegExp('src="/media/' + upName + '"','g')) ?? []).length >= 3)
+    check('另一个账号仍使用默认头像', !(await get('/account',{cookie:adminUp})).body.includes('src="/media/' + upName + '"'))
+    check('头像缺 CSRF 拒绝', (await upload({route:avatarRoute,cookie:roCookieUp,omitCsrf:true,bytes:png})).status === 403)
+    check('头像跨站来源拒绝', (await upload({route:avatarRoute,cookie:roCookieUp,csrf:roToken,origin:'https://evil.example',bytes:png})).status === 403)
+    check('头像不接受 SVG', (await upload({route:avatarRoute,cookie:roCookieUp,csrf:roToken,bytes:Buffer.from('<svg/>')})).location === '/account?notice=media-rejected')
+    check('头像超限回个人设置', (await upload({route:avatarRoute,cookie:roCookieUp,csrf:roToken,bytes:Buffer.concat([png,Buffer.alloc(8*1024*1024)])})).location === '/account?notice=media-too-big')
+    check('失败上传不替换旧头像', (await get('/account',{cookie:roCookieUp})).body.includes('src="/media/' + upName + '"'))
+    check('只读账号不得更改网站徽标', (await upload({route:logoRoute,cookie:roCookieUp,csrf:roToken,bytes:png})).status === 403)
+    const logo = await upload({route:logoRoute,cookie:adminUp,csrf:token,bytes:png})
+    check('管理员可上传网站徽标', logo.status === 302 && logo.location === '/admin/settings?notice=logo-saved', logo.location)
+    const logoPage = await get('/admin/settings',{cookie:adminUp})
+    check('站点设置展示徽标上传入口和预览', logoPage.body.includes('action="/admin/settings/logo"') && logoPage.body.includes('src="/media/' + upName + '"'))
+    check('导航栏品牌使用网站徽标', /class="brand-mark"[^>]*><img[^>]*src="\/media\//.test((await get('/',{cookie:roCookieUp})).body))
+    check('徽标缺 CSRF 拒绝', (await upload({route:logoRoute,cookie:adminUp,omitCsrf:true,bytes:png})).status === 403)
+    check('徽标伪装图片被拒绝', (await upload({route:logoRoute,cookie:adminUp,csrf:token,bytes:fake})).location === '/admin/settings?notice=media-rejected')
+    check('徽标上传失败显示错误样式', (await get('/admin/settings?notice=media-rejected',{cookie:adminUp})).body.includes('class="notice notice-bad"'))
+    check('徽标超限回站点设置', (await upload({route:logoRoute,cookie:adminUp,csrf:token,bytes:Buffer.concat([png,Buffer.alloc(8*1024*1024)])})).location === '/admin/settings?notice=media-too-big')
+    const clearAvatar = await postForm(avatarRoute,{cookie:roCookieUp,csrf:roToken,form:{action:'clear',userId:'999'}})
+    check('可恢复默认头像，伪造 userId 不被使用', clearAvatar.location === '/account?notice=avatar-cleared' && !(await get('/account',{cookie:roCookieUp})).body.includes('class="avatar-image"'))
+    const clearLogo = await postForm(logoRoute,{cookie:adminUp,csrf:token,form:{action:'clear'}})
+    check('可恢复默认网站徽标', clearLogo.location === '/admin/settings?notice=logo-cleared' && !(await get('/',{cookie:roCookieUp})).body.includes('class="brand-image"'))
+    check('解除引用不会立即删除图片文件', fs.existsSync(path.join(tmpData,'media',upName)))
   }
 
   // ══════════════════════════════════════════════════════════
@@ -1864,6 +1942,20 @@ try {
     })
     check('⑯ “改 id”的字段被忽略（id 仍是原来的）', hijack.status === 302 && !(await apiJson()).targets.some((t) => t.id === 'hijacked'), `got ${hijack.status}`)
 
+    // ── ⑲ 旧值兼容：库里的 `999`（「永不匹配」哨兵）不能被写路径拒掉 ──
+    // 回归：导入路径不校验状态码区间，而写路径曾只收 100–599 ——
+    // 于是 `targets.json` 灌进来的 `demo-degraded`（`[999]`）**改个名字都会被 400 拒掉**。
+    const sentinel = await postForm('/admin/targets', {
+      cookie: adminT,
+      csrf: csrfT(),
+      form: { action: 'target-update', id: 'bad', name: '状态码不符', url: 'https://example.com/', group: 'G1', expectStatus: '999' },
+    })
+    check(
+      '⑲ 带 999 哨兵的目标能保存（写路径不比导入路径更严）',
+      sentinel.status === 302 && /notice=target-saved/.test(sentinel.location),
+      `got ${sentinel.status}`,
+    )
+
     // ── 字段校验：400 + **就地重渲染并保留刚填的输入** ──
     const badUrl = await postForm('/admin/targets', {
       cookie: adminT,
@@ -1894,6 +1986,16 @@ try {
     // ── 删除两岔：它有历史 → 只停用（notice 说「停用」，不是「删除」）──
     const del = await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-delete', id: NEWID } })
     check('删除（有历史）→ 302 + `target-disabled`（页面上的按钮文案用的是同一条判据）', del.status === 302 && /notice=target-disabled/.test(del.location), `${del.status} ${del.location}`)
+
+    // ── ⑳ 显式逃生口：删除并清空历史（`docs/targets-source-decision.md` §4 修订）──
+    const purgeNoConfirm = await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-purge', id: NEWID } })
+    check('⑳ 未勾确认框 → **400**（服务端独立校验，不靠前端 required）', purgeNoConfirm.status === 400 && /确认框/.test(purgeNoConfirm.body), `got ${purgeNoConfirm.status}`)
+    check('⑳ 失败时目标行还在（一行都没删）', purgeNoConfirm.body.includes(NEWID))
+    const purged = await postForm('/admin/targets', { cookie: adminT, csrf: csrfT(), form: { action: 'target-purge', id: NEWID, confirm: 'yes' } })
+    check('⑳ 勾了确认框 → 302 + notice=target-purged', purged.status === 302 && /notice=target-purged/.test(purged.location), `${purged.status} ${purged.location}`)
+    const afterPurge = await get('/admin/targets', { cookie: adminT })
+    check('⑳ 管理台里没有这一行了（连同历史一起删）', !afterPurge.body.includes(NEWID))
+    check('⑳ 读者面也没有它了', !(await apiJson()).targets.some((t) => t.id === NEWID))
 
     // ── ⑱ 全仓：运行时**没有** `config.targets` 的读取点（只剩导入来源）──
     {
@@ -1993,7 +2095,7 @@ try {
     const homeS = await get('/', { cookie: adminS })
     check('⑧ 紧接着 GET `/` 的 `<title>` 就是新值（不是模块加载时冻结的）', /验收站（改过）<\/title>/.test(homeS.body), (homeS.body.match(/<title>[^<]*/) ?? ['(无)'])[0])
     check('⑧ 描述也立刻生效（页脚与 meta）', homeS.body.includes('改过的描述'))
-    check('⑧ `/api/status` 的 `probeIntervalSeconds` 也读库（面板上「每 N 秒探测」）', JSON.parse((await get('/api/status', { cookie: adminS })).body).probeIntervalSeconds === 5)
+    check('⑧ `/api/status` 的 `probeIntervalSeconds` 也读库', JSON.parse((await get('/api/status', { cookie: adminS })).body).probeIntervalSeconds === 5)
 
     // ── ⑨⑩⑪ 校验失败：400 + **保留输入** + 库不变 ──
     const emptyTitle = await postForm('/admin/settings', { cookie: adminS, csrf: csrfS(), form: settingsForm({ 'site.title': '' }) })
@@ -2510,7 +2612,8 @@ try {
     check('SSR 默认「跟随系统」：`<html>` 上没有 `data-theme`', !home.body.includes('data-theme=') && !login.body.includes('data-theme='))
     const noScript = '<noscript><style>[data-theme-select] { display: none }</style></noscript>'
     check('无 JS 时 picker 隐藏（两个外壳都有 `<noscript>` 规则）', home.body.split(noScript).length === 2 && login.body.split(noScript).length === 2)
-    check('主题脚本不监听 matchMedia、不写 cookie', !home.body.includes('matchMedia') && !home.body.includes('document.cookie'))
+    const themeScripts = [...home.body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).filter((js) => js.includes('localStorage'))
+    check('主题脚本不监听 matchMedia、不写 cookie', themeScripts.length === 2 && themeScripts.every((js) => !js.includes('matchMedia') && !js.includes('document.cookie')))
     check('样式表里三态只切 `color-scheme`（两块都不含颜色 token）', css.body.includes(':root[data-theme="light"] { color-scheme: light; }') && css.body.includes(':root[data-theme="dark"] { color-scheme: dark; }'))
     check('颜色 token 都是 `light-dark()`（抽查 bg / label / accent）', ['--bg: light-dark(', '--label: light-dark(', '--accent: light-dark('].every((t) => css.body.includes(t)))
   }

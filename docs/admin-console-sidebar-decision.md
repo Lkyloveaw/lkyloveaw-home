@@ -1,5 +1,7 @@
 # 管理台侧栏：形状、契约与两条边界的处置
 
+> 2026-10-23 修订指针（#78 / #80 / #85–#87）：模块名「设置」统一为「站点设置」、模块名「目标」改为「系统可用性」（`/admin/targets` 不变）；管理 rail 最小高 34px、上下 padding 4px、组内 gap 0、组间 gap 20px。后续 B 外壳只在管理台显示 rail，公开页改文章侧栏，移动改原生抽屉与管理模块条，账户/403/404 无侧栏。最终契约见 [界面一致性决定](ui-consistency-decision.md)，下文保留历史论证。
+
 本文件是「管理台侧栏的落地设计」这张票的产出（map：[管理台长出左侧导航，整站配色三选一](https://github.com/Lkyloveaw/lkyloveaw-home/issues/58)）。
 
 票：<https://github.com/Lkyloveaw/lkyloveaw-home/issues/59>

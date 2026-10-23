@@ -25,6 +25,7 @@ function linePath(
   pad: number,
   xAt?: number[],
   xRange?: { min: number; max: number },
+  domain?: { min: number; max: number },
 ): string | null {
   const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v >= 0)
   if (nums.length < 2) return null
@@ -46,7 +47,8 @@ function linePath(
     const x = useTime
       ? pad + (w - pad * 2) * ((xAt![i]! - xRange!.min) / (xRange!.max - xRange!.min))
       : pad + i * stepX
-    const y = pad + (h - pad * 2) * (1 - (v - min) / span)
+    const ratio = domain ? Math.max(0, Math.min(1, (v - domain.min) / (domain.max - domain.min || 1))) : (v - min) / span
+    const y = pad + (h - pad * 2) * (1 - ratio)
     d += `${open ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `
     open = true
   })
@@ -62,6 +64,58 @@ function areaPath(d: string, w: number, h: number, pad: number): string {
   return `${d} L${last.toFixed(1)},${(h - pad).toFixed(1)} L${first.toFixed(1)},${(h - pad).toFixed(1)} Z`
 }
 
+/** 空态与正常态共用同一套 DOM：客户端靠 `chart-empty` 类切换覆盖层，不需要重建结构。 */
+let idleSeq = 0
+
+interface ChartShellOptions {
+  kind: 'latency' | 'uptime'
+  w: number
+  h: number
+  pad: number
+  color: string
+  stopOpacity: string
+  gid: string
+  d: string | null
+  domain?: { min: number; max: number }
+  caption: { avg: string; max: string }
+  aria: string
+  idleNote: string
+  xRange?: { min: number; max: number }
+}
+
+/**
+ * 曲线的统一骨架。**空态也渲染 figure + svg + 两个 path**（`d` 为空串），
+ * 只多一个 `chart-empty` 类让覆盖层显示 —— 客户端每 30 秒可以**原地**补图，
+ * 双向切换（空 → 有数据 → 又空）只切类名，不重建 DOM，也就没有「空态永远变不成曲线」。
+ */
+function chartShell(o: ChartShellOptions): string {
+  const area = o.d ? areaPath(o.d, o.w, o.h, o.pad) : ''
+  // 值域保持原精度，避免客户端首次重画因截断而跳动。
+  const domainText = (n: number): string => String(n)
+  const domain = o.domain
+    ? ' data-y-min="' + domainText(o.domain.min) + '" data-y-max="' + domainText(o.domain.max) + '"'
+    : ''
+  const wide = o.kind === 'uptime' ? ' chart-wide' : ''
+  const empty = o.d ? '' : ' chart-empty'
+  return (
+    '<figure class="chart' + wide + empty + '" data-chart data-chart-kind="' + o.kind + '"' + domain +
+    ' data-fill-id="' + o.gid + '" data-stroke="' + o.color + '">\n' +
+    '  <svg viewBox="0 0 ' + o.w + ' ' + o.h + '" preserveAspectRatio="none" role="img" aria-label="' + esc(o.aria) + '">\n' +
+    '    <defs><linearGradient id="' + o.gid + '" x1="0" y1="0" x2="0" y2="1">\n' +
+    '      <stop offset="0%" stop-color="' + o.color + '" stop-opacity="' + o.stopOpacity + '"/>\n' +
+    '      <stop offset="100%" stop-color="' + o.color + '" stop-opacity="0"/>\n' +
+    '    </linearGradient></defs>\n' +
+    '    <path d="' + area + '" fill="url(#' + o.gid + ')"/>\n' +
+    '    <path d="' + (o.d || '') + '" fill="none" stroke="' + o.color + '" stroke-width="1.5"\n' +
+    '          stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>\n' +
+    '  </svg>\n' +
+    '  <figcaption><span class="chart-avg">' + o.caption.avg + '</span><span class="chart-max">' + o.caption.max + '</span></figcaption>\n' +
+    '  <div class="chart-idle-note"><span>' + esc(o.idleNote) + '</span></div>\n' +
+    '</figure>\n' +
+    axisLabel(o.xRange)
+  )
+}
+
 /** 延迟曲线。横轴是真实时间，纵轴是毫秒。 */
 export function latencyChart(
   points: LatencyPoint[],
@@ -71,87 +125,68 @@ export function latencyChart(
 ): string {
   const pad = 6
   const values = points.map((p) => p.avgLatencyMs)
-  const d = linePath(
-    values,
+  const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v >= 0)
+  const domain = nums.length >= 2 ? initialDomain(values) : undefined
+  const d = linePath(values, w, h, pad, points.map((p) => p.at), xRange, domain)
+  const max = nums.length ? Math.max(...nums) : 0
+  const avg = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : 0
+  const failed = values.length - nums.length
+  const note = '延迟数据不足（至少 2 次有效探测后显示曲线）'
+  return chartShell({
+    kind: 'latency',
     w,
     h,
     pad,
-    points.map((p) => p.at),
+    color: 'var(--accent)',
+    stopOpacity: '0.30',
+    gid: d ? 'lg' + Math.abs(hash(d)) : 'lgidle' + idleSeq++,
+    d,
+    domain,
+    caption: d
+      ? {
+          avg: '延迟（平均 ' + avg + ' ms）',
+          max: '峰值 ' + max + ' ms' + (failed ? ' · ' + failed + ' 次失败已断开' : ''),
+        }
+      : { avg: '', max: '' },
+    aria: d ? '延迟曲线，平均 ' + avg + ' 毫秒，峰值 ' + max + ' 毫秒' : note,
+    idleNote: note,
     xRange,
-  )
-
-  if (!d) {
-    // ⚠ 空态与非空态的 DOM 结构**不同**，所以客户端的空态切换必须是「整块重建」，
-    // 不能只改属性——这里给容器一个稳定的钩子，让前端能定位到它。
-    return `<div class="chart chart-empty" data-chart data-chart-kind="latency">` +
-      `<span>延迟数据不足（至少 2 次有效探测后显示曲线）</span></div>`
-  }
-
-  const nums = values.filter((v): v is number => v != null)
-  const max = Math.max(...nums)
-  const min = Math.min(...nums)
-  const avg = Math.round(nums.reduce((a, b) => a + b, 0) / nums.length)
-  const gid = `lg${Math.abs(hash(d))}`
-  const failed = values.filter((v) => v == null).length
-
-  // 值域写进 DOM：客户端「只扩不缩」策略需要知道服务端首屏用的是哪个域，
-  // 否则它一上来就重算，会让老点立刻跳一下（实测位移可达图高的 87%）。
-  const domain = initialDomain(values)
-  return `<figure class="chart" data-chart data-chart-kind="latency"
-    data-y-min="${domain.min.toFixed(2)}" data-y-max="${domain.max.toFixed(2)}"
-    data-fill-id="${gid}" data-stroke="var(--accent)">
-  <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
-       aria-label="延迟曲线，平均 ${avg} 毫秒，峰值 ${max} 毫秒">
-    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.30"/>
-      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
-    </linearGradient></defs>
-    <path d="${areaPath(d, w, h, pad)}" fill="url(#${gid})"/>
-    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5"
-          stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
-  </svg>
-  <figcaption><span class="chart-avg">延迟（平均 ${esc(avg)} ms）</span><span class="chart-max">峰值 ${esc(max)} ms${failed ? ` · ${esc(failed)} 次失败已断开` : ''}</span></figcaption>
-</figure>
-${axisLabel(xRange)}`
+  })
 }
 
 /** 全局可用率曲线：可用目标占比（0-100%）。xRange 与各卡片共用，保证同一页横轴可比。 */
-export function uptimeChart(points: OverviewPoint[], w = 760, h = 130, xRange?: { min: number; max: number }): string {
+export function uptimeChart(
+  points: OverviewPoint[],
+  w = 760,
+  h = 130,
+  xRange?: { min: number; max: number },
+): string {
   const pad = 8
   const values = points.map((p) => (p.total > 0 ? (p.up / p.total) * 100 : null))
-  const d = linePath(
-    values,
+  const d = linePath(values, w, h, pad, points.map((p) => p.at), xRange, { min: 0, max: 100 })
+  const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v >= 0)
+  const avg = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
+  const note = '可用率曲线需要至少两轮探测数据'
+  return chartShell({
+    kind: 'uptime',
     w,
     h,
     pad,
-    points.map((p) => p.at),
+    color: 'var(--ok)',
+    stopOpacity: '0.28',
+    gid: d ? 'ug' + Math.abs(hash(d)) : 'ugidle' + idleSeq++,
+    d,
+    domain: { min: 0, max: 100 },
+    caption: d
+      ? {
+          avg: '窗口内平均可用率 ' + avg.toFixed(1) + '%',
+          max: '范围 ' + Math.min(...nums) + '% – ' + Math.max(...nums) + '%',
+        }
+      : { avg: '', max: '' },
+    aria: d ? '可用率曲线，窗口内平均 ' + avg.toFixed(1) + '%' : note,
+    idleNote: note,
     xRange,
-  )
-
-  if (!d) {
-    return `<div class="chart chart-wide chart-empty" data-chart data-chart-kind="uptime">` +
-      `<span>可用率曲线需要至少两轮探测数据</span></div>`
-  }
-
-  const nums = values.filter((v): v is number => v != null)
-  const avg = nums.reduce((a, b) => a + b, 0) / nums.length
-  const gid = `ug${Math.abs(hash(d))}`
-  // 可用率天然落在 0-100，值域固定，客户端不需要扩域。
-  return `<figure class="chart chart-wide" data-chart data-chart-kind="uptime"
-    data-y-min="0" data-y-max="100" data-fill-id="${gid}" data-stroke="var(--ok)">
-  <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
-       aria-label="可用率曲线，窗口内平均 ${avg.toFixed(1)}%">
-    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="var(--ok)" stop-opacity="0.28"/>
-      <stop offset="100%" stop-color="var(--ok)" stop-opacity="0"/>
-    </linearGradient></defs>
-    <path d="${areaPath(d, w, h, pad)}" fill="url(#${gid})"/>
-    <path d="${d}" fill="none" stroke="var(--ok)" stroke-width="1.5"
-          stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
-  </svg>
-  <figcaption><span class="chart-avg">窗口内平均可用率 ${avg.toFixed(1)}%</span><span class="chart-max">范围 ${Math.min(...nums)}% – ${Math.max(...nums)}%</span></figcaption>
-</figure>
-${axisLabel(xRange)}`
+  })
 }
 
 /**
@@ -194,8 +229,8 @@ function clock(ts: number): string {
 }
 
 function axisLabel(range?: { min: number; max: number }): string {
-  if (!range || range.max <= range.min) return ''
+  if (!range || range.max <= range.min) return '<div class="chart-axis" data-axis><span></span><span></span><span></span></div>'
   const mins = Math.round((range.max - range.min) / 60000)
   const span = mins < 60 ? `${mins} 分钟` : `${(mins / 60).toFixed(1)} 小时`
-  return `<div class="chart-axis"><span>${esc(clock(range.min))}</span><span>覆盖 ${esc(span)}</span><span>${esc(clock(range.max))}</span></div>`
+  return `<div class="chart-axis" data-axis><span>${esc(clock(range.min))}</span><span>覆盖 ${esc(span)}</span><span>${esc(clock(range.max))}</span></div>`
 }

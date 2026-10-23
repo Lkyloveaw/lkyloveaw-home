@@ -7,7 +7,8 @@ import type { Post, PostMeta } from './content.js'
 import type { ProbeTarget } from './config.js'
 import type { TargetStats, TimelinePoint, OverviewPoint, ProbeResult, LatencyPoint } from './store.js'
 import { latencyChart, uptimeChart } from './charts.js'
-import { currentCsrfToken, currentIsAdmin, currentUserName } from './csrf.js'
+import { currentCsrfToken, currentIsAdmin, currentUserName, currentUserAvatar } from './csrf.js'
+import { isSafeMediaName } from './media.js'
 import { MIN_PASSWORD_LENGTH } from './users.js'
 import { icon, type IconName } from './icons.js'
 
@@ -94,7 +95,7 @@ export interface LayoutOptions {
 
 /**
  * 主题三态（#67）：`color-scheme` 是**唯一**开关，三态只切它、不复制 token。
- * 这段控件在用户菜单与登录页各出现一次（`[data-theme-select]` 恰好 2 处）。
+ * 用户菜单、登录页和个人设置复用同一控件，当前页内的选择器同步。
  */
 function themePicker(): string {
   return `<label class="theme-picker"><span class="sr">主题</span><select data-theme-select aria-label="主题">
@@ -143,10 +144,10 @@ const ADMIN_GROUPS: ReadonlyArray<[string, ReadonlyArray<[AdminSection, string, 
     '运维',
     [
       ['overview', '/admin', '概览'],
-      ['targets', '/admin/targets', '目标'],
+      ['targets', '/admin/targets', '系统可用性'],
       ['accounts', '/admin/accounts', '账号'],
       ['backups', '/admin/backups', '备份'],
-      ['settings', '/admin/settings', '设置'],
+      ['settings', '/admin/settings', '站点设置'],
     ],
   ],
   ['内容', [['articles', '/admin/articles', '文章']]],
@@ -213,24 +214,40 @@ function drawer(sidebar: PublicSidebar | null, active?: LayoutOptions['active'])
 }
 
 /** 右上角用户胶囊 + disclosure 面板；只有已登录时渲染。 */
+function avatarMark(className = 'avatar'): string {
+  const name = currentUserAvatar()
+  const content = name && isSafeMediaName(name)
+    ? `<img class="avatar-image" src="/media/${escapeHtml(name)}" alt="">`
+    : escapeHtml([...currentUserName()][0]?.toUpperCase() ?? '?')
+  return `<span class="${className}" aria-hidden="true">${content}</span>`
+}
+
+function imageUploadForm(action: string, label: string, hasImage: boolean): string {
+  return `<div class="identity-forms">
+<form class="identity-form" method="post" action="${action}" enctype="multipart/form-data">${csrfField()}
+<label>${label}<input type="file" name="file" accept="image/png,image/jpeg,image/webp,image/gif" required></label>
+<button type="submit" name="action" value="upload">${hasImage ? '更换' : '上传'}${label}</button></form>
+${hasImage ? `<form method="post" action="${action}">${csrfField()}<button type="submit" name="action" value="clear">恢复默认${label}</button></form>` : ''}
+</div>`
+}
+
 function userMenu(): string {
   const name = currentUserName()
   if (!name) return ''
-  const initial = [...name][0]?.toUpperCase() ?? '?'
   const admin = currentIsAdmin()
   const adminItem = admin ? '<a class="menu-item" href="/admin">管理后台</a>' : ''
   return `<div class="user-menu" data-user-menu>
   <button class="user-pill" type="button" aria-expanded="false" aria-controls="user-panel" aria-label="账户菜单：${escapeHtml(name)}" data-user-trigger>
-    <span class="avatar" aria-hidden="true">${escapeHtml(initial)}</span>
+    ${avatarMark()}
     <span class="user-name">${escapeHtml(name)}</span>
     <span class="chev" aria-hidden="true">${icon('chev')}</span>
   </button>
   <div class="user-panel" id="user-panel" data-user-panel>
     <div class="user-identity">
-      <span class="avatar avatar-lg" aria-hidden="true">${escapeHtml(initial)}</span>
+      ${avatarMark('avatar avatar-lg')}
       <span class="identity-main"><strong>${escapeHtml(name)}</strong><span class="role-tag">${admin ? '管理员' : '只读'}</span></span>
     </div>
-    <a class="menu-item" href="/account">修改口令</a>
+    <a class="menu-item" href="/account">个人设置</a>
     ${adminItem}
     <div class="menu-theme"><span>主题</span>${themePicker()}</div>
     <form class="logout-form" method="post" action="/logout">${csrfField()}<button class="menu-item" type="submit">登出</button></form>
@@ -240,7 +257,34 @@ function userMenu(): string {
 
 /** 用户菜单的键盘增强：点击 / Escape / 点外 / focusout；无 focus trap，无 ARIA menu。 */
 function userMenuScript(): string {
-  return `<script>(()=>{const root=document.querySelector('[data-user-menu]');if(!root)return;const trigger=root.querySelector('[data-user-trigger]');const panel=root.querySelector('[data-user-panel]');if(!trigger||!panel)return;const close=()=>{root.classList.remove('is-open');trigger.setAttribute('aria-expanded','false');root.dataset.suppress=''};trigger.addEventListener('click',()=>{const open=!root.classList.contains('is-open');if(open){delete root.dataset.suppress;const drawer=document.querySelector('.nav-drawer[open]');if(drawer)drawer.removeAttribute('open');root.classList.add('is-open');trigger.setAttribute('aria-expanded','true')}else close()});document.addEventListener('click',(e)=>{if(!root.contains(e.target))close()});document.addEventListener('keydown',(e)=>{if(e.key==='Escape'&&root.contains(document.activeElement)){close();trigger.focus()}});root.addEventListener('focusout',(e)=>{if(!root.contains(e.relatedTarget)){close();setTimeout(()=>{if(!root.contains(document.activeElement))delete root.dataset.suppress},0)}});root.addEventListener('pointerleave',()=>{if(!root.contains(document.activeElement))delete root.dataset.suppress})})()</script>`
+  return `<script>(()=>{
+    const root=document.querySelector('[data-user-menu]');if(!root)return;
+    const trigger=root.querySelector('[data-user-trigger]');
+    const panel=root.querySelector('[data-user-panel]');if(!trigger||!panel)return;
+    const hover=window.matchMedia('(hover: hover)');
+    const sync=()=>{
+      const open=!('suppress' in root.dataset)&&(root.classList.contains('is-open')||
+        root.matches(':focus-within')||(hover.matches&&root.matches(':hover')));
+      trigger.setAttribute('aria-expanded',String(open));
+      if(open){const drawer=document.querySelector('.nav-drawer[open]');if(drawer)drawer.removeAttribute('open')}
+    };
+    const close=()=>{root.classList.remove('is-open');root.dataset.suppress='';sync()};
+    trigger.addEventListener('click',()=>{
+      if(root.classList.contains('is-open')){close();return}
+      delete root.dataset.suppress;
+      root.classList.add('is-open');sync();
+    });
+    document.addEventListener('click',(e)=>{if(!root.contains(e.target))close()});
+    document.addEventListener('keydown',(e)=>{
+      if(e.key==='Escape'&&trigger.getAttribute('aria-expanded')==='true'){trigger.focus();close()}
+    });
+    root.addEventListener('focusin',(e)=>{if(!root.contains(e.relatedTarget))delete root.dataset.suppress;sync()});
+    root.addEventListener('focusout',(e)=>{if(!root.contains(e.relatedTarget))close()});
+    root.addEventListener('pointerenter',(e)=>{
+      if(hover.matches&&e.pointerType!=='touch'){delete root.dataset.suppress;sync()}
+    });
+    root.addEventListener('pointerleave',()=>{if(!root.contains(document.activeElement))delete root.dataset.suppress;sync()});
+  })()</script>`
 }
 
 /** 手机：管理台的模块条（桌面由 rail 的管理组承担同一组条目）。 */
@@ -253,7 +297,7 @@ function adminTabs(section: AdminSection): string {
   ).join('')}</nav>`
 }
 
-export function layout(opts: LayoutOptions, site: { title: string; description: string }): string {
+export function layout(opts: LayoutOptions, site: { title: string; description: string; logo?: string | null }): string {
   // 页面自带的 bodyClass（403/404 用 `page-error`；其余页面没有额外类）。
   const bodyClass = opts.bodyClass ?? ''
   const shellClass = opts.sidebar
@@ -277,7 +321,7 @@ ${themeBoot()}
 <body class="${escapeHtml(bodyClass)}">
 <header class="site-header">
   <div class="header-inner">
-    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">${icon('doc', 'brand-icon')}</span><span class="brand-name">${escapeHtml(site.title)}</span></a>
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">${site.logo && isSafeMediaName(site.logo) ? `<img class="brand-image" src="/media/${escapeHtml(site.logo)}" alt="">` : icon('doc', 'brand-icon')}</span><span class="brand-name">${escapeHtml(site.title)}</span></a>
     ${topNav(opts.active)}
     <div class="header-actions">${drawer(opts.sidebar, opts.active)}${userMenu()}</div>
   </div>
@@ -355,6 +399,8 @@ export const NOTICE_TEXT: Record<string, string> = {
   // 「删除」有历史时其实走的是停用（`docs/targets-source-decision.md` §4），
   // 所以这个 key 只在**真的物理删掉**时才会出现。
   'target-deleted': '已删除目标（它没有任何历史记录）。这个 id 现在可以重新使用。',
+  // 显式逃生口（`docs/targets-source-decision.md` §4 的例外）：连历史一起删。
+  'target-purged': '已删除目标，并清空它的全部探测历史。这个 id 现在可以重新使用。',
   'account-created': '已创建账号。',
   'role-changed': '已修改角色。',
   'account-disabled': '已停用账号。',
@@ -369,6 +415,11 @@ export const NOTICE_TEXT: Record<string, string> = {
   // 失败的原因每次都不一样，所以文案只指路；原文由页面上的 `notice-bad` 显示。
   'backup-failed': '备份失败 —— 原因显示在下面（服务日志里也有同一行）。',
   'settings-saved': '已保存设置。',
+  'avatar-saved': '头像已更新。',
+  'avatar-cleared': '已恢复默认头像。',
+  'logo-saved': '网站徽标已更新。',
+  'logo-cleared': '已恢复默认网站徽标。',
+  'image-save-failed': '图片保存失败，请稍后重试。',
   'article-created': '已新建文章（草稿）。',
   'article-saved': '已保存。',
   'article-published': '已发布，读者现在能看到它。',
@@ -441,7 +492,7 @@ export function adminOverviewPage(
 <p class="admin-hint"><strong>这里每一页都能写</strong>（面板是只读的，这里不是）——
 目标与设置的真源是数据库，账号与备份动的是库里的行与磁盘上的产物，文章改的是内容库。</p>
 <div class="stat-strip">
-${card('目标', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
+${card('系统可用性', `${d.targets.enabled} / ${d.targets.total}`, `启用 / 共 · ${d.targets.groups} 个分组`, '/admin/targets')}
 ${card('账号', String(d.accounts.total), `管理员 ${d.accounts.admins} · 停用 ${d.accounts.disabled}`, '/admin/accounts')}
 ${card('备份', backupValue, backupDetail, '/admin/backups')}
 ${card('站点设置', d.settings.title, `${d.settings.description} · 每 ${d.settings.intervalSeconds}s 探测`, '/admin/settings')}
@@ -537,7 +588,7 @@ export function adminTargetsPage(
 <input type="hidden" name="action" value="target-delete">
 <input type="hidden" name="id" value="${escapeHtml(row.id)}">
 <button type="submit">停用</button>
-<span class="stat-sub">它有历史记录，删了会留下指向不存在目标的记录 —— 所以这里只停用，历史一行不删。</span>
+<span class="stat-sub">它有历史记录，删了会留下指向不存在目标的记录 —— 所以这里只停用，历史一行不删。要连历史一起删，用下面的「删除并清空历史」。</span>
 </form>`
       : `<form method="post" action="/admin/targets" class="form-actions">${csrfField()}
 <input type="hidden" name="action" value="target-delete">
@@ -545,6 +596,18 @@ export function adminTargetsPage(
 <button type="submit" class="btn-danger">删除</button>
 <span class="stat-sub">它<strong>没有任何历史记录</strong>，删了就真没了（删掉之后可以用同一个 id 重新建）。</span>
 </form>`
+
+    // 显式逃生口（§4 的例外）：只在**真有历史**时出现 —— 没历史时上面的「删除」已经够了。
+    // 确认框写的是后果（历史永久没了），不是「确定吗」。
+    const purgeForm = row.hasHistory
+      ? `<form method="post" action="/admin/targets" class="form-actions">${csrfField()}
+<input type="hidden" name="action" value="target-purge">
+<input type="hidden" name="id" value="${escapeHtml(row.id)}">
+<label class="confirm"><input type="checkbox" name="confirm" value="yes" required>
+我确认：这条目标的<strong>全部探测历史</strong>会被永久删除，曲线与可用率会少掉这一段。</label>
+<button type="submit" class="btn-danger">删除并清空历史</button>
+</form>`
+      : ''
 
     return `<div class="cell-stack">
 <div class="cell target-row-head">
@@ -584,6 +647,7 @@ ${
 </form>`
 }
 ${removeForm}
+${purgeForm}
 </details>
 </div>`
   }
@@ -607,18 +671,22 @@ ${removeForm}
   const body =
     renderNotice(opts.notice) +
     (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
-    `<h1>目标</h1>
+    `<h1>系统可用性</h1>
+<p class="admin-hint">这一页是<strong>配置</strong>：新增 / 编辑 / 启停 / 删除目标，<strong>不画曲线</strong>。
+曲线与实时状态在 <a href="/status">公开面板 →</a>（只读；数字与曲线每 30 秒刷新）。</p>
 <p class="admin-hint">真源是<strong>数据库</strong>（SQLite）：<code>targets.json</code> / <code>TARGETS_JSON</code>
 只在<strong>第一次启动、表还是空的时候</strong>导入一次，之后完全忽略 —— 改文件不再有任何效果。
 改完<strong>下一轮探测生效</strong>（≤ 1 个探测间隔），不用重启。</p>
 <p class="admin-hint"><code>id</code> 不可改：它是历史库的关联键，改它等于丢掉这个目标的全部历史。
 要换 id 就「新增一个 + 停用旧的」。状态码填逗号分隔的数字（如 <code>200,301</code>），
-留空表示 200-399 都算可用；超时填毫秒数（1–60000），留空用全局值。</p>
+留空表示 200-399 都算可用；100–599 之外的值（如 <code>999</code>）等于「永不匹配」，只用于演示。超时填毫秒数（1–60000），留空用全局值。</p>
+<p class="admin-hint">有历史的目标，<strong>删除</strong>只会<strong>停用</strong>（历史留着）；
+要连历史一起删，用行内的「删除并清空历史」—— <strong>不可恢复</strong>，必须勾确认框。</p>
 ${rows.length ? '' : '<p class="empty">库里还没有目标。用下面的表单新增一个。</p>'}
 ${newForm}
 ${list}`
 
-  return layout({ title: '目标 · 管理台', description: site.description, adminSection: 'targets', sidebar: null, body }, site)
+  return layout({ title: '系统可用性 · 管理台', description: site.description, adminSection: 'targets', sidebar: null, body }, site)
 }
 
 /** 管理台设置页的一行（`docs/admin-console-ia-decision.md` §6.5）。 */
@@ -661,7 +729,7 @@ export function adminSettingsPage(
   rows: AdminSettingRow[],
   envOnly: Array<{ label: string; value: string; note: string }>,
   opts: AdminSettingsOptions,
-  site: { title: string; description: string },
+  site: { title: string; description: string; logo?: string | null },
 ): string {
   const sub = opts.submitted ?? null
   // 失败时用**用户刚提交的**值回填（`submitted` 里没有这个键时才用库里的值）。
@@ -693,9 +761,12 @@ export function adminSettingsPage(
     .join('\n')
 
   const body =
-    renderNotice(opts.notice) +
+    renderNotice(opts.notice, typeof opts.notice === 'string' && /^(media-|image-save-failed)/.test(opts.notice) ? 'bad' : 'ok') +
     (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
     `<h1>站点设置</h1>
+<section class="account-card"><h2>网站徽标</h2>
+<div class="identity-settings"><span class="image-preview" aria-hidden="true">${site.logo && isSafeMediaName(site.logo) ? `<img class="brand-image" src="/media/${escapeHtml(site.logo)}" alt="">` : icon('doc', 'brand-icon')}</span>
+${imageUploadForm('/admin/settings/logo', '网站徽标', Boolean(site.logo))}</div></section>
 <p class="admin-hint">真源是<strong>数据库</strong>：<code>.env</code> 里的 <code>SITE_TITLE</code> /
 <code>SITE_DESCRIPTION</code> / <code>PROBE_INTERVAL_SECONDS</code> <strong>只作为首次启动的初始值</strong>，
 之后改它们不再有任何效果（值不同时启动日志里会有一行警告）。</p>
@@ -879,7 +950,7 @@ export function adminAccountsPage(
 ${roleCell}${stateCell}<span class="cell-meta">代次 ${u.tokenVersion}</span>
 </div>
 <div class="cell"><span class="cell-sub">自己的角色 / 启停不在这里改（服务端也会拒）—— 这是防自锁的第一道。
-改自己的口令请用右上角用户菜单 → 修改口令（/account）。</span></div>
+改自己的口令请用右上角用户菜单 → 个人设置（/account）。</span></div>
 </div>`
     }
 
@@ -961,7 +1032,7 @@ export interface LoginPageOptions {  /** 校验失败时显示的错误（已由
   error?: string
   /** 登录成功后的回跳目标（只接受站内路径，调用方已校验）。 */
   next: string
-  /** 库里一个账号都没有时，登录页要明说「请先用 CLI 建号」，否则用户会以为口令错。 */
+  /** 库里没有账号时，提示用户联系管理员。 */
   noAccounts?: boolean
 }
 
@@ -971,7 +1042,7 @@ export interface LoginPageOptions {  /** 校验失败时显示的错误（已由
  */
 export function loginPage(opts: LoginPageOptions, site: { title: string; description: string }): string {
   const banner = opts.noAccounts
-    ? `<p class="login-hint">尚未创建任何账号。请先在服务器上执行：<br><code>node dist/cli/passwd.js --user &lt;名字&gt; --password &lt;口令&gt;</code></p>`
+    ? '<p class="login-hint">暂时无法登录，请联系网站管理员。</p>'
     : ''
   const error = opts.error ? `<p class="login-error">${escapeHtml(opts.error)}</p>` : ''
   return `<!DOCTYPE html>
@@ -1041,7 +1112,7 @@ ${statusBlock(status)}
   ${
     posts.length
       ? `<div class="inset-list post-list">${posts.slice(0, 4).map(postCard).join('\n')}</div>`
-      : '<p class="empty">还没有文章。登录后在 <strong>管理台 → 文章</strong> 里写一篇就会出现。</p>'
+      : '<p class="empty">暂时还没有发布的文章。</p>'
   }
 </section>`
   return layout(
@@ -1061,7 +1132,7 @@ export interface StatusSummary {
   incidents: ProbeResult[]
   generatedAt: number
   windowLabel: string
-  /** 探测间隔（秒），面板上「每 N 秒自动刷新」用的就是它。 */
+  /** 当前探测间隔（秒），随状态 API 返回。 */
   probeIntervalSeconds: number
 }
 
@@ -1083,7 +1154,7 @@ function statOf(summary: StatusSummary, id: string): { target: ProbeTarget; stat
 function statusBlock(summary: StatusSummary): string {
   if (!summary.targets.length) {
     return `<section class="section"><div class="section-head"><h2>内网业务系统</h2><a class="more" href="/status">详情 →</a></div>
-    <p class="empty">还没有配置要监控的系统。登录后在 <strong>管理台 → 目标</strong> 里新增一个即可。</p></section>`
+    <p class="empty">暂时没有可展示的系统状态。</p></section>`
   }
   const stats = summary.targets.map((t) => t.stats)
   const withData = stats.filter((s) => s.samples > 0)
@@ -1162,27 +1233,7 @@ export function aboutPage(site: { title: string; description: string }, sidebar:
 <section class="section prose">
   <h1 class="large-title">关于</h1>
   <p>这里记录我自己折腾过的事情，以及内网各业务系统的可用性。</p>
-  <h2>怎么加一篇文章</h2>
-  <p>登录后在 <strong>管理台 → 文章</strong> 里新建即可 —— 写、改、发布、撤下都在网页上，改完立刻生效，不用登服务器。</p>
-  <p>只有在<strong>首次导入</strong>（或跑 <code>node dist/cli/articles.js --reimport</code>）时才会读 <code>content/</code> 下的 <code>.md</code>。它的格式是：</p>
-  <pre><code>---
-title: 标题
-date: 2026-01-01
-tags: [运维, 网络]
-summary: 可选的一句话摘要
----
-
-正文用 Markdown 写。</code></pre>
-  <h2>怎么加一个被监控的系统</h2>
-  <p>登录后在 <strong>管理台 → 目标</strong> 里新增一条即可，服务会在下一个探测周期自动开始记录历史
-  （不用改文件、也不用重启）。</p>
-  <pre><code>id:   wiki
-名称: 知识库
-URL:  http://10.0.0.10/
-分组: 办公</code></pre>
-  <p>目标清单的真源是 SQLite。<code>targets.json</code> 只在<strong>第一次启动、清单还是空的时候</strong>
-  导入一次，之后改它不再有任何效果 —— 那行警告会在每次启动时提醒你。</p>
-  <p>状态数据也存在同一个 SQLite 里，不用手工维护。</p>
+  <p>本站后端使用 Node.js、TypeScript 和 Fastify，数据存储使用 SQLite。</p>
 </section>`
   return layout({ title: '关于', description: site.description, active: 'about', sidebar, body }, site)
 }
@@ -1313,7 +1364,6 @@ export function statusPage(
 <section class="section" id="status-root" data-generated="${summary.generatedAt}">
   <div class="section-head">
     <h1 class="large-title">内网业务系统可用性</h1>
-    <span class="live-tag"><span class="live-dot"></span>每 ${summary.probeIntervalSeconds} 秒探测 · 每 30 秒刷新数值（曲线随页面刷新）</span>
   </div>
   <p class="lede">统计窗口：${escapeHtml(summary.windowLabel)} · 最后更新 <span class="js-generated">${escapeHtml(formatAgo(summary.generatedAt))}</span></p>
   <div class="stat-strip">
@@ -1326,7 +1376,7 @@ export function statusPage(
   ${summary.targets.length ? `<h2 class="group-title">整体可用率走势</h2>
   ${uptimeChart(summary.overview, 760, 130, xRange)}
   <h2 class="group-title">各系统明细</h2>` : ''}
-  ${summary.targets.length ? cards : '<p class="empty">还没有配置被监控的系统。在管理台的「目标」里新增，或首次启动时写 <code>targets.json</code> 导入。</p>'}
+  ${summary.targets.length ? cards : '<p class="empty">暂时没有可展示的系统状态。</p>'}
 
   <h2 class="group-title">近期异常</h2>
   ${incidents}
@@ -1336,22 +1386,35 @@ export function statusPage(
   return layout({ title: '系统可用性', description: site.description, active: 'status', sidebar, body }, site)
 }
 
-/** 我的账户：只顶栏、无侧栏；改自己口令的成功 / 失败都回这张页。 */
+/** 个人设置：账户、外观与改密；只顶栏、无侧栏。 */
 export function accountPage(
-  opts: { notice?: string; error?: string },
+  opts: { notice?: string; error?: string; noticeKey?: unknown },
   site: { title: string; description: string },
 ): string {
   const name = currentUserName()
   const role = currentIsAdmin() ? '管理员' : '只读'
-  const notice = opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>` : ''
+  const notice = opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>`
+    : renderNotice(opts.noticeKey, typeof opts.noticeKey === 'string' && /^(media-|image-save-failed)/.test(opts.noticeKey) ? 'bad' : 'ok')
   const error = opts.error ? `<p class="notice notice-bad">${escapeHtml(opts.error)}</p>` : ''
   const body = `<section class="account-page">
-  <h1 class="large-title">我的账户</h1>
-  <p class="lede">${escapeHtml(name)} · ${role}</p>
+  <h1 class="large-title">个人设置</h1>
   ${notice}${error}
   <div class="account-card">
+    <h2>账户</h2>
+    <div class="identity-settings">${avatarMark('avatar avatar-profile')}${imageUploadForm('/account/avatar', '头像', Boolean(currentUserAvatar()))}</div>
+    <dl class="account-details">
+      <div><dt>用户名</dt><dd>${escapeHtml(name)}</dd></div>
+      <div><dt>角色</dt><dd>${role}</dd></div>
+    </dl>
+  </div>
+  <div class="account-card account-appearance">
+    <h2>外观</h2>
+    <div class="account-setting"><span>主题</span>${themePicker()}</div>
+  </div>
+  <noscript><style>.account-appearance { display: none }</style></noscript>
+  <div class="account-card">
     <h2>修改口令</h2>
-    <p class="stat-sub">改完后其他设备会立即掉线；当前浏览器会重新签发，保持登录。</p>
+    <p class="stat-sub">修改口令后，其他设备将退出登录。</p>
     <form class="account-form" method="post" action="/password">
       ${csrfField()}
       <label>当前口令 <input type="password" name="current" autocomplete="current-password" required></label>
@@ -1361,7 +1424,7 @@ export function accountPage(
     </form>
   </div>
 </section>`
-  return layout({ title: '我的账户', description: site.description, sidebar: null, bodyClass: 'page-account', body }, site)
+  return layout({ title: '个人设置', description: site.description, sidebar: null, bodyClass: 'page-account', body }, site)
 }
 
 export function notFoundPage(site: { title: string; description: string }): string {
@@ -1601,7 +1664,7 @@ ${trash
     renderNotice(opts.notice) +
     (opts.bad ? '<p class="notice notice-bad">' + escapeHtml(opts.bad) + '</p>' : '') +
     `<h1>文章</h1>
-<p class="admin-hint">这一版能写、能改、能发。回收站与修订历史在下一票。</p>
+<p class="admin-hint">可以新建、编辑、发布文章；删除后可从回收站还原，修订历史在文章编辑页查看。</p>
 ${uploadBox}
 <p class="form-actions"><a class="btn btn-primary" href="/admin/articles?edit=">＋ 新建一篇</a></p>
 <div class="inset-list">${rows}</div>
