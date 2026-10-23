@@ -123,6 +123,42 @@ try {
   check('服务端接受 TipTap 形状的文档（多出的属性不该让它 400）', false, err.message)
 }
 
+console.log('\n[工具栏：六个功能组（#79）]')
+const editorSrc = fs.readFileSync(path.join(ROOT, 'src/editor/article-editor.ts'), 'utf8')
+const GROUP_LABELS = ['文本', '块', '列表', '插入', '表格', '历史']
+const BUTTON_LABELS = ['B', 'I', '<>', '链接', 'H2', 'H3', '引用', '代码块', '分隔线', '• 列表', '1. 列表', '图片', '表格', '合并', '拆分', '列宽', '+行', '−行', '+列', '−列', '撤销', '重做']
+const groupBody = (label) => {
+  const start = editorSrc.indexOf(`group('${label}'`)
+  if (start < 0) return ''
+  const next = editorSrc.indexOf("group('", start + 1)
+  return editorSrc.slice(start, next < 0 ? undefined : next)
+}
+// 产物带 `charset: ascii` 的 esbuild 会把中文写成 \uXXXX，先解回来再比对。
+const decoded = text.replace(/\\u([0-9a-f]{4})/gi, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+check('源码按 6 个功能组生成工具栏', GROUP_LABELS.every((g) => groupBody(g).length > 0))
+check(
+  '组容器带 role="group" 与可见组标签（组标签不是只在 CSS 里）',
+  editorSrc.includes("className = 'editor-toolbar-group'") &&
+    editorSrc.includes("setAttribute('role', 'group')") &&
+    editorSrc.includes("className = 'editor-toolbar-label'"),
+)
+const sourceButtons = (editorSrc.match(/title: '/g) ?? []).length
+check('22 个按钮一个不少（源码按 title 计数）', sourceButtons === 22, String(sourceButtons) + ' 个')
+check(
+  '表格组把「插入」与七种单元格操作收在一处（不再散落）',
+  ['表格', '合并', '拆分', '列宽', '+行', '−行', '+列', '−列'].every((l) => groupBody('表格').includes(`label: '${l}'`)),
+)
+check(
+  '历史组只有撤销 / 重做',
+  ['撤销', '重做'].every((l) => groupBody('历史').includes(`label: '${l}'`)) && (groupBody('历史').match(/label: '/g) ?? []).length === 2,
+)
+check('产物里 6 个组标签都在（含转义写法）', GROUP_LABELS.every((g) => decoded.includes(g)))
+check('产物里 22 个按钮标签都在', BUTTON_LABELS.every((l) => decoded.includes(l)))
+check(
+  '产物里组容器带 role="group" 与两个新类名',
+  decoded.includes('editor-toolbar-group') && decoded.includes('editor-toolbar-label') && /setAttribute\("role","group"\)/.test(decoded),
+)
+
 console.log('\n' + '-'.repeat(60))
 if (failures.length) {
   console.log('❌ ' + failures.length + ' 项失败 / 共 ' + (passed + failures.length) + ' 项')

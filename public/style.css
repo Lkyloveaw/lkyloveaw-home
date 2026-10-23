@@ -729,7 +729,12 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
   border-radius: 6px; padding: 10px; overflow: auto; }
 .article-editor .ProseMirror code { font-family: var(--mono); font-size: 0.9em; }
 .article-editor .ProseMirror-selectednode { outline: 2px solid var(--accent); }
-.editor-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.editor-toolbar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; margin: 10px 0; }
+/* 功能组（#79）：整组是一个 flex 项，组间用分隔线；只有整组都放不下时才在组内折行（不横向溢出）。 */
+.editor-toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0;
+  padding-inline-start: 12px; border-inline-start: 1px solid var(--separator); }
+.editor-toolbar-group:first-child { padding-inline-start: 0; border-inline-start: 0; }
+.editor-toolbar-label { font-size: var(--fs-caption); font-weight: 600; letter-spacing: .04em; color: var(--label-2); }
 .editor-toolbar button { font: inherit; font-size: var(--fs-footnote); min-height: 30px; padding: 4px 10px; border: 0;
   background: var(--fill); color: var(--label); border-radius: var(--radius-sm); cursor: pointer; }
 .editor-toolbar button:hover { background: var(--separator); }

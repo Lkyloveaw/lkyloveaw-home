@@ -18,6 +18,13 @@ const HIDDEN_ID = 'article-body-json'
 const MOUNT_ID = 'article-editor'
 const EMPTY_DOC = { type: 'doc', content: [{ type: 'paragraph' }] }
 
+/** 工具栏的一个按钮：显式标签 + 提示 + 点击行为（#79 起按功能组排列）。 */
+interface ToolButton {
+  label: string
+  title: string
+  run: () => void
+}
+
 function byId<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null
 }
@@ -51,59 +58,110 @@ function main(): void {
   bar.setAttribute('role', 'toolbar')
   bar.setAttribute('aria-label', '正文工具栏')
 
-  const button = (label: string, title: string, run: () => void): void => {
-    const b = document.createElement('button')
-    // ⚠ 必须显式 type=button：工具栏在 <form> 里，默认的 submit 会让每次点按钮都提交一次。
-    b.type = 'button'
-    b.textContent = label
-    b.title = title
-    b.addEventListener('click', run)
-    bar.appendChild(b)
-  }
   const chain = () => editor.chain().focus()
 
-  button('H2', '二级标题', () => chain().toggleHeading({ level: 2 }).run())
-  button('H3', '三级标题', () => chain().toggleHeading({ level: 3 }).run())
-  button('B', '加粗', () => chain().toggleBold().run())
-  button('I', '斜体', () => chain().toggleItalic().run())
-  button('<>', '行内代码', () => chain().toggleCode().run())
-  button('链接', '插入 / 去掉链接', () => {
-    const prev = (editor.getAttributes('link').href as string | undefined) ?? ''
-    const href = window.prompt('链接地址（http/https/mailto 或站内相对地址）', prev || 'https://')
-    if (href === null) return
-    if (!href) {
-      chain().extendMarkRange('link').unsetLink().run()
-      return
+  /**
+   * 工具栏的一个功能组（#79）：可见组标签 + 组内按钮。
+   *
+   * 分组的意义是**同类操作在同一个盒子里**：表格的插入与七种单元格操作必须同组，
+   * 否则「表格操作散落」只是从一个平铺换成了两个平铺。组本身是 flex 项，
+   * 窄屏时整组换行；组内按钮只在「整组都放不下」时才在组内折行（CSS 负责）。
+   */
+  const group = (label: string, buttons: ReadonlyArray<ToolButton>): void => {
+    const box = document.createElement('div')
+    box.className = 'editor-toolbar-group'
+    box.setAttribute('role', 'group')
+    box.setAttribute('aria-label', label)
+    const caption = document.createElement('span')
+    caption.className = 'editor-toolbar-label'
+    caption.textContent = label
+    box.appendChild(caption)
+    for (const spec of buttons) {
+      const b = document.createElement('button')
+      // ⚠ 必须显式 type=button：工具栏在 <form> 里，默认的 submit 会让每次点按钮都提交一次。
+      b.type = 'button'
+      b.textContent = spec.label
+      b.title = spec.title
+      b.addEventListener('click', spec.run)
+      box.appendChild(b)
     }
-    chain().extendMarkRange('link').setLink({ href }).run()
-  })
-  button('• 列表', '无序列表', () => chain().toggleBulletList().run())
-  button('1. 列表', '有序列表', () => chain().toggleOrderedList().run())
-  button('引用', '引用块', () => chain().toggleBlockquote().run())
-  button('代码块', '代码块', () => chain().toggleCodeBlock().run())
-  button('分隔线', '水平分隔线', () => chain().setHorizontalRule().run())
-  button('图片', '插入图片（地址形如 /media/<hash>.<ext>）', () => {
-    const src = window.prompt('图片地址（/media/<hash>.<ext>，或 http(s) 外链）', '/media/')
-    if (src) chain().setImage({ src, alt: '图片' }).run()
-  })
-  button('表格', '插入 3×3 表格（带表头行）', () =>
-    chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
-  )
-  button('合并', '把选中的单元格合并成一个', () => chain().mergeCells().run())
-  button('拆分', '把合并过的单元格拆开', () => chain().splitCell().run())
-  button('列宽', '设置当前单元格所在列的宽度（像素）', () => {
-    const raw = window.prompt('列宽（像素，例如 120）', '120')
-    if (!raw) return
-    const px = Number.parseInt(raw, 10)
-    if (!Number.isFinite(px) || px <= 0) return
-    chain().setCellAttribute('colwidth', [px]).run()
-  })
-  button('+行', '在下方加一行', () => chain().addRowAfter().run())
-  button('−行', '删除当前行', () => chain().deleteRow().run())
-  button('+列', '在右侧加一列', () => chain().addColumnAfter().run())
-  button('−列', '删除当前列', () => chain().deleteColumn().run())
-  button('撤销', '撤销', () => chain().undo().run())
-  button('重做', '重做', () => chain().redo().run())
+    bar.appendChild(box)
+  }
+
+  group('文本', [
+    { label: 'B', title: '加粗', run: () => chain().toggleBold().run() },
+    { label: 'I', title: '斜体', run: () => chain().toggleItalic().run() },
+    { label: '<>', title: '行内代码', run: () => chain().toggleCode().run() },
+    {
+      label: '链接',
+      title: '插入 / 去掉链接',
+      run: () => {
+        const prev = (editor.getAttributes('link').href as string | undefined) ?? ''
+        const href = window.prompt('链接地址（http/https/mailto 或站内相对地址）', prev || 'https://')
+        if (href === null) return
+        if (!href) {
+          chain().extendMarkRange('link').unsetLink().run()
+          return
+        }
+        chain().extendMarkRange('link').setLink({ href }).run()
+      },
+    },
+  ])
+
+  group('块', [
+    { label: 'H2', title: '二级标题', run: () => chain().toggleHeading({ level: 2 }).run() },
+    { label: 'H3', title: '三级标题', run: () => chain().toggleHeading({ level: 3 }).run() },
+    { label: '引用', title: '引用块', run: () => chain().toggleBlockquote().run() },
+    { label: '代码块', title: '代码块', run: () => chain().toggleCodeBlock().run() },
+    { label: '分隔线', title: '水平分隔线', run: () => chain().setHorizontalRule().run() },
+  ])
+
+  group('列表', [
+    { label: '• 列表', title: '无序列表', run: () => chain().toggleBulletList().run() },
+    { label: '1. 列表', title: '有序列表', run: () => chain().toggleOrderedList().run() },
+  ])
+
+  group('插入', [
+    {
+      label: '图片',
+      title: '插入图片（地址形如 /media/<hash>.<ext>）',
+      run: () => {
+        const src = window.prompt('图片地址（/media/<hash>.<ext>，或 http(s) 外链）', '/media/')
+        if (src) chain().setImage({ src, alt: '图片' }).run()
+      },
+    },
+  ])
+
+  // 表格组：插入 + 七种表格操作，顺序就是「插入 → 合并/拆分 → 列宽 → 行/列增删」。
+  group('表格', [
+    {
+      label: '表格',
+      title: '插入 3×3 表格（带表头行）',
+      run: () => chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+    },
+    { label: '合并', title: '把选中的单元格合并成一个', run: () => chain().mergeCells().run() },
+    { label: '拆分', title: '把合并过的单元格拆开', run: () => chain().splitCell().run() },
+    {
+      label: '列宽',
+      title: '设置当前单元格所在列的宽度（像素）',
+      run: () => {
+        const raw = window.prompt('列宽（像素，例如 120）', '120')
+        if (!raw) return
+        const px = Number.parseInt(raw, 10)
+        if (!Number.isFinite(px) || px <= 0) return
+        chain().setCellAttribute('colwidth', [px]).run()
+      },
+    },
+    { label: '+行', title: '在下方加一行', run: () => chain().addRowAfter().run() },
+    { label: '−行', title: '删除当前行', run: () => chain().deleteRow().run() },
+    { label: '+列', title: '在右侧加一列', run: () => chain().addColumnAfter().run() },
+    { label: '−列', title: '删除当前列', run: () => chain().deleteColumn().run() },
+  ])
+
+  group('历史', [
+    { label: '撤销', title: '撤销', run: () => chain().undo().run() },
+    { label: '重做', title: '重做', run: () => chain().redo().run() },
+  ])
 
   mount.parentNode?.insertBefore(bar, mount)
 

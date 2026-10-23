@@ -389,6 +389,24 @@ section('管理台：六页列表化与 details 折叠（#68 §8）')
 }
 
 // ════════════════════════════════════════════════════
+section('编辑器工具栏：六组的分隔与换行（#79）')
+// ════════════════════════════════════════════════════
+{
+  const editorTs = fs.readFileSync(path.join(root, 'src/editor/article-editor.ts'), 'utf8')
+  const groupRule = (css.match(/\.editor-toolbar-group\s*\{[^}]*\}/) ?? [''])[0]
+  check('工具栏容器仍允许换行（组才排得下一行一个）', /\.editor-toolbar\s*\{[^}]*flex-wrap:\s*wrap/s.test(css))
+  check('组是一个 flex 项、整组换行（`flex: 0 1 auto` + `min-width: 0`：放不下也不横向溢出）', /flex:\s*0 1 auto/.test(groupRule) && /min-width:\s*0/.test(groupRule))
+  const firstGroupRule = (css.match(/\.editor-toolbar-group:first-child\s*\{[^}]*\}/) ?? [''])[0]
+  check(
+    '组间用 `border-inline-start` 分隔，首组豁免',
+    /border-inline-start:\s*1px solid var\(--separator\)/.test(groupRule) && /border-inline-start:\s*0/.test(firstGroupRule) && /padding-inline-start:\s*0/.test(firstGroupRule),
+  )
+  check('组标签用 `--fs-caption` + `--label-2`', /\.editor-toolbar-label\s*\{[^}]*font-size:\s*var\(--fs-caption\)[^}]*color:\s*var\(--label-2\)/s.test(css))
+  check('组内按钮仍吃 `.editor-toolbar button` 的外观（选择器没被组切断）', /\.editor-toolbar button\s*\{[^}]*font-size:\s*var\(--fs-footnote\)/s.test(css))
+  check('编辑器源码里的三个工具栏类名在 CSS 里都有定义', ['editor-toolbar', 'editor-toolbar-group', 'editor-toolbar-label'].every((c) => editorTs.includes(`'${c}'`) && new RegExp(`\\.${c}(?![\\w-])`).test(css)))
+}
+
+// ════════════════════════════════════════════════════
 section('窄屏断点与打印其余')
 // ════════════════════════════════════════════════════
 {

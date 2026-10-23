@@ -568,6 +568,11 @@ map Notes 第 9 条要求「渐进披露：默认摘要、详情展开」。本�
 ### 8.8 编辑器（TipTap）
 
 - 工具栏 `.editor-toolbar`：`display:flex; flex-wrap:wrap; gap:4px`；每个按钮 28px 高、`--fill` 底、`--radius-sm`、13px、hover `--border-strong`；**结构由 `article-editor.ts` 创建，CSS 只控制外观**。
+  > **⚠ 已修订（2026-10-23 · [#79](https://github.com/Lkyloveaw/lkyloveaw-home/issues/79)）**：工具栏改成**六组**
+  > （文本 / 块 / 列表 / 插入 / 表格 / 历史）。每组的容器是 `.editor-toolbar-group`（`role="group"` + 可见组标签
+  > `.editor-toolbar-label`），组间用 `border-inline-start` 分隔（首组豁免）；按钮本身的外观（`--fill` 底、
+  > `--radius-sm`、`--fs-footnote`）**没动**。上一条的 gap 值以 `public/style.css` 为准。
+  > 一个已知形状：CSS 感知不到「组是否在行首」，换行到行首的组会带一条 1px 竖线；不为这点加 JS。
 - 写作区 `.article-editor`：`--bg-card`、`--radius-lg`、`--separator`、min-height 320、max-height 70vh；`.ProseMirror` 内文字走 `--fs-body` / `--lh-prose`（与读面正文一致，所见即所得），`h2/h3` 用 title2/title3，表格沿用 `.prose` 的边框与单元格规则（含「单元格里的 p 不带下边距」那条既有断言）。
 - 保存按钮 `.btn-primary`；「发布 / 撤下 / 移进回收站」三个动作按「主操作 / 危险操作」分色：发布 = filled，撤下/回收站 = danger（文字 `--bad`，描边 `--bad`）。
 - `<noscript>` 提示保留（写作区需要 JS 是既有事实）。
@@ -972,6 +977,9 @@ git grep -n "'#" -- src/views.ts src/icons.ts | grep -v 'href="#'  # 期望：�
 | 登录 | 6 | `login-body` `login-wrap` `login-form` `login-lede` `login-error` `login-hint` | 只 CSS + 新增 `.login-theme` 容器 |
 
 > `public/article-editor.js` 里的 `.editor-toolbar` 由 JS 创建，不在上面的扫描范围内（`style-check` 只扫 `views.ts` / `status.js` / `icons.ts`），但它在 CSS 里必须有定义（既有事实，保留）。
+> **已修订（2026-10-23 · [#79](https://github.com/Lkyloveaw/lkyloveaw-home/issues/79)）**：`style-check` 现在也读
+> `src/editor/article-editor.ts`，钉住工具栏的三个类名（`editor-toolbar` / `editor-toolbar-group` /
+> `editor-toolbar-label`）在 CSS 里都有定义。
 > `status.js` 动态插入的 `.status-banner` 同理，保留且必须有定义。
 
 ### A.3 新增（36）
