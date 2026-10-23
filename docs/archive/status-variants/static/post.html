@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>把个人站搬到内网：登录闸门是怎么加上的 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+<nav class="preview"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html">首页</a>
+  <a href="posts.html">分享</a>
+  <a href="post.html" aria-current="page">文章</a>
+  <a href="status.html">面板</a>
+  <a href="admin.html">管理台</a>
+  <a href="admin-targets.html">管理台·目标</a>
+  <a href="login.html">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<header class="site-header"><div class="wrap header-inner">
+  <a class="brand" href="index.html">我的个人站</a>
+  <nav class="site-nav">
+    <a href="index.html">首页</a>
+    <a href="posts.html" aria-current="page">分享</a>
+    <a href="status.html">系统可用性</a>
+    <a href="admin.html">管理</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+  <article>
+    <header class="post-header">
+      <h1>把个人站搬到内网：登录闸门是怎么加上的</h1>
+      <p class="post-meta">
+        <time datetime="2026-10-16">2026-10-16</time>
+        <span>·</span><span>约 6 分钟</span>
+        <span>·</span>
+        <a class="tag" href="posts.html">运维</a>
+        <a class="tag" href="posts.html">网络</a>
+      </p>
+      <div class="reading-bar" role="presentation"><i></i></div>
+    </header>
+
+    <!-- 正文面：衬线 + 1.95 行高 + 40 字行宽。中文长文的可读性主要靠这三样。 -->
+    <div class="prose">
+      <p class="lead">这个站原本是「谁在网里谁就能看」。把它关起来的过程里，真正难的不是写钩子，而是接受一个反直觉的事实：要「默认拒绝」，就得先把所有该放行的东西一件件列出来。</p>
+
+      <h2>一个钩子覆盖全站，但静态资源也得进白名单</h2>
+      <p>起初我以为静态资源不走业务钩子。实测推翻了这个假设：全局 <code>onRequest</code> <strong>会</strong>拦到 <code>@fastify/static</code> 提供的文件，而且与注册顺序无关。</p>
+      <p>后果很直接：如果把白名单写成一个前缀匹配，登录页自己就拿不到 <code>/style.css</code>，渲染成一张裸 HTML。所以白名单是<strong>精确路径匹配</strong>，每个静态资源显式列出。</p>
+
+      <blockquote>
+        <p>默认拒绝、白名单显式放行——失败安全的形状，代价是每加一个静态文件都要记得登记一次。</p>
+      </blockquote>
+
+      <h2>未登录的响应有两种，不能一律 302</h2>
+      <p>判据是「请求要的是 HTML 还是 JSON」，而不是路径前缀。原因是面板用 <code>fetch</code> 拉数据：</p>
+
+      <pre><code>fetch('/api/status', { headers: { accept: 'application/json' } })
+  .then(r =&gt; r.json())</code></pre>
+
+      <p>如果这里回 302，<code>fetch</code> 会默认跟随跳转，拿到登录页的 HTML，<code>r.json()</code> 直接抛错。所以页面回 302、API 回 401。</p>
+
+      <h2>三条实测出来的地雷</h2>
+      <ol>
+        <li><strong>畸形 cookie 会打成 500</strong>：<code>timingSafeEqual</code> 对不等长输入会抛 <code>ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH</code>。必须先比 byte length，不等直接判失败。</li>
+        <li><strong>载荷形状校验不能省</strong>：<code>exp</code> 若不是数字，<code>now &lt; NaN</code> 恒为 <code>false</code>，看起来像「永久有效」——一个静默的安全洞。</li>
+        <li><strong>回跳值能逃出站外</strong>：<code>//evil.com</code>、<code>/\evil.com</code>、<code>\/evil.com</code>、<code>https://evil.com</code> 都会逃。所以要解析后比对 origin，并且落点必须在已知路由内。</li>
+      </ol>
+
+      <h2>一张表，把上面这些定死</h2>
+      <table>
+        <thead><tr><th>输入情形</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>签名正确、未过期、版本一致、账号启用</td><td><code>ok</code></td></tr>
+          <tr><td><code>now &gt;= exp</code></td><td><code>expired</code></td></tr>
+          <tr><td>改了载荷但签名没换</td><td><code>bad-signature</code></td></tr>
+          <tr><td>签名长度不对</td><td><code>bad-signature</code>（<strong>不抛 500</strong>）</td></tr>
+          <tr><td>账号被停用</td><td><code>disabled</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>这类判定表的价值不在「测过了」，而在于它<strong>能不过 HTTP 直接断言</strong>——纯函数，不需要起服务、不需要造 cookie。</p>
+
+      <h2>还是有一件事没法只靠签名 cookie 做</h2>
+      <p>登出。签名的 cookie 是无状态的，服务端无从知道一份被复制走的 token 存在。所以「登出」只能让当前这台浏览器忘掉它。真正的吊销得靠另一条通道（改口令，或者建一张会话表）。</p>
+      <p>这一点后来专门开了一张票来改——但那是另一个故事了。</p>
+    </div>
+  </article>
+
+  <p class="back" style="font-family:var(--data-font);font-size:var(--fs-sm);margin-top:var(--sp-7)">
+    <a href="posts.html">← 返回分享列表</a>
+  </p>
+</main>
+
+<footer class="site-footer"><div class="wrap">
+  <span>事情分享，以及内网各业务系统的可用性</span>
+  <span class="spacer"></span>
+  <span>原型 · 可丢弃</span>
+</div></footer>
+</body>
+</html>

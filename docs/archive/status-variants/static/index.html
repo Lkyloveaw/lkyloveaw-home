@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>首页 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+<!-- 原型页面切换器：不是设计的一部分 -->
+<nav class="preview"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html" aria-current="page">首页</a>
+  <a href="posts.html">分享</a>
+  <a href="post.html">文章</a>
+  <a href="status.html">面板</a>
+  <a href="admin.html">管理台</a>
+  <a href="admin-targets.html">管理台·目标</a>
+  <a href="login.html">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<header class="site-header"><div class="wrap header-inner">
+  <a class="brand" href="index.html">我的个人站</a>
+  <nav class="site-nav">
+    <a href="index.html" aria-current="page">首页</a>
+    <a href="posts.html">分享</a>
+    <a href="status.html">系统可用性</a>
+    <a href="admin.html">管理</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+  <section class="hero">
+    <h1>我的个人站</h1>
+    <p class="lede">事情分享，以及内网各业务系统的可用性。</p>
+  </section>
+
+  <!-- 数据面：紧凑、等宽、tabular-nums、状态带形状 -->
+  <section class="section panel">
+    <div class="section-head">
+      <h2>内网业务系统</h2>
+      <a class="more" href="status.html">完整面板 →</a>
+    </div>
+
+    <div class="stat-strip">
+      <div class="stat">
+        <span class="stat-num">2/3</span>
+        <span class="stat-label">当前可用</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num">96.42%</span>
+        <span class="stat-label">平均可用率（最近 24 小时）</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num has-fault">2</span>
+        <span class="stat-label">近期异常</span>
+      </div>
+    </div>
+
+    <table class="table">
+      <caption>最近 24 小时 · 每 60 秒探测一次</caption>
+      <thead>
+        <tr>
+          <th>状态</th><th>系统</th><th class="num">平均延迟</th><th class="num">可用率</th><th>最后检查</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="badge ok"><span class="dot ok"></span>可用</span></td>
+          <td>知识库</td>
+          <td class="num">42 ms</td>
+          <td class="num">99.82%</td>
+          <td class="muted">1 分钟前</td>
+        </tr>
+        <tr>
+          <td><span class="badge warn"><span class="dot warn"></span>异常</span></td>
+          <td>记账</td>
+          <td class="num">318 ms</td>
+          <td class="num">89.45%</td>
+          <td class="muted">1 分钟前</td>
+        </tr>
+        <tr>
+          <td><span class="badge bad"><span class="dot bad"></span>故障</span></td>
+          <td>网关</td>
+          <td class="num">—</td>
+          <td class="num">99.99%</td>
+          <td class="muted">1 分钟前</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p class="muted" style="font-size:var(--fs-xs);margin-top:var(--sp-3)">
+      ⚠ 三档状态各带**独立形状**（圆 / 方 / 三角）+ 文字标签：灰度打印或色盲下照样分得清。
+    </p>
+  </section>
+
+  <hr class="hr">
+
+  <!-- 正文面：衬线、宽行距、窄行宽 -->
+  <section class="section">
+    <div class="section-head">
+      <h2>最近分享</h2>
+      <a class="more" href="posts.html">全部 →</a>
+    </div>
+    <div class="post-list">
+      <a class="post-item" href="post.html">
+        <h3>把个人站搬到内网：登录闸门是怎么加上的</h3>
+        <p class="summary">从「谁都能访问」到「默认拒绝、白名单放行」，中间踩过的坑比想象中多——尤其是静态资源也会被钩子拦下这件事。</p>
+        <ul class="tags"><li><a class="tag" href="posts.html">运维</a></li><li><a class="tag" href="posts.html">网络</a></li></ul>
+      </a>
+      <a class="post-item" href="post.html">
+        <h3>为什么我给可用性面板画了内联 SVG，而不是引一个图表库</h3>
+        <p class="summary">曲线是服务端渲染的，禁用 JS 也能看，也不需要第二个构建产物。代价是自己写映射函数，但那份映射可以被断言。</p>
+        <ul class="tags"><li><a class="tag" href="posts.html">前端</a></li><li><a class="tag" href="posts.html">取舍</a></li></ul>
+      </a>
+      <a class="post-item" href="post.html">
+        <h3>SQLite 备份：不要 cp，也不要相信 busy:0</h3>
+        <p class="summary">只拷 .sqlite 得到的是空库；而 PASSIVE checkpoint 返回 busy:0 时可能只搬了 2/33 页。这两条都是实测出来的。</p>
+        <ul class="tags"><li><a class="tag" href="posts.html">数据库</a></li><li><a class="tag" href="posts.html">备份</a></li></ul>
+      </a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="wrap">
+  <span>事情分享，以及内网各业务系统的可用性</span>
+  <span class="spacer"></span>
+  <span>原型 · 可丢弃</span>
+</div></footer>
+</body>
+</html>

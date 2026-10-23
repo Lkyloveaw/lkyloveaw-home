@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理台 · 原型</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+<nav class="preview"><div class="wrap">
+  <b>原型</b>
+  <a href="index.html">首页</a>
+  <a href="posts.html">分享</a>
+  <a href="post.html">文章</a>
+  <a href="status.html">面板</a>
+  <a href="admin.html" aria-current="page">管理台</a>
+  <a href="admin-targets.html">管理台·目标</a>
+  <a href="login.html">登录</a>
+  <span class="spacer"></span>
+  <span class="theme-switch">
+    <input type="radio" name="theme" id="theme-auto" checked><label for="theme-auto">自动</label>
+    <input type="radio" name="theme" id="theme-light"><label for="theme-light">浅</label>
+    <input type="radio" name="theme" id="theme-dark"><label for="theme-dark">深</label>
+  </span>
+</div></nav>
+
+<!-- 管理台：整块替换站点头栏，信息密度更高、等宽。只读用户看不到「管理」这一项。 -->
+<header class="console-bar"><div class="wrap">
+  <nav class="console-nav">
+    <a href="admin.html" aria-current="page">概览</a>
+    <a href="admin-targets.html">目标</a>
+    <a href="admin.html">账号</a>
+    <a href="admin.html">备份</a>
+    <a href="admin.html">站点设置</a>
+  </nav>
+  <span class="who">admin@本机 · <a href="login.html">登出</a></span>
+</div></header>
+
+<main class="wrap console">
+  <section class="section">
+    <div class="section-head">
+      <h1>管理台</h1>
+      <a class="more" href="index.html">← 回站点</a>
+    </div>
+
+    <!-- 零管理员告警：常驻在这里（启动日志只在重启时看得到） -->
+    <p class="notice notice-warn" style="font-family:var(--font-sans);font-size:var(--fs-sm)">
+      <strong>没有任何启用中的管理员。</strong>
+      管理台的写操作已被守卫拦住。修复：
+      <code>node dist/cli/passwd.js --user &lt;名字&gt; --role admin</code>
+    </p>
+
+    <!-- 成功提示：闭集 key 渲染出来的文本（?notice=target-disabled） -->
+    <p class="notice" style="font-family:var(--font-sans);font-size:var(--fs-sm)">
+      已停用目标「网关」。历史保留；面板上不再显示它。
+    </p>
+
+    <div class="admin-grid">
+      <div class="admin-card">
+        <h3>目标</h3>
+        <span class="big">3 <span class="muted" style="font-size:var(--fs-md)">/ 4</span></span>
+        <span class="stat-note">启用中 / 共 4 个 · 2 个分组</span>
+        <a class="more" href="admin-targets.html">管理目标 →</a>
+      </div>
+      <div class="admin-card">
+        <h3>账号</h3>
+        <span class="big">2</span>
+        <span class="stat-note">管理员 1 · 只读 1 · 停用 0</span>
+        <a class="more" href="#">管理账号 →</a>
+      </div>
+      <div class="admin-card">
+        <h3>备份</h3>
+        <span class="big" style="font-size:var(--fs-xl)">今天 17:00</span>
+        <span class="stat-note">最近产物 2026-10-16.sqlite · 1.4 MB · 共 7 份</span>
+        <a class="more" href="#">备份 →</a>
+      </div>
+      <div class="admin-card">
+        <h3>站点设置</h3>
+        <span class="big" style="font-size:var(--fs-lg)">我的个人站</span>
+        <span class="stat-note">探测间隔 60 秒</span>
+        <a class="more" href="#">站点设置 →</a>
+      </div>
+    </div>
+
+    <hr class="hr">
+
+    <!-- 备份区块：两行**只读**的运维参数（它们会决定文件去哪、删几份） -->
+    <h2 class="group-title" style="margin-top:0">备份</h2>
+
+    <div class="kv" style="margin-bottom:var(--sp-4);max-width:44rem">
+      <div><dt>备份目录（只读）</dt><dd>/srv/personal-wiki/data/backups</dd></div>
+      <div><dt>保留份数（只读）</dt><dd>7</dd></div>
+    </div>
+    <p class="muted" style="font-size:var(--fs-xs);margin:0 0 var(--sp-4)">
+      这两项留在 <code>.env</code>：它们决定文件写在哪、删几份——误改会丢备份，恢复要走 SSH。
+    </p>
+
+    <form method="post" action="#" class="actions">
+      <button class="btn btn-primary" type="submit">立即备份一次</button>
+      <span class="muted" style="font-size:var(--fs-xs)">今天已备份过一次，若再点会跳过。</span>
+    </form>
+
+    <table class="table" style="margin-top:var(--sp-4)">
+      <caption>滚动保留最近的 7 份，同一天只留一份</caption>
+      <thead><tr><th>文件</th><th class="num">大小</th><th>时间</th></tr></thead>
+      <tbody>
+        <tr><td>2026-10-16.sqlite</td><td class="num">1.42 MB</td><td>今天 17:00</td></tr>
+        <tr><td>2026-10-15.sqlite</td><td class="num">1.41 MB</td><td>昨天 16:00</td></tr>
+        <tr><td>2026-10-14.sqlite</td><td class="num">1.40 MB</td><td>10-14 16:00</td></tr>
+        <tr><td>2026-10-13.sqlite</td><td class="num">1.39 MB</td><td>10-13 16:00</td></tr>
+      </tbody>
+    </table>
+
+    <hr class="hr">
+
+    <!-- 站点设置：保存后提示要说清「下一轮生效、不打断当前一等」 -->
+    <h2 class="group-title" style="margin-top:0">站点设置</h2>
+    <form class="form" method="post" action="#">
+      <div class="field">
+        <label for="title">站点标题</label>
+        <input type="text" id="title" name="title" value="我的个人站">
+        <span class="hint">1–60 个字符。改完下一次请求就生效。</span>
+      </div>
+      <div class="field">
+        <label for="desc">站点描述</label>
+        <input type="text" id="desc" name="description" value="事情分享，以及内网各业务系统的可用性">
+        <span class="hint">0–200 个字符。</span>
+      </div>
+      <div class="field">
+        <label for="iv">探测间隔（秒）</label>
+        <input type="number" id="iv" name="interval" value="60" min="5" max="86400">
+        <span class="hint">
+          5–86400。保存后<strong>从下一轮开始</strong>按新间隔探测；正在等的那一轮不会被打断。
+        </span>
+      </div>
+      <div class="actions"><button class="btn btn-primary" type="submit">保存</button></div>
+    </form>
+
+    <hr class="hr">
+
+    <!-- 校验失败态：就地重渲染 + 保留已填输入 + 说清哪一条 -->
+    <h2 class="group-title" style="margin-top:0">失败态长什么样（示意）</h2>
+    <p class="notice notice-bad" style="font-family:var(--font-sans);font-size:var(--fs-sm)">
+      探测间隔必须是 5–86400 之间的整数（你填的是 <code>0</code>）。
+      <span class="muted" style="display:block;margin-top:2px;font-size:var(--fs-xs)">
+        表单里其余字段保持你填过的值，不用重填。
+      </span>
+    </p>
+    <p class="muted" style="font-size:var(--fs-xs);margin:var(--sp-4) 0 0">
+      ⚠ 拒绝一律 <code>403</code>（来源不可信 / 权限不足 / CSRF）或 <code>400</code>（字段与对象规则），
+      <strong>从不重定向</strong>——重定向会把 POST 变 GET，用户会以为提交成功了。
+    </p>
+  </section>
+</main>
+
+<footer class="site-footer"><div class="wrap">
+  <span>管理台 · 整块只有管理员可用；只读用户顶栏看不到入口，直接访问得 403</span>
+  <span class="spacer"></span>
+  <span>原型 · 可丢弃</span>
+</div></footer>
+</body>
+</html>
