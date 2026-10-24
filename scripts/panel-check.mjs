@@ -349,23 +349,24 @@ console.log('\n[徽标与点必须同时更新（否则 30 秒后互相矛盾）
   check('正常目标徽标为 badge ok /「可用」', okBadge.className === 'badge ok' && okBadge.textContent === '可用', `实际 "${okBadge.className}"/"${okBadge.textContent}"`)
 }
 
-console.log('\n[状态词：服务端与客户端必须是同一套映射]')
+console.log('\n[状态词：SSR 和真实刷新都遵守三档映射]')
 {
-  // 领域状态是 up/degraded/down，样式类是 ok/warn/bad —— 两套词对不上就会**静默**丢颜色
-  // （真发生过：徽标输出 badge up，而 CSS 只认 .badge.ok）。
-  const views = fs.readFileSync(path.join(ROOT, 'src/views.ts'), 'utf8')
-  const pairs = (s) => {
-    const out = {}
-    for (const m of s.matchAll(/['"]?(\w+)['"]?\s*:\s*'([^']*)'/g)) out[m[1]] = m[2]
-    return out
+  const views = await import('../dist/views.js')
+  const summaryFor = (targets) => ({ targets: targets.map(t => ({ target:{id:t.id,name:t.name,url:'https://example.com/'+t.id,group:t.group}, stats:{...t,samples:1,upCount:1}, timeline:t.timeline, latency:t.latency })),
+    incidents:[], overview:[], generatedAt:PAYLOAD.generatedAt, windowStartAt:PAYLOAD.generatedAt-86400000, windowLabel:'最近 24 小时', probeIntervalSeconds:60 })
+  for (const [state, cls, label] of [['up','ok','可用'],['degraded','warn','异常'],['down','bad','故障']]) {
+    const targets=PAYLOAD.targets.map(t=>t.id==='ok'?{...t,lastStatus:state}:t)
+    const html=views.statusPage(summaryFor(targets),{title:'检查',description:''},null)
+    check('SSR '+state+' 使用 '+cls+' / '+label, html.includes('<span class="badge '+cls+'">'+label+'</span>'))
+    currentPayload={...PAYLOAD,targets}
+    tickFn(); await new Promise(r=>setTimeout(r,0))
+    check('刷新 '+state+' 使用 '+cls+' / '+label,cards.ok.badge.className==='badge '+cls && cards.ok.badge.textContent===label)
   }
-  const serverClass = pairs((views.match(/const STATUS_CLASS[^=]*=\s*\{([^}]*)\}/) || [, ''])[1])
-  const serverText = pairs((views.match(/const STATUS_TEXT[^=]*=\s*\{([^}]*)\}/) || [, ''])[1])
-  const clientClass = pairs((src.match(/var STATE_CLASS\s*=\s*\{([^}]*)\}/) || [, ''])[1])
-  const clientText = pairs((src.match(/var STATE_TEXT\s*=\s*\{([^}]*)\}/) || [, ''])[1])
-  check('服务端 STATUS_CLASS 三档齐全', serverClass.up && serverClass.degraded && serverClass.down, JSON.stringify(serverClass))
-  check('客户端 STATE_CLASS 与服务端逐项一致', JSON.stringify(serverClass) === JSON.stringify(clientClass), `服务端 ${JSON.stringify(serverClass)} / 客户端 ${JSON.stringify(clientClass)}`)
-  check('客户端 STATE_TEXT 与服务端逐项一致', JSON.stringify(serverText) === JSON.stringify(clientText), `服务端 ${JSON.stringify(serverText)} / 客户端 ${JSON.stringify(clientText)}`)
+  currentPayload=PAYLOAD
+  tickFn(); await new Promise(r=>setTimeout(r,0))
+  const home=views.homePage([],summaryFor(PAYLOAD.targets),{title:'检查',description:''},{posts:[]})
+  const status=views.statusPage(summaryFor(PAYLOAD.targets),{title:'检查',description:''},null)
+  check('首页、SSR 面板与刷新使用相同可用计数和平均值', home.includes('>2/3</span>') && home.includes('83.30%') && status.includes('data-metric="up">2/3</span>') && metrics.up.textContent==='2/3' && metrics.uptime.textContent==='83.30%')
 }
 
 console.log('\n[空态曲线：30 秒内原地升级，不需要刷新页面]')

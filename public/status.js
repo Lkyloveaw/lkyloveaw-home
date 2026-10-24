@@ -1,5 +1,6 @@
 import * as CP from './chart-path.js'
 import { escapeHtml as esc } from './html.js'
+import { visibleState, summarizeStatus, stateClass, stateText, observedDuration, formatTime, formatUptime, incidentOutcome, incidentOutcomeText, incidentDetails } from './status-model.js'
 
 /**
  * 面板自动刷新：定期拉 /api/status，更新数值、曲线与时序条。
@@ -21,44 +22,11 @@ import { escapeHtml as esc } from './html.js'
   var currentEvents = JSON.parse(root.getAttribute('data-events') || '[]')
   var initialKeys = root.getAttribute('data-current') !== null ? targetKeys(currentItems) : null
   var inFlight = false
+  // 整页图表共用的显示横轴；几何计算本身保持无状态。
+  var xRange = null
 
   function targetKeys(items) {
     return JSON.stringify(items.map(function (t) { return [t.id, t.name, t.group] }))
-  }
-
-  function observedDuration(ms) {
-    if (ms < 60000) return '不足 1 分钟'
-    var minutes = Math.floor(ms / 60000)
-    if (minutes < 60) return minutes + ' 分钟'
-    var hours = Math.floor(minutes / 60)
-    return hours < 48 ? hours + ' 小时' : Math.floor(hours / 24) + ' 天'
-  }
-
-  function visibleState(item, now) {
-    if (item.lastCheckedAt == null) return 'unknown'
-    return now - item.lastCheckedAt > item.staleAfterMs ? 'stale' : (item.lastStatus || 'unknown')
-  }
-
-  /** 共享横轴：整页所有曲线用同一个时间范围，否则各卡片的曲线会各自铺满宽度，时长看起来一样长。 */
-  var xRange = null
-
-  /**
-   * 状态 → 样式类名 / 中文标签。
-   *
-   * ⚠ **必须与 `src/views.ts` 的 `STATUS_CLASS` / `STATUS_TEXT` 保持一致。**
-   * 领域状态是 `up/degraded/down`，而样式类是 `ok/warn/bad`——两套词对不上就会**静默**丢掉颜色
-   * （真发生过：徽标输出 `badge up`，而 CSS 只认 `.badge.ok`，徽标一个颜色都没上，
-   * 肉眼看只像「素了点」）。这里是客户端那一半，改服务端时必须一起改。
-   */
-  var STATE_CLASS = { up: 'ok', degraded: 'warn', down: 'bad' }
-  var STATE_TEXT = { up: '可用', degraded: '异常', down: '故障' }
-
-  /** 没有数据时的兜底：状态可能为 null/未知，类名与文字都要能落下来。 */
-  function stateClass(status) {
-    return STATE_CLASS[status] || 'unknown'
-  }
-  function stateText(status) {
-    return STATE_TEXT[status] || '无数据'
   }
 
   // ── 失败态 ─────────────────────────────────────────────
@@ -113,7 +81,7 @@ import { escapeHtml as esc } from './html.js'
       var card = document.querySelector('[data-target="' + id + '"]')
       if (!card) return
 
-      text(card.querySelector('.uptime'), item.uptime == null ? '暂无数据' : (item.uptime * 100).toFixed(2) + '%')
+      text(card.querySelector('.uptime'), formatUptime(item.uptime))
 
       var dds = card.querySelectorAll('.kv dd')
       if (dds.length >= 4) {
@@ -141,18 +109,14 @@ import { escapeHtml as esc } from './html.js'
   function paintFreshness() {
     // 用服务端取数时间加本地经过时长，避免两台机器时钟偏差造成误报。
     var now = generatedAt + Math.max(0, Date.now() - receivedAt)
-    var up = 0, faults = 0, stale = 0, unknown = 0
+    var totals = summarizeStatus(currentItems, now)
     currentItems.forEach(function (item) {
       var state = visibleState(item, now)
-      if (state === 'up') up++
-      else if (state === 'down' || state === 'degraded') faults++
-      else if (state === 'stale') stale++
-      else unknown++
       var card = document.querySelector('[data-target="' + item.id + '"]')
       if (!card) return
       card.setAttribute('data-state', state)
       var dot = card.querySelector('.dot'), badge = card.querySelector('.badge')
-      var label = state === 'stale' ? '数据过期' : stateText(state)
+      var label = stateText(state)
       if (dot) {
         dot.className = 'dot ' + stateClass(state)
         dot.setAttribute('title', label)
@@ -160,23 +124,18 @@ import { escapeHtml as esc } from './html.js'
       }
       if (badge) { badge.className = 'badge ' + stateClass(state); text(badge, label) }
     })
-    text(document.querySelector('[data-metric="up"]'), up + '/' + currentItems.length)
+    text(document.querySelector('[data-metric="up"]'), totals.up + '/' + totals.total)
     var faultEl = document.querySelector('[data-metric="faults"]')
-    text(faultEl, String(faults))
-    if (faultEl) faultEl.className = 'stat-num' + (faults ? ' has-fault' : '')
-    text(document.querySelector('[data-metric="freshness"]'), stale || unknown
-      ? stale + ' 个系统数据过期 · ' + unknown + ' 个系统待探测'
-      : currentItems.length ? '探测数据正常' : '暂无监控系统')
+    text(faultEl, String(totals.faults))
+    if (faultEl) faultEl.className = 'stat-num' + (totals.faults ? ' has-fault' : '')
+    text(document.querySelector('[data-metric="freshness"]'), totals.freshnessText)
     paintIncidents(now)
   }
 
   function paintSummary() {
-    var uptimes = currentItems.filter(function (t) { return t.uptime != null })
-    var latencies = currentItems.filter(function (t) { return t.avgLatencyMs != null })
-    text(document.querySelector('[data-metric="uptime"]'), uptimes.length
-      ? (uptimes.reduce(function (n, t) { return n + t.uptime }, 0) / uptimes.length * 100).toFixed(2) + '%' : '暂无数据')
-    text(document.querySelector('[data-metric="latency"]'), latencies.length
-      ? Math.round(latencies.reduce(function (n, t) { return n + t.avgLatencyMs }, 0) / latencies.length) + ' ms' : '—')
+    var totals = summarizeStatus(currentItems, generatedAt)
+    text(document.querySelector('[data-metric="uptime"]'), formatUptime(totals.avgUptime))
+    text(document.querySelector('[data-metric="latency"]'), totals.avgLatencyMs == null ? '—' : totals.avgLatencyMs + ' ms')
   }
 
   function paintIncidents(now) {
@@ -190,14 +149,13 @@ import { escapeHtml as esc } from './html.js'
     var list = document.createElement('ul'); list.className = 'inset-list incident-list'
     currentEvents.forEach(function (event) {
       var item = currentItems.find(function (t) { return t.id === event.targetId })
-      var outcome = event.outcome
-      if (outcome === 'ongoing' && item && now - event.lastSeenAt > item.staleAfterMs) outcome = 'unknown'
+      var outcome = incidentOutcome(event, item ? item.staleAfterMs : undefined, now)
       var row = document.createElement('li')
       function cell(cls, value) { var el = document.createElement('span'); el.className = cls; el.textContent = value; row.appendChild(el) }
       cell('incident-time', '首次记录 ' + formatTime(event.at))
       cell('incident-name', item ? item.name : event.targetId)
-      cell('incident-outcome', outcome === 'recovered' ? '已恢复' : outcome === 'unknown' ? '缺测，待确认' : '持续中')
-      cell('incident-details', '已确认 ' + observedDuration(event.durationMs) + ' · ' + (event.endedAt == null ? '最后异常' : '恢复记录') + ' ' + formatTime(event.endedAt == null ? event.lastSeenAt : event.endedAt))
+      cell('incident-outcome', incidentOutcomeText(outcome))
+      cell('incident-details', incidentDetails(event))
       cell('incident-err', event.error || stateText(event.status))
       list.appendChild(row)
     })
@@ -390,15 +348,8 @@ import { escapeHtml as esc } from './html.js'
 
       // 说明行里的「最近 N 次」也得跟着走，否则刷新后数字会一直停在首屏那个值。
       text(card.querySelector('.js-cells'), String(pts.length))
-      strip.setAttribute('aria-label', item.name + '：最近 ' + pts.length + ' 次探测（旧 → 新），最近 24 小时可用率 ' + (item.uptime == null ? '暂无数据' : (item.uptime * 100).toFixed(2) + '%'))
+      strip.setAttribute('aria-label', item.name + '：最近 ' + pts.length + ' 次探测（旧 → 新），最近 24 小时可用率 ' + (formatUptime(item.uptime)))
     })
-  }
-
-  function formatTime(ts) {
-    var d = new Date(ts)
-    var pad = function (n) { return String(n).padStart(2, '0') }
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
   }
 
   // ── 主流程 ─────────────────────────────────────────────

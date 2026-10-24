@@ -14,6 +14,7 @@ import { icon, type IconName } from './icons.js'
 import { isFriendLinkUrl, type FriendLink } from './friend-links.js'
 import { toPublicSummary } from './public-summary.js'
 import { escapeHtml } from '../public/html.js'
+import { visibleState, summarizeStatus, stateClass, stateText, observedDuration, formatTime, formatUptime, incidentOutcome, incidentOutcomeText, incidentDetails } from '../public/status-model.js'
 
 /**
  * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
@@ -28,22 +29,6 @@ export function csrfField(): string {
 
 export { escapeHtml } from '../public/html.js'
 
-function formatDuration(ms: number): string {
-  if (ms <= 0) return '—'
-  const mins = Math.floor(ms / 60000)
-  if (mins < 60) return `${mins} 分钟`
-  const hours = Math.floor(mins / 60)
-  if (hours < 48) return `${hours} 小时`
-  return `${Math.floor(hours / 24)} 天`
-}
-
-function formatTime(ts: number | null): string {
-  if (!ts) return '—'
-  const d = new Date(ts)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 function formatAgo(ts: number | null): string {
   if (!ts) return '从未'
   const diff = Date.now() - ts
@@ -53,9 +38,7 @@ function formatAgo(ts: number | null): string {
   return `${Math.floor(diff / 86400000)} 天前`
 }
 
-export function formatUptime(uptime: number | null): string {
-  return uptime == null ? '暂无数据' : `${(uptime * 100).toFixed(2)}%`
-}
+export { formatUptime } from '../public/status-model.js'
 
 /**
  * 管理台的**六个模块**（`docs/admin-console-sidebar-decision.md` §1）。
@@ -1178,44 +1161,24 @@ export interface StatusSummary {
 }
 
 function statusDot(status: string | null): string {
-  const map: Record<string, [string, string]> = {
-    up: ['ok', '可用'],
-    degraded: ['warn', '异常'],
-    down: ['bad', '故障'],
-    stale: ['unknown', '数据过期'],
-  }
-  const [cls, label] = (status && map[status]) || ['unknown', '无数据']
-  return `<span class="dot ${cls}" title="${escapeHtml(label)}"><span class="sr">${escapeHtml(label)}</span></span>`
+  const label = stateText(status)
+  return `<span class="dot ${stateClass(status)}" title="${escapeHtml(label)}"><span class="sr">${escapeHtml(label)}</span></span>`
 }
 
 function statOf(summary: StatusSummary, id: string): { target: ProbeTarget; stats: TargetStats } | undefined {
   return summary.targets.find((t) => t.target.id === id)
 }
 
-function displayStatus(s: TargetStats, now: number): string | null {
-  if (s.lastCheckedAt == null) return null
-  return now - s.lastCheckedAt > s.staleAfterMs ? 'stale' : s.lastStatus
-}
-
-function freshnessText(stats: TargetStats[], now: number): string {
-  const stale = stats.filter(s => displayStatus(s, now) === 'stale').length
-  const unknown = stats.filter(s => displayStatus(s, now) == null).length
-  return stale || unknown ? `${stale} 个系统数据过期 · ${unknown} 个系统待探测` : stats.length ? '探测数据正常' : '暂无监控系统'
-}
-
-function observedDuration(ms: number): string {
-  return ms < 60000 ? '不足 1 分钟' : formatDuration(ms)
-}
-
 function incidentList(summary: StatusSummary): string {
   if (!summary.incidents.length) return '<p class="empty">最近 24 小时没有记录到异常事件。</p>'
   return `<ul class="inset-list incident-list">${summary.incidents.map(i => {
-    const name = summary.targets.find(t => t.target.id === i.targetId)?.target.name ?? i.targetId
-    const outcome = i.outcome === 'recovered' ? '已恢复' : i.outcome === 'unknown' ? '缺测，待确认' : '持续中'
+    const item = summary.targets.find(t => t.target.id === i.targetId)
+    const name = item?.target.name ?? i.targetId
+    const outcome = incidentOutcome(i, item?.stats.staleAfterMs, summary.generatedAt)
     return `<li><span class="incident-time">首次记录 ${escapeHtml(formatTime(i.at))}</span>
-      <span class="incident-name">${escapeHtml(name)}</span><span class="incident-outcome">${outcome}</span>
-      <span class="incident-details">已确认 ${escapeHtml(observedDuration(i.durationMs))} · ${i.endedAt == null ? '最后异常' : '恢复记录'} ${escapeHtml(formatTime(i.endedAt ?? i.lastSeenAt))}</span>
-      <span class="incident-err">${escapeHtml(i.error ?? STATUS_TEXT[i.status] ?? i.status)}</span></li>`
+      <span class="incident-name">${escapeHtml(name)}</span><span class="incident-outcome">${incidentOutcomeText(outcome)}</span>
+      <span class="incident-details">${escapeHtml(incidentDetails(i))}</span>
+      <span class="incident-err">${escapeHtml(i.error ?? stateText(i.status))}</span></li>`
   }).join('')}</ul>`
 }
 
@@ -1226,17 +1189,12 @@ function statusBlock(summary: StatusSummary): string {
     <p class="empty">暂时没有可展示的系统状态。</p></section>`
   }
   const stats = summary.targets.map((t) => t.stats)
-  const withData = stats.filter((s) => s.samples > 0)
-  const upNow = stats.filter((s) => displayStatus(s, summary.generatedAt) === 'up').length
-  const avgUptime =
-    withData.length > 0
-      ? withData.reduce((sum, s) => sum + (s.uptime ?? 0), 0) / withData.length
-      : null
+  const totals = summarizeStatus(stats, summary.generatedAt)
 
   const rows = summary.targets
     .map(
       ({ target, stats: s }) => `<div class="cell">
-      ${statusDot(displayStatus(s, summary.generatedAt))}
+      ${statusDot(visibleState(s, summary.generatedAt))}
       <span class="cell-title">${escapeHtml(target.name)}</span>
       <span class="cell-meta">${s.avgLatencyMs != null ? `${s.avgLatencyMs} ms` : '—'}</span>
       <span class="cell-meta">${formatUptime(s.uptime)}</span>
@@ -1250,11 +1208,11 @@ function statusBlock(summary: StatusSummary): string {
     <a class="more" href="/status">完整面板 →</a>
   </div>
   <div class="stat-strip">
-    <div class="stat"><span class="stat-num">${upNow}/${summary.targets.length}</span><span class="stat-label">当前可用</span></div>
-    <div class="stat"><span class="stat-num">${formatUptime(avgUptime)}</span><span class="stat-label">平均可用率（${escapeHtml(summary.windowLabel)}）</span></div>
-    <div class="stat"><span class="stat-num">${stats.filter(s => ['down', 'degraded'].includes(displayStatus(s, summary.generatedAt) ?? '')).length}</span><span class="stat-label">当前异常系统</span></div>
+    <div class="stat"><span class="stat-num">${totals.up}/${summary.targets.length}</span><span class="stat-label">当前可用</span></div>
+    <div class="stat"><span class="stat-num">${formatUptime(totals.avgUptime)}</span><span class="stat-label">平均可用率（${escapeHtml(summary.windowLabel)}）</span></div>
+    <div class="stat"><span class="stat-num">${totals.faults}</span><span class="stat-label">当前异常系统</span></div>
   </div>
-  <p class="status-freshness">${freshnessText(stats, summary.generatedAt)}</p>
+  <p class="status-freshness">${totals.freshnessText}</p>
   <div class="inset-list">${rows}</div>
 </section>`
 }
@@ -1325,23 +1283,11 @@ function cellStrip(points: TimelinePoint[], want = CELL_STRIP_LEN): string {
   for (let i = 0; i < want - recent.length; i++) cells.push('<i class="cell-missing"></i>')
   for (const p of recent) {
     cells.push(
-      `<i class="${p.status}" title="${escapeHtml(`${formatTime(p.at)} · ${STATUS_TEXT[p.status] ?? p.status}${p.latencyMs != null ? ` · ${p.latencyMs}ms` : ''}`)}"></i>`,
+      `<i class="${p.status}" title="${escapeHtml(`${formatTime(p.at)} · ${stateText(p.status)}${p.latencyMs != null ? ` · ${p.latencyMs}ms` : ''}`)}"></i>`,
     )
   }
   return cells.join('')
 }
-
-/** 三档状态的文字。`degraded` 与 `down` 必须分开——处置方式完全不同（CONTEXT.md 的「状态」词条）。 */
-const STATUS_TEXT: Record<string, string> = { up: '可用', degraded: '异常', down: '故障' }
-
-/**
- * 状态 → CSS 类名。**状态值与类名不是一套词**：
- * 领域状态是 `up/degraded/down`，而 `.dot` / `.badge` 的样式类一直是 `ok/warn/bad`
- * （`statusDot()` 早就在做这个映射）。
- * ⚠ 这里必须复用同一张表。第一版直接输出 `badge ${state}` 写出 `badge degraded`，
- * 而 CSS 只认 `.badge.warn` —— 徽标一个颜色都没上，且**肉眼看不出是 bug**（只是"看起来素了点"）。
- */
-const STATUS_CLASS: Record<string, string> = { up: 'ok', degraded: 'warn', down: 'bad' }
 
 /**
  * 可用性面板 = **卡片墙 · 时间格**（票 #21 三变体原型定稿，见 `docs/visual-prototype-decision.md`）。
@@ -1364,14 +1310,7 @@ export function statusPage(
   }
 
   const stats = summary.targets.map((t) => t.stats)
-  const upNow = stats.filter((s) => displayStatus(s, summary.generatedAt) === 'up').length
-  const withData = stats.filter((s) => s.samples > 0)
-  const avgUptime =
-    withData.length > 0 ? withData.reduce((sum, s) => sum + (s.uptime ?? 0), 0) / withData.length : null
-  const latencies = stats.map((s) => s.avgLatencyMs).filter((n): n is number => n != null)
-  const avgLatency = latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null
-
-  const faultCount = stats.filter(s => ['down', 'degraded'].includes(displayStatus(s, summary.generatedAt) ?? '')).length
+  const totals = summarizeStatus(stats, summary.generatedAt)
 
   // 同一页所有曲线共用一个横轴范围，否则各卡片的曲线会各自铺满宽度，时长看起来一样长。
   const xRange = { min: summary.windowStartAt, max: summary.generatedAt }
@@ -1382,13 +1321,11 @@ export function statusPage(
     <div class="target-grid">
       ${items
         .map(({ target, stats: s, timeline, latency }) => {
-          const state = displayStatus(s, summary.generatedAt) ?? 'unknown'
-          const badge = state === 'stale' ? '<span class="badge unknown">数据过期</span>' : s.lastStatus
-            ? `<span class="badge ${STATUS_CLASS[s.lastStatus] ?? 'unknown'}">${escapeHtml(STATUS_TEXT[s.lastStatus] ?? s.lastStatus)}</span>`
-            : '<span class="badge">无数据</span>'
+          const state = visibleState(s, summary.generatedAt) ?? 'unknown'
+          const badge = `<span class="badge ${stateClass(state)}">${escapeHtml(stateText(state))}</span>`
           return `<article class="card target-card" data-target="${escapeHtml(target.id)}" data-state="${escapeHtml(state)}">
         <div class="target-head">
-          ${statusDot(displayStatus(s, summary.generatedAt))}
+          ${statusDot(visibleState(s, summary.generatedAt))}
           <h3>${escapeHtml(target.name)}</h3>
           ${badge}
         </div>
@@ -1422,13 +1359,13 @@ export function statusPage(
     <h1 class="large-title">内网业务系统可用性</h1>
   </div>
   <p class="lede">统计窗口：${escapeHtml(summary.windowLabel)} · 页面取数 <span class="js-generated">${escapeHtml(formatTime(summary.generatedAt))}</span></p>
-  <p class="status-freshness" data-metric="freshness" role="status">${freshnessText(stats, summary.generatedAt)}</p>
+  <p class="status-freshness" data-metric="freshness" role="status">${totals.freshnessText}</p>
   <p class="cell-caption">每 <span class="js-probe-interval">${summary.probeIntervalSeconds}</span> 秒探测 · 每 30 秒刷新页面数据；数据过期的系统不计入当前可用或异常。</p>
   <div class="stat-strip">
-    <div class="stat"><span class="stat-num" data-metric="up">${upNow}/${summary.targets.length}</span><span class="stat-label">当前可用</span></div>
-    <div class="stat"><span class="stat-num" data-metric="uptime">${formatUptime(avgUptime)}</span><span class="stat-label">24 小时平均可用率</span></div>
-    <div class="stat"><span class="stat-num" data-metric="latency">${avgLatency != null ? `${avgLatency} ms` : '—'}</span><span class="stat-label">24 小时平均响应</span></div>
-    <div class="stat"><span class="stat-num ${faultCount ? 'has-fault' : ''}" data-metric="faults">${faultCount}</span><span class="stat-label">当前异常系统</span></div>
+    <div class="stat"><span class="stat-num" data-metric="up">${totals.up}/${summary.targets.length}</span><span class="stat-label">当前可用</span></div>
+    <div class="stat"><span class="stat-num" data-metric="uptime">${formatUptime(totals.avgUptime)}</span><span class="stat-label">24 小时平均可用率</span></div>
+    <div class="stat"><span class="stat-num" data-metric="latency">${totals.avgLatencyMs != null ? `${totals.avgLatencyMs} ms` : '—'}</span><span class="stat-label">24 小时平均响应</span></div>
+    <div class="stat"><span class="stat-num ${totals.faults ? 'has-fault' : ''}" data-metric="faults">${totals.faults}</span><span class="stat-label">当前异常系统</span></div>
   </div>
 
   ${summary.targets.length ? `<h2 class="group-title">整体可用率走势</h2>

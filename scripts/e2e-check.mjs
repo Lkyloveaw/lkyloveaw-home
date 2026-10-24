@@ -329,7 +329,7 @@ try {
   check('可用率值域固定 0-100', /data-chart-kind="uptime"[\s\S]{0,120}data-y-min="0" data-y-max="100"/.test(st.body))
   check('时序条带 data-timeline 钩子', st.body.includes('data-timeline'))
   check('状态刷新入口通过原生 module 加载', st.body.includes('<script type="module" src="/status.js"></script>'))
-  for (const resource of ['/chart-path.js', '/html.js']) {
+  for (const resource of ['/chart-path.js', '/html.js', '/status-model.js']) {
     const res = await get(resource)
     check(resource + ' 可匿名作为 JavaScript 模块读取', res.status === 200 && /javascript/.test(res.type), res.status + ' ' + res.type)
   }
