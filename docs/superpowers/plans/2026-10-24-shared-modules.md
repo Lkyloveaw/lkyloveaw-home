@@ -52,3 +52,4 @@ Interfaces: visibleState/summarizeStatus、状态标签和样式、时间与可�
 - Ruling: 使用现有 checkout 新分支；本轮工作区源码干净，原有 output/ 不纳入改动。
 - Baseline: master 9087127；本轮前评审刚完成的 chart 43、status 15、panel 68 共 126 项通过；上传故障差异已在四个真实注入请求中复现。
 - Task 1: HTML 统一到 public/html.js；上传回归 18/19 RED → 19/19 GREEN；媒体、友联、文章流水线检查通过。
+- Task 2: 共享几何 Node 导入回归 1/5 RED → 5/5 GREEN；原有几何 43、状态可靠性 15、面板 68 全绿。为使本项独立可用，module 入口、html.js 白名单与 e2e 资源接线随 Task 2 一并迁移。

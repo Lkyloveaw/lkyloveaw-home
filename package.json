@@ -29,7 +29,7 @@
     "check:editor": "npm run build && node scripts/editor-check.mjs",
     "articles": "node dist/cli/articles.js",
     "media": "node dist/cli/media.js",
-    "check:shared": "npm run build && node scripts/shared-modules-check.mjs"
+    "check:shared": "npm run build && node scripts/shared-modules-check.mjs && node scripts/shared-presentation-check.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.4",

@@ -1,10 +1,12 @@
+import * as CP from './chart-path.js'
+import { escapeHtml as esc } from './html.js'
+
 /**
  * 面板自动刷新：定期拉 /api/status，更新数值、曲线与时序条。
  *
  * 为什么不用整页刷新：整页刷新会打断阅读（滚动位置丢失），也会让每次刷新都重渲染全部 HTML。
  *
- * 曲线重绘的几何核心在 `/chart-path.js`（与服务端 `src/charts.ts` 共用同一份映射，
- * 由 e2e 的交叉断言防漂移）。本文件只负责「取数 → 更新 DOM」。
+ * 曲线重绘的几何核心在 `/chart-path.js`（服务端与浏览器直接导入同一份实现）。本文件只负责「取数 → 更新 DOM」。
  */
 ;(function () {
   'use strict'
@@ -204,7 +206,6 @@
 
   // ── 曲线 ───────────────────────────────────────────────
 
-  var CP = window.ChartPath
 
   /**
    * 重画一个曲线容器。
@@ -218,7 +219,6 @@
    * 朴素重算 min/max 会让尖峰进窗口时老点位移到图高的 87%（实测），看起来像曲线自己在跳。
    */
   function redrawChart(container, values, ats) {
-    if (!CP) return
     var wide = container.classList.contains('chart-wide')
     var w = wide ? 760 : 520
     var h = wide ? 130 : 110
@@ -392,15 +392,6 @@
       text(card.querySelector('.js-cells'), String(pts.length))
       strip.setAttribute('aria-label', item.name + '：最近 ' + pts.length + ' 次探测（旧 → 新），最近 24 小时可用率 ' + (item.uptime == null ? '暂无数据' : (item.uptime * 100).toFixed(2) + '%'))
     })
-  }
-
-  function esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;')
   }
 
   function formatTime(ts) {

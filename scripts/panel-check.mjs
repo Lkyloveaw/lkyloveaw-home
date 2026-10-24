@@ -11,6 +11,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import * as CP from '../public/chart-path.js'
+import { buildBrowserModule } from './lib/browser-module.mjs'
 
 const ROOT = process.cwd()
 const results = []
@@ -279,9 +281,8 @@ const sandbox = {
 sandbox.window = sandbox
 sandbox.globalThis = sandbox
 vm.createContext(sandbox)
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/chart-path.js'), 'utf8'), sandbox, { filename: 'chart-path.js' })
-check('chart-path.js 挂上 ChartPath', !!sandbox.ChartPath)
-vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/status.js'), 'utf8'), sandbox, { filename: 'status.js' })
+check('共享图表 ESM 接口可用', typeof CP.linePath === 'function')
+vm.runInContext(buildBrowserModule(path.join(ROOT, 'public/status.js')), sandbox, { filename: 'status.js' })
 check('status.js 加载后注册了运行时（无异常）', true)
 
 // ── 真跑一遍刷新：抓 setInterval 的回调直接调用，等微任务链跑完再断言 DOM ──
@@ -444,7 +445,6 @@ check('目标清单变化提示重载，不更新成缺少卡片的新汇总', /
 
 console.log('\n[几何一致性：同一容器同一输入，d 会变]')
 {
-  const CP = sandbox.ChartPath
   const d1 = CP.linePath([10, 20, 15], 520, 110, 6, [1, 2, 3], { min: 1, max: 3 })
   const d2 = CP.linePath([10, 90, 15], 520, 110, 6, [1, 2, 3], { min: 1, max: 3 })
   check('不同数据算出不同 d（说明重绘会真的改变图形）', d1 !== d2)

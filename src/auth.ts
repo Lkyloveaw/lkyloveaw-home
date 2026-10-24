@@ -35,6 +35,7 @@ export const PUBLIC_PATHS: ReadonlySet<string> = new Set([
   // ⚠ 由「面板」票交付的几何核心。此刻文件可能还不存在——先放行一个不存在的路径无害，
   // 漏了它则面板合入后未登录时拿不到该文件（`chart-redraw-decision.md` §6 点名的联动点）。
   '/chart-path.js',
+  '/html.js',
   // 写作区的富文本编辑器（#57）。闸门是精确路径匹配：漏加的现象是「编辑器不出来」而不是报错。
   // 它只是打包好的客户端脚本（无数据），放行不扩大可见面。
   '/article-editor.js',
