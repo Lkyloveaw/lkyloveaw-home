@@ -44,6 +44,29 @@ try {
     parts.push(Buffer.from(`--${boundary}--\r\n`));
     return app.inject({method:'POST',url,headers:{cookie,origin:process.env.SITE_ORIGIN,'content-type':`multipart/form-data; boundary=${boundary}`},payload:Buffer.concat(parts)});
   };
+  const statusPage=await app.inject({method:'GET',url:'/status',headers:{cookie}});
+  const entryMatch=statusPage.body.match(/<script type="module" src="([^"]*status\.js[^"]*)"/);
+  assert.ok(entryMatch,'SSR must include a native module entry');
+  const entryUrl=entryMatch[1];
+  await check('module 入口 URL 隔离已缓存的 classic 脚本',()=>{
+    assert.ok(new URL(entryUrl,process.env.SITE_ORIGIN).searchParams.has('v'));
+  });
+  await check('共享模块实际响应要求缓存重新验证',async()=>{
+    for(const url of [entryUrl,'/chart-path.js','/html.js','/status-model.js']){
+      const response=await app.inject({method:'GET',url});assert.equal(response.statusCode,200);
+      assert.match(String(response.headers['cache-control']),/no-cache|no-store|max-age=0/);
+      assert.match(String(response.headers['content-type']),/javascript/);
+    }
+  });
+  await check('module 依赖 URL 同样隔离旧缓存',async()=>{
+    const response=await app.inject({method:'GET',url:entryUrl});
+    const imports=[...response.body.matchAll(/from ['"]([^'"]+)['"]/g)].map(match=>match[1]);
+    assert.equal(imports.length,3);
+    for(const specifier of imports){
+      const url=new URL(specifier,new URL(entryUrl,process.env.SITE_ORIGIN));assert.ok(url.searchParams.has('v'),specifier);
+      const dependency=await app.inject({method:'GET',url:url.pathname+url.search});assert.equal(dependency.statusCode,200);
+    }
+  });
   fs.writeFileSync(process.env.MEDIA_DIR,'blocked directory fixture');
   for(const url of endpoints){
     await check(`${url} 写盘失败显示保存失败`,async()=>{

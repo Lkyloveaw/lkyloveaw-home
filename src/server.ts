@@ -68,7 +68,7 @@ import {
 } from './users.js'
 import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCookieHeader } from './session.js'
 import { createSession, revokeSession } from './sessions-store.js'
-import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin } from './auth.js'
+import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin, STATUS_MODULE_PATHS } from './auth.js'
 import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, currentUserId, verifyCsrf } from './csrf.js'
 import { docToMarkdown } from './article-import.js'
 import { docToHtml } from './article-html.js'
@@ -422,16 +422,22 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
   await app.register(fastifyStatic, {
     root: config.publicDir,
     prefix: '/',
-    // 静态资源不带 hash，交给浏览器短缓存即可。
+    // 其余静态资源短缓存；共享 module 由 onSend 要求重新验证。
     maxAge: '1h',
   })
 
+  // static 插件会覆盖 onRequest 中的缓存头，因此在最终响应阶段设置。
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (STATUS_MODULE_PATHS.has(req.url.split('?')[0] ?? '')) reply.header('Cache-Control', 'no-cache')
+    return payload
+  })
   /**
    * 全局闸门。默认拒绝、白名单显式放行——失败安全的形状。
    *
    * 实测：这个钩子**会**拦到 `@fastify/static` 的资源，且与注册顺序无关，
    * 所以静态资源必须在 `PUBLIC_PATHS` 里显式列出（见 `auth.ts`）。
    */
+
   app.addHook('onRequest', async (req, reply) => {
     const decision = decideRequest(req)
     if (!decision.allow) return deny(reply, req, decision.deny ?? 'redirect')

@@ -1378,7 +1378,7 @@ export function statusPage(
   <p class="cell-caption">展示最近 8 起；连续失败合并，起止时间以探测记录为准，缺测期间的状态无法确认。</p>
   <div data-incidents>${incidentList(summary)}</div>
 </section>
-<script type="module" src="/status.js"></script>`
+<script type="module" src="/status.js?v=esm"></script>`
   return layout({ title: '系统可用性', description: site.description, active: 'status', sidebar, body }, site)
 }
 

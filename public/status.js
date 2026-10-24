@@ -1,6 +1,7 @@
-import * as CP from './chart-path.js'
-import { escapeHtml as esc } from './html.js'
-import { visibleState, summarizeStatus, stateClass, stateText, observedDuration, formatTime, formatUptime, incidentOutcome, incidentOutcomeText, incidentDetails } from './status-model.js'
+// 一次性 URL 隔离旧 classic 缓存；此后服务器要求每次重新验证模块。
+import * as CP from './chart-path.js?v=esm'
+import { escapeHtml as esc } from './html.js?v=esm'
+import { visibleState, summarizeStatus, stateClass, stateText, observedDuration, formatTime, formatUptime, incidentOutcome, incidentOutcomeText, incidentDetails } from './status-model.js?v=esm'
 
 /**
  * 面板自动刷新：定期拉 /api/status，更新数值、曲线与时序条。
