@@ -356,13 +356,13 @@ try {
   check('目标数正确', api.targets.length === 3, `got ${api.targets.length}`)
 
   // ── 公开契约形状：显式白名单，逐键钉住 ──
-  check('顶层恰好 6 个键', Object.keys(api).length === 6, Object.keys(api).join(','))
+  check('顶层恰好 7 个键', Object.keys(api).length === 7, Object.keys(api).join(','))
   const t0 = api.targets[0]
-  check('targets[] 恰好 10 个键', Object.keys(t0).length === 10, Object.keys(t0).join(','))
+  check('targets[] 恰好 13 个键', Object.keys(t0).length === 13, Object.keys(t0).join(','))
   check(
     'targets[] 键集符合白名单',
     JSON.stringify(Object.keys(t0).sort()) ===
-      JSON.stringify(['avgLatencyMs', 'group', 'id', 'lastError', 'lastStatus', 'latency', 'name', 'p95LatencyMs', 'timeline', 'uptime']),
+      JSON.stringify(['avgLatencyMs', 'group', 'id', 'lastCheckedAt', 'lastError', 'lastStatus', 'latency', 'name', 'p95LatencyMs', 'staleAfterMs', 'timeline', 'upStreakMs', 'uptime']),
     Object.keys(t0).sort().join(','),
   )
   check('已拍平（不再有嵌套 target/stats 两层）', t0.target === undefined && t0.stats === undefined)
@@ -371,7 +371,7 @@ try {
   // 实测过：只投影掉 target.url 之后，仍泄漏的叶子字段是 targets[].lastError 与 incidents[].error。
   // 注意 `incidents[].targetId` 是**有意保留**的（把事件关联回目标名的连接键，见判定表 §2.2），
   // 与 targets[] 里被删掉的那个重复字段不是一回事 —— 所以这里不把它当泄漏。
-  for (const word of ['"url"', 'expectStatus', 'samples', 'upCount', 'lastCheckedAt', 'upStreakMs', 'enabled']) {
+  for (const word of ['"url"', 'expectStatus', 'samples', 'upCount', 'enabled']) {
     check(`响应体不含内部字段 ${word}`, !apiBody.includes(word), word)
   }
 

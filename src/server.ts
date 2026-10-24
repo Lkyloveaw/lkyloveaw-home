@@ -7,7 +7,7 @@ import path from 'node:path'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static'
 import fastifyMultipart from '@fastify/multipart'
-import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config, normalizeTargets, validateTargetUrl } from './config.js'
+import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config, normalizeTargets, validateTargetUrl, type ProbeTarget } from './config.js'
 import {
   getPublishedPost,
   importArticlesIfEmpty,
@@ -15,7 +15,7 @@ import {
   listTags,
   warnContentDirIsNoLongerInput,
 } from './content.js'
-import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, getLatestStatuses, initStore, closeStore, sanitizeStoredErrors } from './store.js'
+import { getIncidentEvents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, getLatestStatuses, initStore, closeStore, sanitizeStoredErrors } from './store.js'
 import {
   countAllTargets,
   countEnabledTargets,
@@ -183,21 +183,25 @@ function buildAdminOverview(): AdminOverview {
  */
 function buildSummary(): StatusSummary {
   const targets = listEnabledTargets()
+  const now = Date.now()
+  const interval = getProbeIntervalSeconds()
+  const freshness = (target: ProbeTarget) => interval * 3000 + (target.timeoutMs ?? config.probeTimeoutMs)
   return {
     targets: targets.map((target) => ({
       target,
       // `enabledAt` 给「连续可用时长」设下界（§5）：停用再启用后从重新启用那一刻算起。
-      stats: getStats(target.id, WINDOW_MS, target.enabledAt),
-      timeline: getTimeline(target.id, WINDOW_MS, 60),
-      latency: getLatencyRaw(target.id, WINDOW_MS, 120),
+      stats: getStats(target.id, WINDOW_MS, target.enabledAt, freshness(target), now),
+      timeline: getTimeline(target.id, WINDOW_MS, 56),
+      latency: getLatencyRaw(target.id, WINDOW_MS, 120, freshness(target), now),
     })),
-    overview: getUptimeRaw(WINDOW_MS, targets.length, 120),
-    incidents: getRecentIncidents(8),
-    generatedAt: Date.now(),
+    overview: getUptimeRaw(WINDOW_MS, targets.length, 120, Math.max(interval * 3000, ...targets.map(freshness)), now),
+    incidents: getIncidentEvents(WINDOW_MS, targets.map(t => ({ id: t.id, enabledAt: t.enabledAt, maxGapMs: freshness(t) })), now),
+    generatedAt: now,
+    windowStartAt: now - WINDOW_MS,
     windowLabel: WINDOW_LABEL,
     // 面板上写「每 N 秒自动刷新」用的是它 —— 这里读的是**库里的配置值**，
     // 而不是「刚过去那一轮的间隔」。改完后的一个间隔内两者可能不一致，这是对的（§4 末段）。
-    probeIntervalSeconds: getProbeIntervalSeconds(),
+    probeIntervalSeconds: interval,
   }
 }
 

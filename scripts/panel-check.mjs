@@ -96,6 +96,7 @@ class El {
   }
 }
 function matches(el, sel) {
+  if (sel === '.kv dd') return el.tagName === 'DD'
   // 支持 [attr]、[attr="v"]、.class、tag 这几种本文件用到的形式
   const attrVal = sel.match(/^\[([\w-]+)="([^"]*)"\]$/)
   if (attrVal) return el.getAttribute(attrVal[1]) === attrVal[2]
@@ -216,12 +217,21 @@ docRoot.appendChild(wide)
 // 时间戳
 const stamp = new El('span'); stamp.className = 'js-generated'; stamp.textContent = '刚刚'
 docRoot.appendChild(stamp)
+const metrics = {}
+for (const key of ['up', 'uptime', 'latency', 'faults', 'freshness']) {
+  const el = new El('span'); el.setAttribute('data-metric', key); el.textContent = 'OLD'
+  docRoot.appendChild(el); metrics[key] = el
+}
+const eventsEl = new El('div'); eventsEl.setAttribute('data-incidents', ''); docRoot.appendChild(eventsEl)
 
 // ── 加载 chart-path.js 与 status.js ──
 // 喂给 status.js 的假载荷：两张卡，点数刻意**少于** data-cells，好验证「缺位补空心格」。
 const pt = (at, status, ms) => ({ at, status, avgLatencyMs: ms, latencyMs: ms })
 const PAYLOAD = {
   generatedAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+  probeIntervalSeconds: 60,
+  incidents: [{ targetId:'dead', at:Date.UTC(2026,0,2,3,0), lastSeenAt:Date.UTC(2026,0,2,3,4),
+    endedAt:null, durationMs:240000, outcome:'ongoing', error:'连接超时', status:'down' }],
   overview: [],
   targets: [
     {
@@ -241,6 +251,11 @@ const PAYLOAD = {
     },
   ],
 }
+for (const t of PAYLOAD.targets) {
+  Object.assign(t, {name:t.id, group:'未分组', lastCheckedAt:PAYLOAD.generatedAt-60000, upStreakMs:t.id === 'dead' ? 0 : 120000, staleAfterMs:185000})
+}
+docRoot.setAttribute('data-current', JSON.stringify(PAYLOAD.targets))
+docRoot.setAttribute('data-generated', String(PAYLOAD.generatedAt))
 let currentPayload = PAYLOAD
 
 let tickFn = null
@@ -251,6 +266,8 @@ const sandbox = {
   fetch: () => Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve(currentPayload) }),
   Promise,
   setTimeout,
+  clearTimeout,
+  AbortController,
   Date,
   Math,
   Number,
@@ -356,7 +373,7 @@ console.log('\n[空态曲线：30 秒内原地升级，不需要刷新页面]')
   check('两个 path 的 d 都被补上', lateArea.getAttribute('d') !== '' && lateLine.getAttribute('d') !== '')
   const latePoints = [...lateLine.getAttribute('d').matchAll(/[ML]([\d.]+),([\d.]+)/g)]
   check('真实 232×54 viewBox 内重画，所有点都未越界', latePoints.length >= 2 && latePoints.every((p) => Number(p[1]) <= 232 && Number(p[2]) <= 54), lateLine.getAttribute('d'))
-  check('caption 从空白变成延迟平均值', /延迟（平均/.test(lateAvg.textContent), `"${lateAvg.textContent}"`)
+  check('caption 从空白变成响应时间说明', lateAvg.textContent === '探测响应时间', `"${lateAvg.textContent}"`)
   check(
     '横轴跟着共享 xRange 重算',
     /^\d{2}:\d{2}$/.test(axisA.textContent) && /覆盖/.test(axisB.textContent) && /^\d{2}:\d{2}$/.test(axisC.textContent),
@@ -394,6 +411,36 @@ check('不再有静默吞掉的空 catch', !/\/\* 静默失败/.test(code))
 check('401 与网络抖动分成两种提示', /'auth'/.test(src) && /'network'/.test(code))
 check('恢复成功后清掉提示', /clearBanner\(\)/.test(code))
 check('时间戳写真实时间（不再是恒定的「刚刚」）', !/textContent = '刚刚'/.test(src) && /formatTime\(when/.test(code))
+
+console.log('\n[完整刷新、新鲜度和事件]')
+check('四项汇总同步刷新', metrics.up.textContent === '2/3' && metrics.uptime.textContent === '83.30%' && metrics.latency.textContent === '17 ms' && metrics.faults.textContent === '1')
+check('连续可用和最后探测同步更新', cards.ok.card.querySelectorAll('dd')[2].textContent === '2 分钟' && /2026-01-02/.test(cards.ok.card.querySelectorAll('dd')[3].textContent))
+check('异常事件显示持续状态及确认时长', /持续中/.test(eventsEl.textContent) && /4 分钟/.test(eventsEl.textContent))
+currentPayload = { ...PAYLOAD, generatedAt: PAYLOAD.generatedAt + 300000,
+  incidents: [{...PAYLOAD.incidents[0],outcome:'recovered',endedAt:PAYLOAD.generatedAt,durationMs:245000}],
+  targets:PAYLOAD.targets.map(t => t.id === 'dead' ? {...t,lastStatus:'up',lastCheckedAt:PAYLOAD.generatedAt+300000,lastError:null,upStreakMs:0} : t) }
+tickFn(); await new Promise(r=>setTimeout(r,0))
+check('过期绿色状态转为数据过期并排除当前可用', cards.ok.badge.textContent === '数据过期' && cards.ok.dot.className === 'dot unknown' && metrics.up.textContent === '1/3')
+check('恢复后当前异常归零，列表显示已恢复', metrics.faults.textContent === '0' && /已恢复/.test(eventsEl.textContent))
+check('汇总显示过期系统数量', /2.*数据过期/.test(metrics.freshness.textContent))
+currentPayload = {...PAYLOAD,targets:PAYLOAD.targets.map(t=>({...t,lastCheckedAt:PAYLOAD.generatedAt,upStreakMs:0}))}
+tickFn(); await new Promise(r=>setTimeout(r,0))
+check('新探测恢复后解除过期状态', cards.ok.badge.textContent === '可用' && metrics.up.textContent === '2/3')
+const originalFetch = sandbox.fetch
+const originalDate = sandbox.Date
+sandbox.Date = class extends Date { static now() { return Date.now() + 300000 } }
+sandbox.fetch = () => Promise.reject(new Error('offline'))
+tickFn(); await new Promise(r=>setTimeout(r,0))
+check('取数失败时仍按时间将旧状态标为过期', cards.ok.badge.textContent === '数据过期' && metrics.up.textContent === '0/3')
+check('取数失败保留旧数据并显示可见提示', /上一次/.test(docRoot.parentNode.textContent))
+sandbox.Date = originalDate
+sandbox.fetch = () => Promise.resolve({status:401,ok:false})
+tickFn(); await new Promise(r=>setTimeout(r,0))
+check('会话过期显示重新登录提示', /重新登录/.test(docRoot.parentNode.textContent))
+sandbox.fetch = originalFetch
+currentPayload = {...PAYLOAD, targets:[...PAYLOAD.targets,{...PAYLOAD.targets[0],id:'new'}]}
+tickFn(); await new Promise(r=>setTimeout(r,0))
+check('目标清单变化提示重载，不更新成缺少卡片的新汇总', /系统清单已变更/.test(docRoot.parentNode.textContent) && metrics.up.textContent.endsWith('/3'))
 
 console.log('\n[几何一致性：同一容器同一输入，d 会变]')
 {

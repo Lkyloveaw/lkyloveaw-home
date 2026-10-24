@@ -13,6 +13,29 @@
   if (!root) return
 
   var INTERVAL = 30000
+  var receivedAt = Date.now()
+  var generatedAt = Number(root.getAttribute('data-generated')) || receivedAt
+  var currentItems = JSON.parse(root.getAttribute('data-current') || '[]')
+  var currentEvents = JSON.parse(root.getAttribute('data-events') || '[]')
+  var initialKeys = root.getAttribute('data-current') !== null ? targetKeys(currentItems) : null
+  var inFlight = false
+
+  function targetKeys(items) {
+    return JSON.stringify(items.map(function (t) { return [t.id, t.name, t.group] }))
+  }
+
+  function observedDuration(ms) {
+    if (ms < 60000) return '不足 1 分钟'
+    var minutes = Math.floor(ms / 60000)
+    if (minutes < 60) return minutes + ' 分钟'
+    var hours = Math.floor(minutes / 60)
+    return hours < 48 ? hours + ' 小时' : Math.floor(hours / 24) + ' 天'
+  }
+
+  function visibleState(item, now) {
+    if (item.lastCheckedAt == null) return 'unknown'
+    return now - item.lastCheckedAt > item.staleAfterMs ? 'stale' : (item.lastStatus || 'unknown')
+  }
 
   /** 共享横轴：整页所有曲线用同一个时间范围，否则各卡片的曲线会各自铺满宽度，时长看起来一样长。 */
   var xRange = null
@@ -88,26 +111,14 @@
       var card = document.querySelector('[data-target="' + id + '"]')
       if (!card) return
 
-      var dot = card.querySelector('.dot')
-      var state = item.lastStatus || 'unknown'
-      var cls = 'dot ' + stateClass(item.lastStatus)
-      if (dot && dot.className !== cls) dot.className = cls
-
-      // ⚠ 徽标必须与点**同时**更新。只更新点的话，30 秒后两者会互相矛盾
-      // （点已经变红，徽标还写着「可用」）——比不更新更糟，因为它开始骗人。
-      var badge = card.querySelector('.badge')
-      if (badge) {
-        var bcls = 'badge ' + stateClass(item.lastStatus)
-        if (badge.className !== bcls) badge.className = bcls
-        text(badge, stateText(item.lastStatus))
-      }
-
       text(card.querySelector('.uptime'), item.uptime == null ? '暂无数据' : (item.uptime * 100).toFixed(2) + '%')
 
       var dds = card.querySelectorAll('.kv dd')
       if (dds.length >= 4) {
         text(dds[0], item.avgLatencyMs == null ? '—' : item.avgLatencyMs + ' ms')
         text(dds[1], item.p95LatencyMs == null ? '—' : item.p95LatencyMs + ' ms')
+        text(dds[2], item.lastStatus === 'up' && item.upStreakMs != null ? observedDuration(item.upStreakMs) : '—')
+        text(dds[3], item.lastCheckedAt == null ? '—' : formatTime(item.lastCheckedAt))
       }
 
       var err = card.querySelector('.target-error')
@@ -123,6 +134,72 @@
         err.remove()
       }
     })
+  }
+
+  function paintFreshness() {
+    // 用服务端取数时间加本地经过时长，避免两台机器时钟偏差造成误报。
+    var now = generatedAt + Math.max(0, Date.now() - receivedAt)
+    var up = 0, faults = 0, stale = 0, unknown = 0
+    currentItems.forEach(function (item) {
+      var state = visibleState(item, now)
+      if (state === 'up') up++
+      else if (state === 'down' || state === 'degraded') faults++
+      else if (state === 'stale') stale++
+      else unknown++
+      var card = document.querySelector('[data-target="' + item.id + '"]')
+      if (!card) return
+      card.setAttribute('data-state', state)
+      var dot = card.querySelector('.dot'), badge = card.querySelector('.badge')
+      var label = state === 'stale' ? '数据过期' : stateText(state)
+      if (dot) {
+        dot.className = 'dot ' + stateClass(state)
+        dot.setAttribute('title', label)
+        text(dot.querySelector('.sr'), label)
+      }
+      if (badge) { badge.className = 'badge ' + stateClass(state); text(badge, label) }
+    })
+    text(document.querySelector('[data-metric="up"]'), up + '/' + currentItems.length)
+    var faultEl = document.querySelector('[data-metric="faults"]')
+    text(faultEl, String(faults))
+    if (faultEl) faultEl.className = 'stat-num' + (faults ? ' has-fault' : '')
+    text(document.querySelector('[data-metric="freshness"]'), stale || unknown
+      ? stale + ' 个系统数据过期 · ' + unknown + ' 个系统待探测'
+      : currentItems.length ? '探测数据正常' : '暂无监控系统')
+    paintIncidents(now)
+  }
+
+  function paintSummary() {
+    var uptimes = currentItems.filter(function (t) { return t.uptime != null })
+    var latencies = currentItems.filter(function (t) { return t.avgLatencyMs != null })
+    text(document.querySelector('[data-metric="uptime"]'), uptimes.length
+      ? (uptimes.reduce(function (n, t) { return n + t.uptime }, 0) / uptimes.length * 100).toFixed(2) + '%' : '暂无数据')
+    text(document.querySelector('[data-metric="latency"]'), latencies.length
+      ? Math.round(latencies.reduce(function (n, t) { return n + t.avgLatencyMs }, 0) / latencies.length) + ' ms' : '—')
+  }
+
+  function paintIncidents(now) {
+    var container = document.querySelector('[data-incidents]')
+    if (!container) return
+    container.textContent = ''
+    if (!currentEvents.length) {
+      var empty = document.createElement('p'); empty.className = 'empty'
+      empty.textContent = '最近 24 小时没有记录到异常事件。'; container.appendChild(empty); return
+    }
+    var list = document.createElement('ul'); list.className = 'inset-list incident-list'
+    currentEvents.forEach(function (event) {
+      var item = currentItems.find(function (t) { return t.id === event.targetId })
+      var outcome = event.outcome
+      if (outcome === 'ongoing' && item && now - event.lastSeenAt > item.staleAfterMs) outcome = 'unknown'
+      var row = document.createElement('li')
+      function cell(cls, value) { var el = document.createElement('span'); el.className = cls; el.textContent = value; row.appendChild(el) }
+      cell('incident-time', '首次记录 ' + formatTime(event.at))
+      cell('incident-name', item ? item.name : event.targetId)
+      cell('incident-outcome', outcome === 'recovered' ? '已恢复' : outcome === 'unknown' ? '缺测，待确认' : '持续中')
+      cell('incident-details', '已确认 ' + observedDuration(event.durationMs) + ' · ' + (event.endedAt == null ? '最后异常' : '恢复记录') + ' ' + formatTime(event.endedAt == null ? event.lastSeenAt : event.endedAt))
+      cell('incident-err', event.error || stateText(event.status))
+      list.appendChild(row)
+    })
+    container.appendChild(list)
   }
 
   // ── 曲线 ───────────────────────────────────────────────
@@ -210,11 +287,11 @@
     var maxEl = container.querySelector('.chart-max')
     var failed = values.length - nums.length
     if (kind === 'uptime') {
-      text(avgEl, '窗口内平均可用率 ' + (sum / nums.length).toFixed(1) + '%')
-      text(maxEl, '范围 ' + Math.min.apply(null, nums) + '% – ' + Math.max.apply(null, nums) + '%')
+      text(avgEl, '各轮可用系统占比')
+      text(maxEl, '范围 ' + Math.min.apply(null, nums).toFixed(2) + '% – ' + Math.max.apply(null, nums).toFixed(2) + '%')
     } else {
-      text(avgEl, '延迟（平均 ' + Math.round(sum / nums.length) + ' ms）')
-      text(maxEl, '峰值 ' + Math.max.apply(null, nums) + ' ms' + (failed ? ' · ' + failed + ' 次失败已断开' : ''))
+      text(avgEl, '探测响应时间')
+      text(maxEl, '峰值 ' + Math.max.apply(null, nums) + ' ms' + (failed ? ' · 失败或缺测已断开' : ''))
     }
   }
   /** 从 items 里抽出某个 `[data-chart]` 容器的数据。 */
@@ -233,11 +310,11 @@
 
   /** 横轴：每次 tick 全页重算一次，保证所有曲线横向可比。 */
   function recomputeXRange(api) {
+    if (api.windowStartAt != null) { xRange = { min: api.windowStartAt, max: api.generatedAt }; return }
     var all = []
     ;(api.targets || []).forEach(function (t) {
       ;(t.latency || []).forEach(function (p) { all.push(p.at) })
     })
-    if (xRange) all.push(xRange.min, xRange.max)
     ;(api.overview || []).forEach(function (p) { all.push(p.at) })
     if (!all.length) return
     xRange = { min: Math.min.apply(null, all), max: Math.max.apply(null, all) }
@@ -313,6 +390,7 @@
 
       // 说明行里的「最近 N 次」也得跟着走，否则刷新后数字会一直停在首屏那个值。
       text(card.querySelector('.js-cells'), String(pts.length))
+      strip.setAttribute('aria-label', item.name + '：最近 ' + pts.length + ' 次探测（旧 → 新），最近 24 小时可用率 ' + (item.uptime == null ? '暂无数据' : (item.uptime * 100).toFixed(2) + '%'))
     })
   }
 
@@ -335,6 +413,14 @@
   // ── 主流程 ─────────────────────────────────────────────
 
   function paint(api) {
+    if (initialKeys !== null && targetKeys(api.targets || []) !== initialKeys) {
+      showBanner('targets', '系统清单已变更，请刷新页面查看。', false)
+      return
+    }
+    currentItems = api.targets || []
+    currentEvents = api.incidents || []
+    generatedAt = api.generatedAt
+    receivedAt = Date.now()
     var byId = {}
     ;(api.targets || []).forEach(function (item) {
       // ⚠ 契约已拍平：id 在顶层（原先是 item.target.id），stats 也压平了。
@@ -348,6 +434,9 @@
     paintNumbers(byId)
     paintCharts(api, byId)
     paintTimeline(byId)
+    paintSummary()
+    paintFreshness()
+    text(document.querySelector('.js-probe-interval'), String(api.probeIntervalSeconds))
 
     // 真实时间戳：原来恒显示「刚刚」，导致「数据是旧的」无从判断——
     // 对可用性面板来说这是最要紧的一眼。
@@ -359,17 +448,21 @@
   }
 
   function tick() {
-    fetch('/api/status', { headers: { accept: 'application/json' } })
+    paintFreshness()
+    if (inFlight) return
+    inFlight = true
+    var controller = new AbortController()
+    var timeout = setTimeout(function () { controller.abort() }, 10000)
+    fetch('/api/status', { headers: { accept: 'application/json' }, signal: controller.signal })
       .then(function (r) {
         if (r.status === 401) {
           showBanner('auth', '登录已过期，下面显示的可能不是最新数据。', true)
           return Promise.reject(new Error('unauthorized'))
         }
         if (!r.ok) return Promise.reject(new Error('HTTP ' + r.status))
-        clearBanner()
         return r.json()
       })
-      .then(paint)
+      .then(function (api) { clearBanner(); paint(api) })
       .catch(function () {
         // 区分「需要重新登录」与「刚好抖了一下」：前者已在上面的 401 分支给出登录链接。
         // 面板保留上一次数据没错，错的是**不告诉用户数据是旧的**。
@@ -378,6 +471,7 @@
           showBanner('network', '暂时拿不到最新数据，下面显示的是上一次的结果。', false)
         }
       })
+      .finally(function () { clearTimeout(timeout); inFlight = false })
   }
 
   setInterval(tick, INTERVAL)

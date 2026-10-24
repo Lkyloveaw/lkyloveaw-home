@@ -27,6 +27,9 @@ export interface SummaryLike {
       avgLatencyMs: number | null
       p95LatencyMs: number | null
       lastError: string | null
+      lastCheckedAt: number | null
+      upStreakMs: number | null
+      staleAfterMs: number
     }
     timeline: Array<{ at: number; status: string; latencyMs: number | null }>
     latency: Array<{ at: number; avgLatencyMs: number | null; samples?: number }>
@@ -39,13 +42,18 @@ export interface SummaryLike {
     statusCode: number | null
     latencyMs: number | null
     error: string | null
+    lastSeenAt: number
+    endedAt: number | null
+    durationMs: number
+    outcome: 'ongoing' | 'recovered' | 'unknown'
   }>
   generatedAt: number
+  windowStartAt: number
   windowLabel: string
   probeIntervalSeconds: number
 }
 
-/** 单个目标的公开形状。**恰好 10 个键**，有断言钉住。 */
+/** 页面刷新所需的显式白名单；时间字段用于新鲜度和连续可用展示。 */
 export interface PublicTarget {
   id: string
   name: string
@@ -55,6 +63,9 @@ export interface PublicTarget {
   avgLatencyMs: number | null
   p95LatencyMs: number | null
   lastError: string | null
+  lastCheckedAt: number | null
+  upStreakMs: number | null
+  staleAfterMs: number
   timeline: Array<{ at: number; status: string; latencyMs: number | null }>
   latency: Array<{ at: number; avgLatencyMs: number | null }>
 }
@@ -66,6 +77,10 @@ export interface PublicIncident {
   statusCode: number | null
   latencyMs: number | null
   error: string | null
+  lastSeenAt: number
+  endedAt: number | null
+  durationMs: number
+  outcome: 'ongoing' | 'recovered' | 'unknown'
 }
 
 export interface PublicSummary {
@@ -73,6 +88,7 @@ export interface PublicSummary {
   overview: Array<{ at: number; up: number; total: number }>
   incidents: PublicIncident[]
   generatedAt: number
+  windowStartAt: number
   windowLabel: string
   probeIntervalSeconds: number
 }
@@ -95,6 +111,9 @@ export function toPublicSummary(summary: SummaryLike): PublicSummary {
       p95LatencyMs: item.stats.p95LatencyMs,
       // 出网前最后一道闸：历史行万一绕过迁移，这里仍拦得住（纵深防御）。
       lastError: forOutput(item.stats.lastError),
+      lastCheckedAt: item.stats.lastCheckedAt,
+      upStreakMs: item.stats.upStreakMs,
+      staleAfterMs: item.stats.staleAfterMs,
       timeline: item.timeline.map((p) => ({ at: p.at, status: p.status, latencyMs: p.latencyMs })),
       latency: item.latency.map((p) => ({ at: p.at, avgLatencyMs: p.avgLatencyMs })),
     })),
@@ -108,8 +127,13 @@ export function toPublicSummary(summary: SummaryLike): PublicSummary {
       // ⚠ 与 lastError 走**完全相同**的规则。实测正是靠这一点才发现
       // 「修了 lastError 却漏了 incidents」这条旁路。
       error: forOutput(inc.error),
+      lastSeenAt: inc.lastSeenAt,
+      endedAt: inc.endedAt,
+      durationMs: inc.durationMs,
+      outcome: inc.outcome,
     })),
     generatedAt: summary.generatedAt,
+    windowStartAt: summary.windowStartAt,
     windowLabel: summary.windowLabel,
     probeIntervalSeconds: summary.probeIntervalSeconds,
   }

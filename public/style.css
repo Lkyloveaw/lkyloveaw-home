@@ -563,6 +563,9 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
 .kv div { display: flex; justify-content: space-between; gap: 8px; }
 .kv dt { color: var(--label-2); font-size: var(--fs-caption); margin: 0; }
 .kv dd { margin: 0; font-size: var(--fs-footnote); font-variant-numeric: tabular-nums; }
+.target-card .kv { grid-template-columns: 1fr; }
+.target-card .kv dd { text-align: right; }
+.status-freshness { color: var(--label-2); font-size: var(--fs-footnote); }
 
 .target-error {
   margin: 12px 0 0; padding: 8px 10px; font-size: var(--fs-footnote);
@@ -592,6 +595,9 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
 }
 .incident-time { color: var(--label-2); font-variant-numeric: tabular-nums; font-size: var(--fs-footnote); }
 .incident-err { color: var(--label-2); font-size: var(--fs-footnote); text-align: right; }
+.incident-details { grid-column: 1 / -1; color: var(--label-2); font-size: var(--fs-footnote); }
+.incident-outcome { font-size: var(--fs-footnote); }
+.incident-list .incident-err { grid-column: 1 / -1; text-align: left; overflow-wrap: anywhere; }
 
 /* ---------- 曲线图（内联 SVG） ---------- */
 
