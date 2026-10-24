@@ -13,6 +13,7 @@ import { MIN_PASSWORD_LENGTH } from './users.js'
 import { icon, type IconName } from './icons.js'
 import { isFriendLinkUrl, type FriendLink } from './friend-links.js'
 import { toPublicSummary } from './public-summary.js'
+import { escapeHtml } from '../public/html.js'
 
 /**
  * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
@@ -25,15 +26,7 @@ export function csrfField(): string {
   return `<input type="hidden" name="csrf" value="${escapeHtml(currentCsrfToken())}">`
 }
 
-/** 所有动态文本都必须过这里。内容 Markdown 已由 markdown-it 处理（html:false），此处覆盖标题/名称/错误等。 */
-export function escapeHtml(input: unknown): string {
-  return String(input ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
+export { escapeHtml } from '../public/html.js'
 
 function formatDuration(ms: number): string {
   if (ms <= 0) return '—'

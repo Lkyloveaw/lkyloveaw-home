@@ -33,10 +33,11 @@ import {
 import { getArticleForAdmin, listArticlesForAdmin, upsertArticleWithRevision } from './store.js'
 import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from './store.js'
 import { listRevisions, revertToRevision } from './store.js'
-import { isSafeMediaName, MEDIA_MAX_BYTES, mediaMime, mediaPath, mediaSnippet, saveMedia } from './media.js'
+import { isSafeMediaName, MEDIA_MAX_BYTES, mediaMime, mediaPath, mediaSnippet } from './media.js'
 import { getIdentityImage, setIdentityImage, type IdentityImageKey } from './identity-images.js'
 import { listFriendLinks, saveFriendLink, deleteFriendLink, setFriendLinkIcon, type FriendLink } from './friend-links.js'
 import { toPublicSummary } from './public-summary.js'
+import { readFormField, receiveImageUpload } from './upload-image.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackupFiles, listBackups, runBackup } from './backup.js'
 import {
@@ -498,13 +499,12 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
    * 但文案**不解释**这个内部原因。
    */
   const csrfGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const raw = (req.body as Record<string, unknown> | undefined)?.csrf
-    const submitted = typeof raw === 'string' ? raw : (raw as { value?: string } | undefined)?.value
+    const submitted = readFormField(req.body, 'csrf')
     if (!verifyCsrf(config.sessionSecret, readSessionCookie(req.headers.cookie), submitted)) {
       // 记 path 与失败原因，**不记 token 值**（OWASP 明文要求 token 不进日志）。
       console.warn(`[auth] L3 拒绝：path=${req.url}（token 缺失或不匹配）`)
       reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('csrf', siteOf(), req.url))
+      await reply.send(forbiddenPage('csrf', siteOf(), req.url.split('?')[0] === '/admin/articles/media' ? '/admin/articles' : req.url))
     }
   }
 
@@ -699,26 +699,15 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       const userId = currentUserId()
       if (userId === undefined) return reply.code(401).send('请先登录')
       const owner: IdentityImageKey = image.admin ? 'site-logo' : `avatar:${userId}`
-      const body = req.body as Record<string, unknown> | undefined
-      const action = typeof body?.action === 'string' ? body.action : (body?.action as { value?: string } | undefined)?.value
+      const action = readFormField(req.body, 'action')
       if (action === 'clear') {
         setIdentityImage(owner, null)
         return reply.redirect(image.back + '?notice=' + image.kind + '-cleared', 302)
       }
       if (action !== undefined && action !== 'upload') return reply.code(400).send('未知的动作')
-      const file = body?.file as { toBuffer?: () => Promise<Buffer> } | undefined
-      if (!file || typeof file.toBuffer !== 'function') return reply.redirect(image.back + '?notice=media-no-file', 302)
-      let bytes: Buffer
-      try { bytes = await file.toBuffer() }
-      catch { return reply.redirect(image.back + '?notice=media-too-big', 302) }
-      let name: string
-      try { name = saveMedia(bytes).name }
-      catch (err) {
-        console.warn('[identity-images] 图片保存失败：' + (err as Error).message)
-        const invalid = /空文件|不是支持的图片类型/.test((err as Error).message)
-        return reply.redirect(image.back + '?notice=' + (invalid ? 'media-rejected' : 'image-save-failed'), 302)
-      }
-      setIdentityImage(owner, name)
+      const uploaded = await receiveImageUpload(req.body)
+      if (!uploaded.ok) return reply.redirect(image.back + '?notice=' + uploaded.notice, 302)
+      setIdentityImage(owner, uploaded.name)
       return reply.redirect(image.back + '?notice=' + image.kind + '-saved', 302)
     })
   }
@@ -905,70 +894,15 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     return reply.send(buf)
   })
 
-  /**
-   * 上传路由的守卫：**资格 → L3**（与其它写路由同一个顺序）。
-   *
-   * ⚠ multipart 的 `csrf` 在**字段对象**里（`attachFieldsToBody` 的形状：`{ value: '…' }`），
-   * 与 urlencoded 那条路的 `parseFormBody` 不同 —— 所以这里单独读一次。
-   * 这也正是规格说的「**L3 必须在任何写之前读到 token**，解析模式决定钩子位置」。
-   */
-  const uploadGuard = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    if (!currentIsAdmin()) {
-      reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('admin', siteOf()))
-      return
-    }
-    const raw = (req.body as Record<string, unknown> | undefined)?.csrf
-    const submitted = typeof raw === 'string' ? raw : (raw as { value?: string } | undefined)?.value
-    if (!verifyCsrf(config.sessionSecret, readSessionCookie(req.headers.cookie), submitted)) {
-      console.warn('[media] L3 拒绝上传：token 缺失或不匹配')
-      reply.code(403).type('text/html; charset=utf-8')
-      await reply.send(forbiddenPage('csrf', siteOf(), '/admin/articles'))
-    }
-  }
-
-  /**
-   * `POST /admin/articles/media` —— 上传一张图（规格 [#41](https://github.com/Lkyloveaw/lkyloveaw-home/issues/41)）。
-   *
-   * 契约：`multipart/form-data`、**一次一个文件**、字段名 `file`、CSRF 字段名 `csrf`。
-   * 落在**同一鉴权面**内（`uploadGuard`：资格 + L3）—— 不新开第二个鉴权面。
-   *
-   * **失败一律显眼**：全部走 PRG 回跳 + `notice` 闭集键，**不静默插一个坏链接**。
-   */
-  app.post('/admin/articles/media', { preValidation: uploadGuard }, async (req, reply) => {
-    const file = (req.body as Record<string, unknown> | undefined)?.file as
-      | { toBuffer?: () => Promise<Buffer>; filename?: string }
-      | undefined
-    if (!file || typeof file.toBuffer !== 'function') {
-      console.warn('[media] 上传请求里没有文件字段')
-      return reply.redirect('/admin/articles?notice=media-no-file', 302)
-    }
-
-    let buf: Buffer
-    try {
-      // 超过 `limits.fileSize` 且 `throwFileSizeLimit` 为真时，这里会抛（**不截断**）。
-      buf = await file.toBuffer()
-    } catch (err) {
-      console.warn('[media] 读取上传内容失败：' + (err as Error).message)
-      return reply.redirect('/admin/articles?notice=media-too-big', 302)
-    }
-
-    try {
-      const saved = saveMedia(buf)
-      console.log('[media] ' + (saved.created ? '已保存' : '已存在') + ' ' + saved.name)
-      // 回跳带上文件名 —— 它的形状**受 `isSafeMediaName` 校验**，所以它不是「URL 里的自由文本」。
-      const notice = saved.created ? 'media-uploaded' : 'media-duplicate'
-      // 从编辑面发起的上传要**回到那个编辑面**，编辑器才会把这张图插进正文（#57）。
-      // ⚠ slug 先确认它真是一篇文章、再进 URL —— 不把请求体里的自由文本拼进回跳。
-      const editRaw = (req.body as Record<string, unknown> | undefined)?.edit_slug
-      const editSlug = typeof editRaw === 'string' ? editRaw : ((editRaw as { value?: string } | undefined)?.value ?? '')
-      const backTo = editSlug && getArticleForAdmin(editSlug) ? '?edit=' + encodeURIComponent(editSlug) + '&' : '?'
-      return reply.redirect('/admin/articles' + backTo + 'notice=' + notice + '&uploaded=' + encodeURIComponent(saved.name), 302)
-    } catch (err) {
-      // 类型不对 / 空文件 / 超限 —— 全都在 `saveMedia` 里判掉，这里只负责**显眼地**说出去。
-      console.warn('[media] 拒绝：' + (err as Error).message)
-      return reply.redirect('/admin/articles?notice=media-rejected', 302)
-    }
+  /** 文章图片与身份图片共用读取、校验及错误分类，引用与回跳留在路由。 */
+  app.post('/admin/articles/media', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const uploaded = await receiveImageUpload(req.body)
+    if (!uploaded.ok) return reply.redirect('/admin/articles?notice=' + uploaded.notice, 302)
+    console.log('[media] ' + (uploaded.created ? '已保存' : '已存在') + ' ' + uploaded.name)
+    const notice = uploaded.created ? 'media-uploaded' : 'media-duplicate'
+    const editSlug = readFormField(req.body, 'edit_slug') ?? ''
+    const backTo = editSlug && getArticleForAdmin(editSlug) ? '?edit=' + encodeURIComponent(editSlug) + '&' : '?'
+    return reply.redirect('/admin/articles' + backTo + 'notice=' + notice + '&uploaded=' + encodeURIComponent(uploaded.name), 302)
   })
 
   // ── 管理台 · 目标（#40）──────────────────────────────────
@@ -1139,28 +1073,17 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       return reply.code(404).send('找不到这条友联，请刷新页面。')
     }
     const back = (notice: string) => reply.redirect(`/admin/settings?notice=${notice}#friend-links-admin`, 302)
-    const body = req.body as Record<string, unknown> | undefined
-    const rawAction = body?.action
-    const action = typeof rawAction === 'string' ? rawAction : (rawAction as { value?: string } | undefined)?.value
+    const action = readFormField(req.body, 'action')
     if (action === 'clear') {
       setFriendLinkIcon(id, null)
       return back('friend-saved')
     }
     if (action !== 'upload') return reply.code(400).send('未知的友联图片操作。')
-    const file = body?.file as { toBuffer?: () => Promise<Buffer> } | undefined
-    if (!file || typeof file.toBuffer !== 'function') return back('media-no-file')
-    let bytes: Buffer
-    try { bytes = await file.toBuffer() }
-    catch { return back('media-too-big') }
-    let name: string
-    try { name = saveMedia(bytes).name }
-    catch (err) {
-      const invalid = /空文件|不是支持的图片类型/.test((err as Error).message)
-      return back(invalid ? 'media-rejected' : 'image-save-failed')
-    }
+    const uploaded = await receiveImageUpload(req.body)
+    if (!uploaded.ok) return back(uploaded.notice)
     // 上传期间条目可能被另一个请求删除；不把它重新创建出来。
     if (!listFriendLinks().some(link => link.id === id)) return reply.code(404).send('这条友联已删除，请刷新页面。')
-    setFriendLinkIcon(id, name)
+    setFriendLinkIcon(id, uploaded.name)
     return back('friend-saved')
   })
 

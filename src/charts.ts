@@ -5,13 +5,7 @@
  */
 import type { LatencyPoint, OverviewPoint } from './store.js'
 
-function esc(s: unknown): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
+import { escapeHtml as esc } from '../public/html.js'
 
 /**
  * 把一串数值映射成折线路径。返回 null 表示点太少，调用处应显示「数据不足」。
