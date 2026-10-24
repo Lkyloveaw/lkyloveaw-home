@@ -233,7 +233,7 @@ section('服务端渲染的类名，CSS 里都有定义')
     return found
   }
   const hasRule = (name) => new RegExp(`\\.${name.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}(?![\\w-])`).test(css)
-  const NO_RULE_NEEDED = new Set(['js-cells', 'js-generated'])
+  const NO_RULE_NEEDED = new Set(['js-cells', 'js-generated', 'js-probe-interval', 'last-check'])
   const STATE_VALUES = new Set(['up', 'degraded', 'down', 'ok', 'warn', 'bad', 'unknown', 'missing'])
 
   const all = [...new Set([...classesFrom(views), ...classesFrom(statusJs)])].filter((c) => !STATE_VALUES.has(c))

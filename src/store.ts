@@ -39,6 +39,8 @@ export interface TargetStats {
   lastError: string | null
   /** 从最近一次故障开始、持续到现在的连续可用时长（ms）；当前正故障则为 0。 */
   upStreakMs: number | null
+  /** 超过这个缺测间隔时，最新状态只能作为历史记录展示。 */
+  staleAfterMs: number
 }
 
 export interface TimelinePoint {
@@ -286,8 +288,8 @@ interface StatsRow {
  * 传进来只用于一件事：给「连续可用时长」设下界，修掉「停用两个月再启用 → 显示连续可用 60 天」的静默谎。
  * 省略即不设下界（从文件读来的目标、以及不过库的调用方走这条）。
  */
-export function getStats(targetId: string, windowMs: number, enabledAt?: number): TargetStats {
-  const since = Date.now() - windowMs
+export function getStats(targetId: string, windowMs: number, enabledAt = 0, maxGapMs = Number.MAX_SAFE_INTEGER, now = Date.now()): TargetStats {
+  const since = now - windowMs
   const row = handle()
     .prepare(
       `SELECT
@@ -295,17 +297,13 @@ export function getStats(targetId: string, windowMs: number, enabledAt?: number)
          COUNT(*)                                         AS samples,
          SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END)   AS upCount,
          AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms END) AS avgLatencyMs,
-         (SELECT status FROM probes p2
-            WHERE p2.target_id = p1.target_id ORDER BY at DESC LIMIT 1)      AS lastStatus,
-         (SELECT at FROM probes p3
-            WHERE p3.target_id = p1.target_id ORDER BY at DESC LIMIT 1)      AS lastCheckedAt,
-         (SELECT error FROM probes p4
-            WHERE p4.target_id = p1.target_id AND p4.error IS NOT NULL
-            ORDER BY at DESC LIMIT 1)                                        AS lastError
+         (SELECT status FROM probes WHERE target_id = ? AND at >= ? AND at <= ? ORDER BY at DESC, id DESC LIMIT 1) AS lastStatus,
+         (SELECT at FROM probes WHERE target_id = ? AND at >= ? AND at <= ? ORDER BY at DESC, id DESC LIMIT 1) AS lastCheckedAt,
+         (SELECT error FROM probes WHERE target_id = ? AND at >= ? AND at <= ? ORDER BY at DESC, id DESC LIMIT 1) AS lastError
        FROM probes p1
-       WHERE target_id = ? AND at >= ?`,
+       WHERE target_id = ? AND at >= ? AND at <= ?`,
     )
-    .get(targetId, since) as StatsRow | undefined
+    .get(targetId, enabledAt, now, targetId, enabledAt, now, targetId, enabledAt, now, targetId, since, now) as StatsRow | undefined
 
   const samples = row?.samples ?? 0
   const p95 = percentileLatency(targetId, since, 0.95)
@@ -320,7 +318,8 @@ export function getStats(targetId: string, windowMs: number, enabledAt?: number)
     lastStatus: (row?.lastStatus as ProbeResult['status'] | null) ?? null,
     lastCheckedAt: row?.lastCheckedAt ?? null,
     lastError: row?.lastError ?? null,
-    upStreakMs: computeUpStreak(targetId, enabledAt ?? 0),
+    upStreakMs: computeUpStreak(targetId, enabledAt, maxGapMs, now),
+    staleAfterMs: maxGapMs,
   }
 }
 
@@ -349,26 +348,24 @@ function percentileLatency(targetId: string, since: number, q: number): number |
  * 而它其实停了 60 天。取 `max(最近一次非 up, enabled_at)` 之后，
  * 重新启用后的连续可用从**重新启用那一刻**算起。
  */
-function computeUpStreak(targetId: string, enabledAt: number): number | null {
+function computeUpStreak(targetId: string, enabledAt: number, maxGapMs: number, now: number): number | null {
   const lastBad = handle()
     .prepare(
-      `SELECT at FROM probes WHERE target_id = ? AND status != 'up' ORDER BY at DESC LIMIT 1`,
+      `SELECT at FROM probes WHERE target_id = ? AND status != 'up' AND at <= ? ORDER BY at DESC LIMIT 1`,
     )
-    .get(targetId) as { at: number } | undefined
+    .get(targetId, now) as { at: number } | undefined
 
   const since = Math.max(lastBad ? lastBad.at : 0, enabledAt)
-  const firstUpAfter = handle()
-    .prepare(
-      `SELECT at FROM probes WHERE target_id = ? AND status = 'up' AND at > ? ORDER BY at ASC LIMIT 1`,
-    )
-    .get(targetId, since) as { at: number } | undefined
-
-  if (!firstUpAfter) return 0
-  const last = handle()
-    .prepare(`SELECT at, status FROM probes WHERE target_id = ? ORDER BY at DESC LIMIT 1`)
-    .get(targetId) as { at: number; status: string } | undefined
-  if (last && last.status !== 'up') return 0
-  return Date.now() - firstUpAfter.at
+  const row = handle().prepare(`
+    WITH ordered AS (
+      SELECT at, LAG(at) OVER (ORDER BY at, id) AS previous
+      FROM probes WHERE target_id = ? AND status = 'up' AND at > ? AND at <= ?
+    ), boundary AS (SELECT MAX(at) AS start FROM ordered WHERE at - previous > ?)
+    SELECT MIN(at) AS first, MAX(at) AS last FROM ordered
+    WHERE at >= COALESCE((SELECT start FROM boundary), 0)
+  `).get(targetId, since, now, maxGapMs) as { first: number | null; last: number | null }
+  // 只计算已经观测到的连续时长，页面刷新本身不能增加可用时长。
+  return row.first == null || row.last == null ? 0 : row.last - row.first
 }
 
 /** 时间线：给界面画状态条用。按桶取窗口内最近 limit 条记录。 */
@@ -383,19 +380,66 @@ export function getTimeline(targetId: string, windowMs: number, limit = 60): Tim
   return rows.reverse()
 }
 
-/** 全局事件流（最近的故障），给首页「最近异常」用。 */
-export function getRecentIncidents(limit = 8): Array<ProbeResult & { at: number }> {
-  const rows = handle()
-    .prepare(
-      `SELECT target_id AS targetId, at, status, latency_ms AS latencyMs,
-              status_code AS statusCode, error
-         FROM probes
-        WHERE status != 'up'
-        ORDER BY at DESC
-        LIMIT ?`,
-    )
-    .all(limit) as Array<ProbeResult>
-  return rows
+export interface IncidentEvent {
+  targetId: string
+  at: number
+  lastSeenAt: number
+  endedAt: number | null
+  durationMs: number
+  outcome: 'ongoing' | 'recovered' | 'unknown'
+  status: ProbeResult['status']
+  statusCode: number | null
+  latencyMs: number | null
+  error: string | null
+}
+
+/** 连续失败合并成事件。缺测是未知，不能当成恢复，也不能把两端故障连成整段故障。 */
+export function getIncidentEvents(
+  windowMs: number,
+  targets: Array<{ id: string; enabledAt?: number; maxGapMs: number }>,
+  now = Date.now(),
+  limit = 8,
+): IncidentEvent[] {
+  const events: IncidentEvent[] = []
+  const query = handle().prepare(`SELECT at, status, latency_ms AS latencyMs, status_code AS statusCode, error
+    FROM probes WHERE target_id = ? AND at >= MAX(?, COALESCE(
+      (SELECT MAX(at) FROM probes WHERE target_id = ? AND status = 'up' AND at < ?), 0))
+      AND at <= ? ORDER BY at, id`)
+  for (const target of targets) {
+    const rows = query.all(target.id, target.enabledAt ?? 0, target.id, now - windowMs, now) as Array<ProbeResult>
+    let event: IncidentEvent | null = null
+    const finish = () => {
+      if (event && (event.endedAt ?? event.lastSeenAt) >= now - windowMs) events.push(event)
+      event = null
+    }
+    for (const row of rows) {
+      if (event && row.at - event.lastSeenAt > target.maxGapMs) {
+        event.outcome = 'unknown'
+        finish()
+      }
+      if (row.status === 'up') {
+        if (event) {
+          event.endedAt = row.at
+          event.durationMs = row.at - event.at
+          event.outcome = 'recovered'
+          finish()
+        }
+      } else if (event) {
+        event.lastSeenAt = row.at
+        event.durationMs = row.at - event.at
+        event.status = row.status
+        event.statusCode = row.statusCode
+        event.latencyMs = row.latencyMs
+        event.error = row.error
+      } else {
+        event = { targetId: target.id, at: row.at, lastSeenAt: row.at, endedAt: null, durationMs: 0,
+          outcome: 'ongoing', status: row.status, statusCode: row.statusCode, latencyMs: row.latencyMs, error: row.error }
+      }
+    }
+    if (event && now - event.lastSeenAt > target.maxGapMs) event.outcome = 'unknown'
+    finish()
+  }
+  return events.sort((a, b) => (b.endedAt ?? b.lastSeenAt) - (a.endedAt ?? a.lastSeenAt)).slice(0, limit)
 }
 
 /**
@@ -476,20 +520,60 @@ export function getLatencySeries(targetId: string, windowMs: number, buckets = 4
   }))
 }
 
-/** 单目标在窗口内的原始探测序列（只取有延迟的那些点），用于「按实际采样密度」画曲线。 */
-export function getLatencyRaw(targetId: string, windowMs: number, limit = 120): LatencyPoint[] {
-  const since = Date.now() - windowMs
+/** 正常区间分桶取包络；每段异常/缺测的边界额外保留，不能为了固定点数跨故障连线。 */
+function sampleChart<T extends { at: number }>(points: T[], since: number, windowMs: number, buckets: number, value: (p: T) => number | null, failed = (p: T) => value(p) == null): T[] {
+  const groups = new Map<number, T[]>()
+  const width = windowMs / Math.max(1, buckets)
+  for (const p of points) {
+    const bucket = Math.min(Math.max(1, buckets) - 1, Math.floor((p.at - since) / width))
+    const group = groups.get(bucket) ?? []
+    group.push(p)
+    groups.set(bucket, group)
+  }
+  const sampled = [...groups.values()].flatMap((group) => {
+    let min = group[0]!, max = group[0]!
+    for (const p of group) {
+      const v = value(p)
+      if (v == null) continue
+      if (value(min) == null || v < value(min)!) min = p
+      if (value(max) == null || v > value(max)!) max = p
+    }
+    return [...new Set([group[0]!, min, max, group.find(p => value(p) == null), group.at(-1)!])]
+      .filter((p): p is T => p != null).sort((a, b) => a.at - b.at)
+  })
+  const keep = new Set(sampled)
+  for (let i = 1; i < points.length; i++) {
+    const previous = points[i - 1]!, current = points[i]!
+    if (failed(previous) !== failed(current) || (value(previous) == null) !== (value(current) == null)) {
+      keep.add(previous)
+      keep.add(current)
+    }
+  }
+  return points.filter(p => keep.has(p))
+}
+
+function withGaps<T extends { at: number }>(points: T[], maxGapMs: number, gap: (at: number) => T): T[] {
+  const result: T[] = []
+  for (const p of points) {
+    const previous = result.at(-1)
+    if (previous && p.at - previous.at > maxGapMs) result.push(gap(previous.at + maxGapMs))
+    result.push(p)
+  }
+  return result
+}
+
+/** 单目标完整窗口的曲线。保留失败及缺测断点，且首尾覆盖真实采样时间。 */
+export function getLatencyRaw(targetId: string, windowMs: number, buckets = 120, maxGapMs = Number.MAX_SAFE_INTEGER, now = Date.now()): LatencyPoint[] {
+  const since = now - windowMs
   const rows = handle()
     .prepare(
       `SELECT at, latency_ms AS avgLatencyMs, 1 AS samples
          FROM probes
-        WHERE target_id = ? AND at >= ?
-        ORDER BY at ASC
-        LIMIT ?`,
+        WHERE target_id = ? AND at >= ? AND at <= ?
+        ORDER BY at ASC, id ASC`,
     )
-    .all(targetId, since, limit) as LatencyPoint[]
-  // 失败点保留为 null，让曲线断开——把失败画成 0 会让图看起来"更快了"。
-  return rows.map((r) => ({ at: r.at, avgLatencyMs: r.avgLatencyMs, samples: 1 }))
+    .all(targetId, since, now) as LatencyPoint[]
+  return sampleChart(withGaps(rows, maxGapMs, at => ({ at, avgLatencyMs: null, samples: 0 })), since, windowMs, buckets, p => p.avgLatencyMs)
 }
 
 /**
@@ -508,23 +592,25 @@ export function getLatencyRaw(targetId: string, windowMs: number, limit = 120): 
 export function getUptimeRaw(
   windowMs: number,
   expectedCount: number,
-  limit = 120,
+  buckets = 120,
+  maxGapMs = Number.MAX_SAFE_INTEGER,
+  now = Date.now(),
 ): OverviewPoint[] {
-  const since = Date.now() - windowMs
+  const since = now - windowMs
   const expected = Math.max(1, expectedCount)
   const rows = handle()
     .prepare(
       `SELECT round_at AS at, COUNT(*) AS total,
               SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up
          FROM probes
-        WHERE at >= ?
+        WHERE at >= ? AND at <= ?
         GROUP BY round_at
        HAVING total >= ?
-        ORDER BY round_at ASC
-        LIMIT ?`,
+        ORDER BY round_at ASC`,
     )
-    .all(since, expected, limit) as Array<{ at: number; total: number; up: number }>
-  return rows.map((r) => ({ at: r.at, up: r.up, total: r.total }))
+    .all(since, now, expected) as OverviewPoint[]
+  return sampleChart(withGaps(rows, maxGapMs, at => ({ at, up: 0, total: 0 })), since, windowMs, buckets,
+    p => p.total ? p.up / p.total : null, p => p.total === 0 || p.up < p.total)
 }
 
 // ── 文章：SQL 都留在这里，领域规则（渲染 / 派生摘要 / 出口分组）在 src/content.ts ──

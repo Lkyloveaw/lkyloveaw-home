@@ -156,8 +156,8 @@ pre code { background: none; border: 0; padding: 0; }
   display: inline-flex; align-items: center; gap: 9px; flex: 0 0 auto;
   color: var(--label);
 }
-.brand-mark { display: inline-flex; width: 24px; height: 24px; color: var(--label); }
-.brand-icon { width: 24px; height: 24px; }
+.brand-mark { display: inline-flex; flex-shrink: 0; width: 40px; height: 40px; color: var(--label); }
+.brand-icon { width: 100%; height: 100%; }
 .brand-image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .brand-name { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-title3); letter-spacing: -.01em; }
 .brand:hover { text-decoration: underline; text-decoration-thickness: 1px; color: var(--label); }
@@ -364,6 +364,22 @@ body:has(.nav-drawer[open]) { overflow: hidden; }
   color: var(--label-2); font-size: var(--fs-footnote);
 }
 
+.friend-links { width: 100%; max-width: var(--wrap-docs); margin: 40px auto 0; padding: 24px 20px 0; border-top: 1px solid var(--separator); }
+.friend-links h2 { font-family: var(--font-display); font-size: var(--fs-title3); margin: 0 0 16px; }
+.friend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+.friend-card { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 16px; color: var(--label); background: var(--bg-card); border: 1px solid var(--separator); border-radius: var(--radius); }
+.friend-card:hover { background: var(--fill); color: var(--label); text-decoration: none; }
+.friend-icon { display: inline-flex; flex: 0 0 44px; align-items: center; justify-content: center; width: 44px; height: 44px; overflow: hidden; border-radius: var(--radius-sm); background: var(--fill); color: var(--label); font-size: var(--fs-headline); font-weight: 600; }
+.friend-icon img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.friend-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.friend-copy strong { font-size: var(--fs-callout); }
+.friend-description { color: var(--label-2); font-size: var(--fs-footnote); }
+.friend-form { display: grid; gap: 12px; margin-block: 16px; }
+.friend-form label { display: flex; flex-direction: column; gap: 4px; }
+.friend-form input { width: 100%; min-width: 0; }
+.friend-admin { margin-block: 32px; scroll-margin-top: calc(var(--header-h) + 16px); }
+.friend-admin summary { cursor: pointer; overflow-wrap: anywhere; }
+
 /* ---------- 通用 ---------- */
 
 /* 正文：Claude Body 17 / --lh-prose 1.8，栏宽收窄到约 68ch（长行是阅读的主要敌人）。 */
@@ -547,6 +563,9 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
 .kv div { display: flex; justify-content: space-between; gap: 8px; }
 .kv dt { color: var(--label-2); font-size: var(--fs-caption); margin: 0; }
 .kv dd { margin: 0; font-size: var(--fs-footnote); font-variant-numeric: tabular-nums; }
+.target-card .kv { grid-template-columns: 1fr; }
+.target-card .kv dd { text-align: right; }
+.status-freshness { color: var(--label-2); font-size: var(--fs-footnote); }
 
 .target-error {
   margin: 12px 0 0; padding: 8px 10px; font-size: var(--fs-footnote);
@@ -576,6 +595,9 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
 }
 .incident-time { color: var(--label-2); font-variant-numeric: tabular-nums; font-size: var(--fs-footnote); }
 .incident-err { color: var(--label-2); font-size: var(--fs-footnote); text-align: right; }
+.incident-details { grid-column: 1 / -1; color: var(--label-2); font-size: var(--fs-footnote); }
+.incident-outcome { font-size: var(--fs-footnote); }
+.incident-list .incident-err { grid-column: 1 / -1; text-align: left; overflow-wrap: anywhere; }
 
 /* ---------- 曲线图（内联 SVG） ---------- */
 
@@ -948,6 +970,7 @@ button:hover { border-color: var(--label); color: var(--label); }
   .app-shell--docs, .app-shell--admin { display: block; padding: 0 20px; }
   .nav-drawer { display: block; }
   .header-inner { gap: 8px; flex-wrap: nowrap; }
+  .brand-mark { width: 32px; height: 32px; }
   .header-actions { margin-left: auto; flex-wrap: nowrap; gap: 8px; }
   .user-name { display: none; }
   .user-pill { padding: 4px 6px; }
@@ -997,7 +1020,7 @@ button:hover { border-color: var(--label); color: var(--label); }
     /* 纸上不需要「撑满一屏」：留着 flex + 100vh 会多印一页空白 */
     display: block; min-height: 0; padding-bottom: 0;
   }
-  .site-header, .site-footer, .site-rail, .docs-side, .admin-tabs, .nav-drawer, .header-actions,
+  .site-header, .site-footer, .friend-links, .site-rail, .docs-side, .admin-tabs, .nav-drawer, .header-actions,
   .logout-form, .live-tag, .form-actions, .form-row, .confirm, .admin-hint, .notice, button, .chart-axis, .theme-picker, .back,
   details, .article-editor, .editor-toolbar,
   input, select, textarea { display: none !important; }

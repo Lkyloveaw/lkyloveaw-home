@@ -7,7 +7,7 @@ import path from 'node:path'
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static'
 import fastifyMultipart from '@fastify/multipart'
-import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config, normalizeTargets, validateTargetUrl } from './config.js'
+import { assertSessionSecret, assertSiteOrigins, assertTrustProxy, config, normalizeTargets, validateTargetUrl, type ProbeTarget } from './config.js'
 import {
   getPublishedPost,
   importArticlesIfEmpty,
@@ -15,7 +15,7 @@ import {
   listTags,
   warnContentDirIsNoLongerInput,
 } from './content.js'
-import { getRecentIncidents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, getLatestStatuses, initStore, closeStore, sanitizeStoredErrors } from './store.js'
+import { getIncidentEvents, getUptimeRaw, getStats, getTimeline, getLatencyRaw, getLatestStatuses, initStore, closeStore, sanitizeStoredErrors } from './store.js'
 import {
   countAllTargets,
   countEnabledTargets,
@@ -35,6 +35,7 @@ import { listTrashedArticles, purgeArticle, restoreArticle, trashArticle } from 
 import { listRevisions, revertToRevision } from './store.js'
 import { isSafeMediaName, MEDIA_MAX_BYTES, mediaMime, mediaPath, mediaSnippet, saveMedia } from './media.js'
 import { getIdentityImage, setIdentityImage, type IdentityImageKey } from './identity-images.js'
+import { listFriendLinks, saveFriendLink, deleteFriendLink, setFriendLinkIcon, type FriendLink } from './friend-links.js'
 import { toPublicSummary } from './public-summary.js'
 import { startProbing, stopProbing } from './probe.js'
 import { listBackupFiles, listBackups, runBackup } from './backup.js'
@@ -116,8 +117,8 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
  * **有的页面变、有的不变**（取决于那个路由何时求值），正是本仓最防的那种静默失败。
  * 所以这里没有任何缓存：一次单表主键 SELECT 是微秒级，而缓存要引入失效逻辑。
  */
-function siteOf(): { title: string; description: string; logo: string | null } {
-  return { title: getSiteTitle(), description: getSiteDescription(), logo: getIdentityImage('site-logo') }
+function siteOf(): { title: string; description: string; logo: string | null; friendLinks: FriendLink[] } {
+  return { title: getSiteTitle(), description: getSiteDescription(), logo: getIdentityImage('site-logo'), friendLinks: listFriendLinks() }
 }
 
 /** 公开文章侧栏的数据：只传 slug / title；当前文章页再传 currentSlug。 */
@@ -182,21 +183,25 @@ function buildAdminOverview(): AdminOverview {
  */
 function buildSummary(): StatusSummary {
   const targets = listEnabledTargets()
+  const now = Date.now()
+  const interval = getProbeIntervalSeconds()
+  const freshness = (target: ProbeTarget) => interval * 3000 + (target.timeoutMs ?? config.probeTimeoutMs)
   return {
     targets: targets.map((target) => ({
       target,
       // `enabledAt` 给「连续可用时长」设下界（§5）：停用再启用后从重新启用那一刻算起。
-      stats: getStats(target.id, WINDOW_MS, target.enabledAt),
-      timeline: getTimeline(target.id, WINDOW_MS, 60),
-      latency: getLatencyRaw(target.id, WINDOW_MS, 120),
+      stats: getStats(target.id, WINDOW_MS, target.enabledAt, freshness(target), now),
+      timeline: getTimeline(target.id, WINDOW_MS, 56),
+      latency: getLatencyRaw(target.id, WINDOW_MS, 120, freshness(target), now),
     })),
-    overview: getUptimeRaw(WINDOW_MS, targets.length, 120),
-    incidents: getRecentIncidents(8),
-    generatedAt: Date.now(),
+    overview: getUptimeRaw(WINDOW_MS, targets.length, 120, Math.max(interval * 3000, ...targets.map(freshness)), now),
+    incidents: getIncidentEvents(WINDOW_MS, targets.map(t => ({ id: t.id, enabledAt: t.enabledAt, maxGapMs: freshness(t) })), now),
+    generatedAt: now,
+    windowStartAt: now - WINDOW_MS,
     windowLabel: WINDOW_LABEL,
     // 面板上写「每 N 秒自动刷新」用的是它 —— 这里读的是**库里的配置值**，
     // 而不是「刚过去那一轮的间隔」。改完后的一个间隔内两者可能不一致，这是对的（§4 末段）。
-    probeIntervalSeconds: getProbeIntervalSeconds(),
+    probeIntervalSeconds: interval,
   }
 }
 
@@ -676,9 +681,9 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     const code = err.code ?? ''
     if (code === 'FST_REQ_FILE_TOO_LARGE' || code === 'FST_FILES_LIMIT' || /file size limit|too large/i.test(err.message)) {
       console.warn('[media] 上传被拒（超过上限）：' + err.message)
-      const pathname = req.url.split('?')[0]
+      const pathname = req.url.split('?')[0] ?? ''
       const back = pathname === '/account/avatar' ? '/account'
-        : pathname === '/admin/settings/logo' ? '/admin/settings' : '/admin/articles'
+        : pathname === '/admin/settings/logo' || pathname.startsWith('/admin/settings/friends/') ? '/admin/settings' : '/admin/articles'
       return reply.redirect(back + '?notice=media-too-big', 302)
     }
     console.error('[server] 未处理的请求错误：', err.message)
@@ -1104,7 +1109,60 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     notice?: unknown
     bad?: string | null
     submitted?: Record<string, string> | null
-  }): string => adminSettingsPage(listSettings(), envOnlyFacts(), opts, siteOf())
+    friendBad?: string | null
+    friendSubmitted?: Record<string, string> | null
+  }): string => adminSettingsPage(listSettings(), envOnlyFacts(), opts, siteOf(), listFriendLinks())
+
+  app.post('/admin/settings/friends', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const form = parseFormBody(req.body)
+    const back = (bad: string): string => {
+      reply.code(400).type('text/html; charset=utf-8')
+      return buildSettingsPage({ friendBad: bad, friendSubmitted: form })
+    }
+    if (!['save', 'delete'].includes(form.action ?? '')) return back('未知的友联操作。')
+    const id = form.id ? Number(form.id) : undefined
+    if (form.id && (!/^[1-9]\d*$/.test(form.id) || !Number.isSafeInteger(id))) return back('友联编号不合法，请刷新页面。')
+    if (form.action === 'delete') {
+      if (id === undefined || !deleteFriendLink(id)) return back('找不到这条友联，请刷新页面。')
+    } else {
+      try {
+        saveFriendLink({ name: form.name ?? '', url: form.url ?? '', description: form.description, sortOrder: form.sortOrder }, id)
+      } catch (err) { return back((err as Error).message) }
+    }
+    return reply.redirect('/admin/settings?notice=friend-saved#friend-links-admin', 302)
+  })
+
+  app.post('/admin/settings/friends/:id/icon', { preValidation: adminWriteGuard }, async (req, reply) => {
+    const rawId = (req.params as { id: string }).id
+    const id = Number(rawId)
+    if (!/^[1-9]\d*$/.test(rawId) || !Number.isSafeInteger(id) || !listFriendLinks().some(link => link.id === id)) {
+      return reply.code(404).send('找不到这条友联，请刷新页面。')
+    }
+    const back = (notice: string) => reply.redirect(`/admin/settings?notice=${notice}#friend-links-admin`, 302)
+    const body = req.body as Record<string, unknown> | undefined
+    const rawAction = body?.action
+    const action = typeof rawAction === 'string' ? rawAction : (rawAction as { value?: string } | undefined)?.value
+    if (action === 'clear') {
+      setFriendLinkIcon(id, null)
+      return back('friend-saved')
+    }
+    if (action !== 'upload') return reply.code(400).send('未知的友联图片操作。')
+    const file = body?.file as { toBuffer?: () => Promise<Buffer> } | undefined
+    if (!file || typeof file.toBuffer !== 'function') return back('media-no-file')
+    let bytes: Buffer
+    try { bytes = await file.toBuffer() }
+    catch { return back('media-too-big') }
+    let name: string
+    try { name = saveMedia(bytes).name }
+    catch (err) {
+      const invalid = /空文件|不是支持的图片类型/.test((err as Error).message)
+      return back(invalid ? 'media-rejected' : 'image-save-failed')
+    }
+    // 上传期间条目可能被另一个请求删除；不把它重新创建出来。
+    if (!listFriendLinks().some(link => link.id === id)) return reply.code(404).send('这条友联已删除，请刷新页面。')
+    setFriendLinkIcon(id, name)
+    return back('friend-saved')
+  })
 
   app.get('/admin/settings', async (req, reply) => {
     if (!currentIsAdmin()) {

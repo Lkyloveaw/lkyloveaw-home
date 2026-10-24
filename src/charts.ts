@@ -129,7 +129,6 @@ export function latencyChart(
   const domain = nums.length >= 2 ? initialDomain(values) : undefined
   const d = linePath(values, w, h, pad, points.map((p) => p.at), xRange, domain)
   const max = nums.length ? Math.max(...nums) : 0
-  const avg = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : 0
   const failed = values.length - nums.length
   const note = '延迟数据不足（至少 2 次有效探测后显示曲线）'
   return chartShell({
@@ -144,11 +143,11 @@ export function latencyChart(
     domain,
     caption: d
       ? {
-          avg: '延迟（平均 ' + avg + ' ms）',
-          max: '峰值 ' + max + ' ms' + (failed ? ' · ' + failed + ' 次失败已断开' : ''),
+          avg: '探测响应时间',
+          max: '峰值 ' + max + ' ms' + (failed ? ' · 失败或缺测已断开' : ''),
         }
       : { avg: '', max: '' },
-    aria: d ? '延迟曲线，平均 ' + avg + ' 毫秒，峰值 ' + max + ' 毫秒' : note,
+    aria: d ? '探测响应时间曲线，峰值 ' + max + ' 毫秒' : note,
     idleNote: note,
     xRange,
   })
@@ -165,7 +164,6 @@ export function uptimeChart(
   const values = points.map((p) => (p.total > 0 ? (p.up / p.total) * 100 : null))
   const d = linePath(values, w, h, pad, points.map((p) => p.at), xRange, { min: 0, max: 100 })
   const nums = values.filter((v): v is number => v != null && Number.isFinite(v) && v >= 0)
-  const avg = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
   const note = '可用率曲线需要至少两轮探测数据'
   return chartShell({
     kind: 'uptime',
@@ -179,11 +177,11 @@ export function uptimeChart(
     domain: { min: 0, max: 100 },
     caption: d
       ? {
-          avg: '窗口内平均可用率 ' + avg.toFixed(1) + '%',
-          max: '范围 ' + Math.min(...nums) + '% – ' + Math.max(...nums) + '%',
+          avg: '各轮可用系统占比',
+          max: '范围 ' + Math.min(...nums).toFixed(2) + '% – ' + Math.max(...nums).toFixed(2) + '%',
         }
       : { avg: '', max: '' },
-    aria: d ? '可用率曲线，窗口内平均 ' + avg.toFixed(1) + '%' : note,
+    aria: d ? '各轮可用系统占比曲线，范围 ' + Math.min(...nums).toFixed(2) + '% 至 ' + Math.max(...nums).toFixed(2) + '%' : note,
     idleNote: note,
     xRange,
   })
