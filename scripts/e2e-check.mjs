@@ -328,8 +328,11 @@ try {
   check('延迟曲线把首屏值域写进 DOM', /data-chart-kind="latency"[\s\S]{0,160}data-y-min="[-\d.]+" data-y-max="[-\d.]+"/.test(st.body))
   check('可用率值域固定 0-100', /data-chart-kind="uptime"[\s\S]{0,120}data-y-min="0" data-y-max="100"/.test(st.body))
   check('时序条带 data-timeline 钩子', st.body.includes('data-timeline'))
-  check('引入了 /chart-path.js', st.body.includes('src="/chart-path.js"'))
-  check('/chart-path.js 在 status.js **之前**（否则 CP 未定义）', st.body.indexOf('/chart-path.js') < st.body.indexOf('src="/status.js"'))
+  check('状态刷新入口通过原生 module 加载', st.body.includes('<script type="module" src="/status.js?v=esm"></script>'))
+  for (const resource of ['/chart-path.js', '/html.js', '/status-model.js']) {
+    const res = await get(resource)
+    check(resource + ' 可匿名作为 JavaScript 模块读取', res.status === 200 && /javascript/.test(res.type), res.status + ' ' + res.type)
+  }
   {
     // 空态也要带 data-chart，否则「空 → 有数据」时前端找不到容器
     const empty = (st.body.match(/chart-empty[^>]*data-chart|data-chart[^>]*chart-empty/g) || []).length
@@ -2079,12 +2082,14 @@ try {
      */
     const stamps = () => [...serverLog.matchAll(/\[probe\] (\S+)/g)].map((m) => Date.parse(m[1])).filter(Number.isFinite)
     const gapsOf = (ts) => ts.slice(1).map((t, i) => t - ts[i])
-    for (let i = 0; i < 40 && stamps().length < 3; i++) await sleep(500)
+    // 前面的同步口令校验会阻塞服务端事件循环；取两轮新的安静样本，避免把测试负载当成探测间隔。
+    const quietRounds = Math.max(3, stamps().length + 2)
+    for (let i = 0; i < 40 && stamps().length < quietRounds; i++) await sleep(500)
     const beforeGaps = gapsOf(stamps())
     const baseline = beforeGaps[beforeGaps.length - 1]
     check(
       '前提：改之前两轮之间的间隔 ≈ 启动时的 env 值（3 秒 + 本轮耗时）',
-      beforeGaps.length > 0 && baseline > 2000 && baseline < 5500,
+      stamps().length >= quietRounds && beforeGaps.length > 0 && baseline > 2000 && baseline < 5500,
       `gaps=${beforeGaps.join(',')}`,
     )
 

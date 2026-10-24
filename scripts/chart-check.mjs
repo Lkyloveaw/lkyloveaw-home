@@ -1,16 +1,6 @@
-/**
- * 曲线交叉断言：**同一份输入，服务端渲染的 `d` 必须与 `public/chart-path.js` 算出的 `d` 逐字符相等。**
- *
- * 为什么必须有这条：站点没有构建步骤，几何因此存在**两份实现**——
- * 服务端的 `src/charts.ts`（首屏 SSR）与 `public/chart-path.js`（30 秒重绘）。
- * 两份实现迟早漂移，而漂移的表现是「刷新一次曲线就跳一下」，很难归因。
- *
- * ⚠ 必须用 `node:vm` 而不是 `require()`：`package.json` 有 `"type": "module"`，
- * `require()` 会把 `chart-path.js` 当 ESM 处理，拿到 `{}`。
- */
-import fs from 'node:fs'
+/** SSR 图表与共享几何的集成断言；固定数值预期见 shared-presentation-check。 */
 import path from 'node:path'
-import vm from 'node:vm'
+import * as CP from '../public/chart-path.js'
 
 const ROOT = process.cwd()
 
@@ -20,14 +10,7 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`)
 }
 
-// ── 在 vm 里加载 chart-path.js（classic script，挂 globalThis）──
-const sandbox = { globalThis: undefined, console }
-sandbox.globalThis = sandbox
-vm.createContext(sandbox)
-const code = fs.readFileSync(path.join(ROOT, 'public/chart-path.js'), 'utf8')
-vm.runInContext(code, sandbox, { filename: 'chart-path.js' })
-const CP = sandbox.ChartPath
-check('chart-path.js 在 vm 里加载出 ChartPath', !!CP && typeof CP.linePath === 'function')
+check('共享图表模块可由 Node 直接导入', typeof CP.linePath === 'function')
 
 // ── 加载服务端实现 ──
 const charts = await import(path.join(ROOT, 'dist/charts.js').replace(/\\/g, '/').replace(/^([A-Za-z]):/, 'file:///$1:'))

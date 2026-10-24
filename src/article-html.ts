@@ -14,17 +14,8 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { isSafeUrl } from './article-doc.js'
 
-const ESCAPES: Record<string, string> = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-}
-
-export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (ch) => ESCAPES[ch]!)
-}
+import { escapeHtml } from '../public/html.js'
+export { escapeHtml } from '../public/html.js'
 
 const MARK_TAGS: Record<string, string> = { bold: 'strong', italic: 'em', code: 'code' }
 

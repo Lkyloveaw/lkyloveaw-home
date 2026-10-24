@@ -27,16 +27,13 @@ import {
  * 为什么静态资源也要显式列出：全局 `onRequest` 钩子**会**拦到 `@fastify/static`
  * 的资源，且与注册顺序无关（实测）。不在白名单里，登录页自己就拿不到 `/style.css`。
  */
+/** 模块资源名单同时用于匿名读取和最终响应的缓存策略。 */
+export const STATUS_MODULE_PATHS: ReadonlySet<string> = new Set([
+  '/status.js', '/chart-path.js', '/html.js', '/status-model.js',
+])
 export const PUBLIC_PATHS: ReadonlySet<string> = new Set([
-  '/login',
-  '/healthz',
-  '/style.css',
-  '/status.js',
-  // ⚠ 由「面板」票交付的几何核心。此刻文件可能还不存在——先放行一个不存在的路径无害，
-  // 漏了它则面板合入后未登录时拿不到该文件（`chart-redraw-decision.md` §6 点名的联动点）。
-  '/chart-path.js',
-  // 写作区的富文本编辑器（#57）。闸门是精确路径匹配：漏加的现象是「编辑器不出来」而不是报错。
-  // 它只是打包好的客户端脚本（无数据），放行不扩大可见面。
+  '/login', '/healthz', '/style.css',
+  ...STATUS_MODULE_PATHS,
   '/article-editor.js',
   '/favicon.ico',
 ])

@@ -19,6 +19,15 @@ import { config } from './config.js'
 /** 单张上限 8 MiB（规格定的）。**上传适配器也要设一层**，这里是第二道。 */
 export const MEDIA_MAX_BYTES = 8 * 1024 * 1024
 
+export type MediaInputErrorKind = 'empty' | 'too-large' | 'unsupported'
+/** 输入拒绝与文件系统故障分开，上传适配器不依赖错误文案。 */
+export class MediaInputError extends Error {
+  constructor(readonly kind: MediaInputErrorKind, message: string) {
+    super(message)
+    this.name = 'MediaInputError'
+  }
+}
+
 /**
  * 允许的图片类型。**只看魔数**，`ext` 由我们自己定 —— 上传者给的文件名一律不参与。
  *
@@ -101,10 +110,10 @@ export function listMedia(): string[] {
  * - 落盘是**原子的**：写 `<name>.tmp-<随机>` 再 `rename`。
  */
 export function saveMedia(buf: Buffer): { name: string; hash: string; ext: string; mime: string; created: boolean } {
-  if (buf.length === 0) throw new Error('空文件')
-  if (buf.length > MEDIA_MAX_BYTES) throw new Error(`超过 ${Math.round(MEDIA_MAX_BYTES / 1024 / 1024)} MiB`)
+  if (buf.length === 0) throw new MediaInputError('empty', '空文件')
+  if (buf.length > MEDIA_MAX_BYTES) throw new MediaInputError('too-large', `超过 ${Math.round(MEDIA_MAX_BYTES / 1024 / 1024)} MiB`)
   const kind = sniffImage(buf)
-  if (!kind) throw new Error('不是支持的图片类型（只收 png / jpeg / webp / gif；SVG 一律拒绝）')
+  if (!kind) throw new MediaInputError('unsupported', '不是支持的图片类型（只收 png / jpeg / webp / gif；SVG 一律拒绝）')
 
   const hash = crypto.createHash('sha256').update(buf).digest('hex')
   const name = mediaName(hash, kind.ext)

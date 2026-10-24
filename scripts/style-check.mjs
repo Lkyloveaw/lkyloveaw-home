@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { stateClass } from '../public/status-model.js'
 
 const root = path.resolve(import.meta.dirname, '..')
 const css = fs.readFileSync(path.join(root, 'public/style.css'), 'utf8')
@@ -457,7 +458,7 @@ section('面板那两条实现要点没被抽变形')
   check('定宽格数仍是 56（`CELL_STRIP_LEN`）', /CELL_STRIP_LEN = 56/.test(views))
   check('缺失历史仍画空心格（`.cell-missing` 在 CSS 里）', /\.cell-strip i\.cell-missing\b/.test(css))
   check('跨文件契约类名没被顺手改掉（`.cell-strip` / `.badge` / `.dot` 都在）', ['cell-strip', 'badge', 'dot'].every((c) => new RegExp(`\\.${c}\\b`).test(css)))
-  check('客户端状态映射仍在一处（`status.js` 的 `STATE_CLASS`）', /STATE_CLASS/.test(statusJs))
+  check('共享状态映射产生的类名都有 CSS 定义', ['up', 'degraded', 'down', 'stale', 'unknown'].every(state => css.includes('.' + stateClass(state))))
   check('曲线网格用 CSS 纸纹（`repeating-linear-gradient` + `--separator`），不往 SVG 里塞网格', /\.chart\s*\{[^}]*repeating-linear-gradient/s.test(css) && /--separator/.test(css) && !/<line\s/.test(chartsTs))
   check(
   '空态覆盖层不切换结构（.chart 相对定位 + .chart-empty 显示 .chart-idle-note）',
