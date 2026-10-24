@@ -11,6 +11,7 @@ import { currentCsrfToken, currentIsAdmin, currentUserName, currentUserAvatar } 
 import { isSafeMediaName } from './media.js'
 import { MIN_PASSWORD_LENGTH } from './users.js'
 import { icon, type IconName } from './icons.js'
+import { isFriendLinkUrl, type FriendLink } from './friend-links.js'
 
 /**
  * L3 的 hidden input（`docs/write-path-auth-decision.md` §4.3）。
@@ -297,7 +298,23 @@ function adminTabs(section: AdminSection): string {
   ).join('')}</nav>`
 }
 
-export function layout(opts: LayoutOptions, site: { title: string; description: string; logo?: string | null }): string {
+function friendIcon(link: Pick<FriendLink, 'name' | 'icon'>): string {
+  return `<span class="friend-icon" aria-hidden="true">${link.icon && isSafeMediaName(link.icon)
+    ? `<img src="/media/${escapeHtml(link.icon)}" alt="" loading="lazy" width="44" height="44">`
+    : escapeHtml([...link.name.trim()][0]?.toUpperCase() ?? '?')}</span>`
+}
+
+function friendLinksSection(links: FriendLink[]): string {
+  const visible = links.filter(link => isFriendLinkUrl(link.url))
+  if (!visible.length) return ''
+  return `<section class="friend-links" aria-labelledby="friend-links-title">
+<h2 id="friend-links-title">友联</h2><div class="friend-grid">${visible.map(link =>
+    `<a class="friend-card" href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">
+${friendIcon(link)}<span class="friend-copy"><strong>${escapeHtml(link.name)}</strong>${link.description ? `<span class="friend-description">${escapeHtml(link.description)}</span>` : ''}</span><span class="sr">（新标签页打开）</span></a>`,
+  ).join('')}</div></section>`
+}
+
+export function layout(opts: LayoutOptions, site: { title: string; description: string; logo?: string | null; friendLinks?: FriendLink[] }): string {
   // 页面自带的 bodyClass（403/404 用 `page-error`；其余页面没有额外类）。
   const bodyClass = opts.bodyClass ?? ''
   const shellClass = opts.sidebar
@@ -331,6 +348,7 @@ ${themeBoot()}
   ${docsSide(opts.sidebar)}
   <main class="app-main">${opts.adminSection ? adminTabs(opts.adminSection) : ''}${opts.body}</main>
 </div>
+${opts.sidebar ? friendLinksSection(site.friendLinks ?? []) : ''}
 <footer class="site-footer">
   <div class="wrap">
     <span>${escapeHtml(site.description)}</span>
@@ -419,6 +437,7 @@ export const NOTICE_TEXT: Record<string, string> = {
   'avatar-cleared': '已恢复默认头像。',
   'logo-saved': '网站徽标已更新。',
   'logo-cleared': '已恢复默认网站徽标。',
+  'friend-saved': '友联已更新，刷新公开页面即可看到。',
   'image-save-failed': '图片保存失败，请稍后重试。',
   'article-created': '已新建文章（草稿）。',
   'article-saved': '已保存。',
@@ -714,6 +733,31 @@ export interface AdminSettingsOptions {
   bad?: string | null
   /** 失败时**用户刚提交的那份表单**（§4.2：保留已填输入）。 */
   submitted?: Record<string, string> | null
+  friendBad?: string | null
+  friendSubmitted?: Record<string, string> | null
+}
+
+function friendLinksAdmin(links: FriendLink[], opts: AdminSettingsOptions): string {
+  const submitted = opts.friendSubmitted
+  const missingRecord = Boolean(submitted?.id && !links.some(link => String(link.id) === submitted.id))
+  const form = (link?: FriendLink): string => {
+    const refill = submitted && ((submitted.id ?? '') === (link ? String(link.id) : '') || (!link && missingRecord)) ? submitted : null
+    const value = (key: 'name' | 'url' | 'description' | 'sortOrder'): string => escapeHtml(refill?.[key] ?? link?.[key] ?? '')
+    return `<form class="friend-form" method="post" action="/admin/settings/friends">${csrfField()}
+${link ? `<input type="hidden" name="id" value="${link.id}">` : ''}
+<label>网站名称<input name="name" value="${value('name')}" maxlength="60" required></label>
+<label>网址<input type="url" name="url" value="${value('url')}" maxlength="2048" placeholder="https://" required></label>
+<label>简介（可选）<input name="description" value="${value('description')}" maxlength="200"></label>
+<label>顺序<input type="number" name="sortOrder" value="${value('sortOrder')}" min="0" max="2147483647" step="1" placeholder="留空追加到最后"></label>
+<div class="form-actions"><button type="submit" name="action" value="save">${link ? '保存友联' : '新增友联'}</button></div></form>`
+  }
+  return `<section id="friend-links-admin" class="friend-admin"><h2>友联</h2>
+<p class="admin-hint">在所有公开内容页的页脚上方统一显示。数字越小越靠前，同序按添加先后排列；列表为空时隐藏。保存后刷新页面即可看到。</p>
+${opts.friendBad ? `<p class="notice notice-bad" role="alert">${escapeHtml(opts.friendBad)}</p>` : ''}
+<details class="account-card" open><summary>${missingRecord ? '未保存的内容' : '新增友联'}</summary>${missingRecord ? '<p class="admin-hint">原条目不存在或编号无效。输入已保留，检查后可以作为新友联添加。</p>' : ''}${form()}</details>
+${links.map(link => `<details class="account-card"${submitted?.id === String(link.id) ? ' open' : ''}><summary>${escapeHtml(link.name)}</summary>
+${form(link)}<div class="identity-settings">${friendIcon(link)}${imageUploadForm(`/admin/settings/friends/${link.id}/icon`, '友联图标', Boolean(link.icon))}</div>
+<form method="post" action="/admin/settings/friends">${csrfField()}<input type="hidden" name="id" value="${link.id}"><button class="btn-plain" type="submit" name="action" value="delete">删除友联「${escapeHtml(link.name)}」</button></form></details>`).join('')}</section>`
 }
 
 /**
@@ -730,6 +774,7 @@ export function adminSettingsPage(
   envOnly: Array<{ label: string; value: string; note: string }>,
   opts: AdminSettingsOptions,
   site: { title: string; description: string; logo?: string | null },
+  friendLinks: FriendLink[] = [],
 ): string {
   const sub = opts.submitted ?? null
   // 失败时用**用户刚提交的**值回填（`submitted` 里没有这个键时才用库里的值）。
@@ -777,6 +822,7 @@ ${imageUploadForm('/admin/settings/logo', '网站徽标', Boolean(site.logo))}</
 <span class="stat-sub">标题与描述<strong>下一次请求</strong>就生效；探测间隔
 <strong>从下一轮开始</strong>生效，正在等的那一轮不会被打断。</span></div>
 </form>
+${friendLinksAdmin(friendLinks, opts)}
 <h2>留在 .env 里的（只读）</h2>
 <p class="admin-hint">这些改错了会删数据、或把人锁在外面 —— 所以它们不放进网页表单，只在这里让你一眼看到。</p>
 <dl class="inset-list kv">${envRows}</dl>`
