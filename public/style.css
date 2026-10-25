@@ -74,6 +74,8 @@
   --lh-ui: 1.55;
   --lh-prose: 1.8;
   --measure-prose: 68ch;
+  --motion-duration: 220ms;
+  --motion-ease: cubic-bezier(.2, .7, .2, 1);
 }
 
 :root[data-theme="light"] { color-scheme: light; }
@@ -264,6 +266,7 @@ pre code { background: none; border: 0; padding: 0; }
   background: var(--bg); border-bottom: 1px solid var(--separator);
   padding: 12px 20px 24px;
 }
+.nav-drawer[open] .drawer-panel { animation: feedback-in var(--motion-duration) var(--motion-ease) both; }
 .drawer-nav { display: flex; flex-direction: column; }
 .drawer-nav a {
   display: flex; align-items: center; min-height: 44px; padding: 0 8px;
@@ -640,7 +643,9 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
   width: 100%; max-width: 360px;
   background: var(--bg-card); border: 1px solid var(--separator);
   border-radius: var(--radius); padding: 32px 28px;
+  transition: opacity var(--motion-duration) var(--motion-ease), transform var(--motion-duration) var(--motion-ease);
 }
+.login-wrap.is-leaving { opacity: 0; transform: translateY(-6px) scale(.99); }
 .login-wrap h1 { font-family: var(--font-display); font-size: var(--fs-title1); font-weight: 600; letter-spacing: -.01em; line-height: var(--lh-title); margin: 0 0 8px; }
 .login-lede { color: var(--label-2); font-size: var(--fs-subhead); margin: 0 0 20px; }
 .login-form { display: flex; flex-direction: column; gap: 14px; }
@@ -654,12 +659,25 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
 }
 .login-form input:focus { outline: 2px solid var(--label); outline-offset: 1px; border-color: var(--label); }
 .login-form button {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
   /* `--on-accent`：暗色下 accent 是亮蓝，白字只有 2.72:1 —— 所以按钮文字走这个 token
      （暗色给深字、浅色给白字，两边都 ≥4.5，见文件头的对比度说明）。 */
   background: var(--accent); color: var(--on-accent); border: 0; border-radius: 6px;
   padding: 10px 14px; font-size: var(--fs-subhead); font-family: inherit; cursor: pointer; margin-top: 4px;
 }
 .login-form button:hover { filter: brightness(1.08); }
+.login-form button:active:not(:disabled) { transform: scale(.985); }
+.login-form button:disabled { cursor: wait; }
+.login-spinner, .login-check { display: none; width: 18px; height: 18px; flex: 0 0 18px; }
+.login-form[data-state="pending"] .login-spinner {
+  display: inline-block; border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: login-spin .75s linear infinite;
+}
+.login-form[data-state="success"] button { background: var(--ok); color: var(--bg-card); }
+.login-form[data-state="success"] .login-check { display: block; }
+.login-form[data-state="success"] .login-check path {
+  stroke-dasharray: 24; stroke-dashoffset: 24; animation: login-check 260ms ease forwards;
+}
 /* ⚠ 这里原来是硬编码的 rgba(242,86,77,…)（一个 token 以外的颜色）——已改成 token：
    底色用 `--bg-soft`，边框与文字用 `--bad`，于是"错误文字/底"这一对也在 `check:style` 的表里。 */
 .login-error {
@@ -667,7 +685,9 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
   border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--separator));
   color: var(--bad); border-radius: 6px; padding: 9px 11px;
   font-size: var(--fs-footnote); margin: 0 0 16px;
+  animation: feedback-in var(--motion-duration) var(--motion-ease) both;
 }
+.login-error[hidden] { display: none; }
 .login-hint {
   background: var(--fill); border: 1px dashed var(--separator);
   border-radius: 8px; padding: 10px 12px; font-size: var(--fs-footnote);
@@ -682,6 +702,10 @@ h1.large-title { font-family: var(--font-display); font-size: var(--fs-large); l
   border-radius: 6px; padding: 9px 12px; margin: 0 0 14px;
   font-size: var(--fs-subhead); color: var(--label);
 }
+.notice[data-feedback] { animation: feedback-in var(--motion-duration) var(--motion-ease) both; }
+@keyframes feedback-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes login-spin { to { transform: rotate(360deg); } }
+@keyframes login-check { to { stroke-dashoffset: 0; } }
 .status-banner { border-left-color: var(--warn); }
 .status-banner a { color: var(--label); margin-left: 4px; }
 
@@ -841,7 +865,8 @@ button:hover { border-color: var(--label); color: var(--label); }
 }
 .user-pill:hover { background: var(--fill); }
 .user-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.user-pill .chev { width: 14px; height: 14px; color: var(--label-3); }
+.user-pill .chev { width: 14px; height: 14px; color: var(--label-3); transform: rotate(90deg); transition: transform var(--motion-duration) var(--motion-ease); }
+.user-pill[aria-expanded="true"] .chev { transform: rotate(270deg); }
 .avatar {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;
@@ -860,8 +885,8 @@ button:hover { border-color: var(--label); color: var(--label); }
   max-height: calc(100dvh - var(--header-h) - 16px); overflow-y: auto;
   background: var(--bg-card); border: 1px solid var(--separator);
   border-radius: var(--radius-lg); text-align: left;
-  opacity: 0; visibility: hidden; transform: translateY(-4px); pointer-events: none;
-  transition: opacity .15s ease, transform .15s ease;
+  opacity: 0; visibility: hidden; transform: translateY(-6px); pointer-events: none;
+  transition: opacity var(--motion-duration) var(--motion-ease), transform var(--motion-duration) var(--motion-ease);
 }
 .user-menu:focus-within .user-panel,
 .user-menu.is-open .user-panel {
@@ -909,7 +934,11 @@ button:hover { border-color: var(--label); color: var(--label); }
   color: var(--label); font-size: var(--fs-subhead);
 }
 @media (prefers-reduced-motion: reduce) {
-  .user-panel { transition: none; }
+  .user-panel, .user-pill .chev, .login-wrap { transition: none; }
+  .nav-drawer[open] .drawer-panel, .notice[data-feedback], .login-error,
+  .login-form[data-state="pending"] .login-spinner,
+  .login-form[data-state="success"] .login-check path { animation: none; }
+  .login-form[data-state="success"] .login-check path { stroke-dashoffset: 0; }
 }
 
 /* 个人设置：账户、外观与改密。 */

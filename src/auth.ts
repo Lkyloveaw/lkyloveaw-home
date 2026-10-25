@@ -28,12 +28,12 @@ import {
  * 的资源，且与注册顺序无关（实测）。不在白名单里，登录页自己就拿不到 `/style.css`。
  */
 /** 模块资源名单同时用于匿名读取和最终响应的缓存策略。 */
-export const STATUS_MODULE_PATHS: ReadonlySet<string> = new Set([
-  '/status.js', '/chart-path.js', '/html.js', '/status-model.js',
+export const REVALIDATED_ASSET_PATHS: ReadonlySet<string> = new Set([
+  '/status.js', '/chart-path.js', '/html.js', '/status-model.js', '/motion.js', '/style.css',
 ])
 export const PUBLIC_PATHS: ReadonlySet<string> = new Set([
-  '/login', '/healthz', '/style.css',
-  ...STATUS_MODULE_PATHS,
+  '/login', '/healthz',
+  ...REVALIDATED_ASSET_PATHS,
   '/article-editor.js',
   '/favicon.ico',
 ])
@@ -90,7 +90,7 @@ export interface RequestDecision {
  * 客户端要的是 HTML 还是 JSON。
  * **看请求头，不看路径前缀**——`/api/` 前缀是个巧合，不是契约。
  */
-function wantsJson(req: FastifyRequest): boolean {
+export function wantsJson(req: FastifyRequest): boolean {
   const accept = String(req.headers.accept ?? '')
   if (accept.includes('application/json')) return true
   // 明确只接受 HTML（浏览器导航）时按页面处理

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
+import { preparePrintHtml } from './lib/print-html.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const port = Number(process.env.CLAUDE_PREVIEW_PORT || 4387)
@@ -34,8 +35,7 @@ for (const [name, route, title] of [
   if (!response.ok) throw new Error(`${route} 请求失败：${response.status}`)
   let html = await response.text()
   if (!html.includes(title)) throw new Error(`${route} 未返回预期的合成数据页面`)
-  html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace('<link rel="stylesheet" href="/style.css">', `<style>${css}</style><style>@page { size: A4; margin: 12mm; }</style>`)
+  html = preparePrintHtml(html, css)
   const input = path.join(temp, name + '.html')
   const pdf = path.join(output, name + '.pdf')
   fs.writeFileSync(input, html)

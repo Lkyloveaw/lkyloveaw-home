@@ -68,7 +68,7 @@ import {
 } from './users.js'
 import { decodeSid, issueSession, isSafeNextPath, readSessionCookie, sessionCookieHeader } from './session.js'
 import { createSession, revokeSession } from './sessions-store.js'
-import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin, STATUS_MODULE_PATHS } from './auth.js'
+import { decideRequest, deny, isKnownPath, logoutHeader, requireAdmin, REVALIDATED_ASSET_PATHS, wantsJson } from './auth.js'
 import { checkOrigin, csrfContext, csrfToken, currentIsAdmin, currentUserId, verifyCsrf } from './csrf.js'
 import { docToMarkdown } from './article-import.js'
 import { docToHtml } from './article-html.js'
@@ -428,7 +428,7 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
 
   // static 插件会覆盖 onRequest 中的缓存头，因此在最终响应阶段设置。
   app.addHook('onSend', async (req, reply, payload) => {
-    if (STATUS_MODULE_PATHS.has(req.url.split('?')[0] ?? '')) reply.header('Cache-Control', 'no-cache')
+    if (REVALIDATED_ASSET_PATHS.has(req.url.split('?')[0] ?? '')) reply.header('Cache-Control', 'no-cache')
     return payload
   })
   /**
@@ -1369,11 +1369,13 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
     const user = verifyPassword(form.username ?? '', form.password ?? '')
     if (!user) {
       // 不区分「用户不存在」「口令错」「账号已停用」——统一一句提示。
+      if (wantsJson(req)) return reply.code(401).send({ ok: false, error: '用户名或口令不正确' })
       reply.code(401).type('text/html; charset=utf-8')
       return loginPage({ next, error: '用户名或口令不正确', noAccounts: countUsers() === 0 }, siteOf())
     }
 
     setSession(reply, user.id, user.token_version)
+    if (wantsJson(req)) return { ok: true, next }
     return reply.redirect(next, 302)
   })
 

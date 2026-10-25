@@ -107,6 +107,8 @@ const NON_COLOR = new Set([
   'lh-tight', 'lh-title', 'lh-ui', 'lh-prose',
   // 阅读栏宽
   'measure-prose',
+  // 交互动效：时间与缓动不是颜色。
+  'motion-duration', 'motion-ease',
 ])
 
 const cssNoComments = stripComments(css)
@@ -119,7 +121,7 @@ const printWhole = blockWithBraces(cssNoComments, cssNoComments.lastIndexOf('@me
 const cssOutsideTokens = cssNoComments.replace(rootWhole, '').replace(printWhole, '')
 
 // ════════════════════════════════════════════════════
-section('token 表：17 色 light-dark + 29 非色，三态只切 color-scheme（#85）')
+section('token 表：17 色 light-dark + 布局、字阶及动效，三态只切 color-scheme（#85）')
 // ════════════════════════════════════════════════════
 {
   const rootCount = (css.match(/:root\s*\{/g) ?? []).length
@@ -311,7 +313,7 @@ section('主题三态：boot 在 stylesheet 前，picker 两处，无 JS 时降�
 {
   check('`<meta name="color-scheme" content="light dark">` 出现 2 次（layout + login）', (views.match(/<meta name="color-scheme" content="light dark">/g) ?? []).length === 2)
   const bootSplits = views.split('${themeBoot()}')
-  check('boot 脚本在 `<link rel="stylesheet">` 之前（两个外壳各一处）', bootSplits.length === 3 && bootSplits.slice(1).every((part) => part.slice(0, 200).includes('<link rel="stylesheet" href="/style.css">')))
+  check('boot 脚本在 `<link rel="stylesheet">` 之前（两个外壳各一处）', bootSplits.length === 3 && bootSplits.slice(1).every((part) => /<link rel="stylesheet" href="\/style\.css(?:\?[^\"]*)?">/.test(part.slice(0, 200))))
   check('boot 只读 `theme` 键、用 `dataset.theme`、有 try/catch', /localStorage\.getItem\('theme'\)/.test(views) && /dataset\.theme\s*=/.test(views) && /try\{[\s\S]*?catch\(e\)\{\}/.test(views))
   check('主题用原生 select，菜单 / 登录页 / 个人设置复用同一三态控件', /<select data-theme-select aria-label="主题">/.test(views) && ['system', 'light', 'dark'].every((v) => new RegExp(`<option value="${v}">`).test(views)) && (views.match(/\$\{themePicker\(\)\}/g) ?? []).length === 3)
   check('无 JS 时 picker 隐藏（`<noscript>` 里的 `[data-theme-select]` 规则出现 2 次）', (views.match(/<noscript><style>\[data-theme-select\] \{ display: none \}<\/style><\/noscript>/g) ?? []).length === 2)

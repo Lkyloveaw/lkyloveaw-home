@@ -308,7 +308,7 @@ export function layout(opts: LayoutOptions, site: { title: string; description: 
 <title>${escapeHtml(opts.title)} · ${escapeHtml(site.title)}</title>
 <meta name="description" content="${escapeHtml(opts.description)}">
 ${themeBoot()}
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=motion">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
 <noscript><style>[data-theme-select] { display: none }</style></noscript>
 </head>
@@ -333,6 +333,7 @@ ${opts.sidebar ? friendLinksSection(site.friendLinks ?? []) : ''}
 </footer>
 ${themeScript()}
 ${userMenuScript()}
+<script type="module" src="/motion.js"></script>
 </body>
 </html>`
 }
@@ -441,7 +442,7 @@ export function renderNotice(key: unknown, tone: 'ok' | 'bad' | 'warn' = 'ok'): 
   // ⚠ 基类 `.notice` **必须一起输出**：`.notice-bad` 只覆盖左边框颜色，
   // 单用它就丢了背景、内边距与圆角（`status-banner` 那种独立类不适用这里）。
   const cls = tone === 'ok' ? 'notice' : `notice notice-${tone}`
-  return `<p class="${cls}">${escapeHtml(text)}</p>`
+  return `<p class="${cls}" data-feedback role="${tone === 'bad' ? 'alert' : 'status'}">${escapeHtml(text)}</p>`
 }
 
 /** 概览页要的四块摘要（**一律现算**：不落库、不缓存 —— 计数是「一眼的状态」，不是账本）。 */
@@ -1067,7 +1068,7 @@ export function loginPage(opts: LoginPageOptions, site: { title: string; descrip
   const banner = opts.noAccounts
     ? '<p class="login-hint">暂时无法登录，请联系网站管理员。</p>'
     : ''
-  const error = opts.error ? `<p class="login-error">${escapeHtml(opts.error)}</p>` : ''
+  const error = `<p class="login-error" data-login-error role="alert"${opts.error ? '' : ' hidden'}>${escapeHtml(opts.error ?? '')}</p>`
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1076,7 +1077,7 @@ export function loginPage(opts: LoginPageOptions, site: { title: string; descrip
 <meta name="color-scheme" content="light dark">
 <title>登录 · ${escapeHtml(site.title)}</title>
 ${themeBoot()}
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=motion">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📓</text></svg>">
 <noscript><style>[data-theme-select] { display: none }</style></noscript>
 </head>
@@ -1095,10 +1096,12 @@ ${themeBoot()}
     <label>口令
       <input type="password" name="password" autocomplete="current-password" required>
     </label>
-    <button type="submit">登录</button>
+    <button type="submit"><span class="login-spinner" aria-hidden="true"></span><svg class="login-check" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6"/></svg><span data-login-label>登录</span></button>
   </form>
+  <p class="sr" data-login-status role="status"></p>
 </main>
 ${themeScript()}
+<script type="module" src="/motion.js"></script>
 </body>
 </html>`
 }
@@ -1389,7 +1392,7 @@ export function accountPage(
 ): string {
   const name = currentUserName()
   const role = currentIsAdmin() ? '管理员' : '只读'
-  const notice = opts.notice ? `<p class="notice">${escapeHtml(opts.notice)}</p>`
+  const notice = opts.notice ? `<p class="notice" data-feedback role="status">${escapeHtml(opts.notice)}</p>`
     : renderNotice(opts.noticeKey, typeof opts.noticeKey === 'string' && /^(media-|image-save-failed)/.test(opts.noticeKey) ? 'bad' : 'ok')
   const error = opts.error ? `<p class="notice notice-bad">${escapeHtml(opts.error)}</p>` : ''
   const body = `<section class="account-page">

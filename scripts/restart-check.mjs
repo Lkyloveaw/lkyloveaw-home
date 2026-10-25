@@ -9,6 +9,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { assertPortFree } from './lib/port-guard.mjs'
+import { startProbeFixture } from './lib/probe-fixture.mjs'
 
 const ROOT = process.cwd()
 const PORT = 3993
@@ -34,7 +35,8 @@ execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--pa
   cwd: ROOT, env: { ...process.env, DATABASE_PATH: DB }, stdio: 'ignore',
 })
 
-const targets = [{ id: 'ok', name: '可用', url: 'https://example.com/', expectStatus: [200] }]
+const probeFixture = await startProbeFixture()
+const targets = [{ id: 'ok', name: '可用', url: probeFixture.url, expectStatus: [200] }]
 const baseEnv = {
   ...process.env,
   PORT: String(PORT),
@@ -193,6 +195,7 @@ try {
   }
 } finally {
   try { first.kill('SIGTERM') } catch {}
+  await probeFixture.close()
   await sleep(600)
   try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) } catch {}
 }
