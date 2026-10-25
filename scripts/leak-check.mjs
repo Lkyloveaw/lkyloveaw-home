@@ -8,7 +8,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { createServer } from 'node:http'
+import { startProbeFixture } from './lib/probe-fixture.mjs'
 import { assertPortFree } from './lib/port-guard.mjs'
 
 const ROOT = process.cwd()
@@ -33,15 +33,14 @@ const SECRET_USER = 'ops'
 const SECRET_PASS = 'hunter2'
 const CREDENTIAL_URL = `http://${SECRET_USER}:${SECRET_PASS}@${SECRET_HOST}/`
 // 持续产生一条真实的非预期状态码事件，避免依赖已合并进其他故障的历史样本。
-const statusServer = createServer((_req, res) => { res.writeHead(503); res.end('unavailable') })
-await new Promise((resolve, reject) => { statusServer.once('error', reject); statusServer.listen(0, '127.0.0.1', resolve) })
+const probeFixture = await startProbeFixture()
 
 const targets = [
-  { id: 'http-error', name: '状态码异常', url: `http://127.0.0.1:${statusServer.address().port}/`, expectStatus: [200] },
+  { id: 'http-error', name: '状态码异常', url: probeFixture.url + 'status/503', expectStatus: [200] },
   // 这个会被**入口拦截**（URL 带凭证），根本不会进探测流程
   { id: 'leaky', name: '带凭证的目标', url: CREDENTIAL_URL, group: 'G1', timeoutMs: 1200 },
   // 超时分支：必须保住「等了多久」
-  { id: 'slow', name: '会超时', url: 'http://10.255.255.1/', group: 'G1', timeoutMs: 1000 },
+  { id: 'slow', name: '会超时', url: probeFixture.url + 'timeout', group: 'G1', timeoutMs: 1000 },
   // DNS 失败分支：**运行时异常**，原文含主机名 → 必须被换成类别文案。
   // 这条替换掉「带凭证 URL」原先承担的写侧脱敏覆盖（那个现在被入口拦掉了）。
   { id: 'dnsfail', name: 'DNS 失败', url: `http://${SECRET_HOST}/`, group: 'G2', timeoutMs: 4000 },
@@ -216,8 +215,7 @@ try {
   }
 } finally {
   child.kill()
-  statusServer.closeAllConnections()
-  await new Promise(resolve => statusServer.close(resolve))
+  await probeFixture.close()
   await sleep(600)
   try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {}
 }

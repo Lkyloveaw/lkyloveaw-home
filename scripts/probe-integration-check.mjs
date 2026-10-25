@@ -9,6 +9,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { assertPortFree } from './lib/port-guard.mjs'
+import { startProbeFixture } from './lib/probe-fixture.mjs'
 
 const ROOT = process.cwd()
 const PORT = 3995
@@ -35,7 +36,8 @@ execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--pa
   cwd: ROOT, env: { ...process.env, DATABASE_PATH: DB }, stdio: 'ignore',
 })
 
-const targets = [{ id: 'ok', name: '可用', url: 'https://example.com/', expectStatus: [200] }]
+const probeFixture = await startProbeFixture()
+const targets = [{ id: 'ok', name: '可用', url: probeFixture.url, expectStatus: [200] }]
 
 // 端口被占时**先失败**：否则下面的 /healthz 等待会凑到别人起的服务上，
 // 然后对着另一个库登录 —— 症状是「登录 401 / timeline=0」，与产品 bug 无法区分。
@@ -85,8 +87,7 @@ try {
     )
   }
 
-  // 轮询等备份出现，而不是固定 sleep：每轮要真去 fetch example.com，
-  // 耗时不确定，固定 sleep 会随机地只采到 1 轮（第一版就是这样偶发失败）。
+  // 轮询等真实探测触发备份，避免机器负载让固定等待只采到一轮。
   const waitFor = async (fn, timeoutMs, label) => {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
@@ -179,6 +180,7 @@ try {
   }
 } finally {
   try { child.kill() } catch {}
+  await probeFixture.close()
   await sleep(500)
   try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) } catch {}
 }

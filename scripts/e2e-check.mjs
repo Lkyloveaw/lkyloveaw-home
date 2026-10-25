@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import { csrfToken } from '../dist/csrf.js'
 import path from 'node:path'
 import { assertPortFree } from './lib/port-guard.mjs'
-import { createServer } from 'node:http'
+import { startProbeFixture } from './lib/probe-fixture.mjs'
 
 const PORT = 3997
 const BASE = `http://127.0.0.1:${PORT}`
@@ -113,12 +113,8 @@ const TEST_DB = path.join(tmpData, 'e2e.sqlite')
 await assertPortFree(PORT, 'e2e-check（端口 3997）')
 
 // Real HTTP probes with deterministic responses: public networks need not be reachable.
-const probeFixture = createServer((req, res) => {
-  if (req.url === '/timeout') return
-  res.writeHead(200); res.end('probe fixture')
-})
-await new Promise((resolve, reject) => { probeFixture.once('error', reject); probeFixture.listen(0, '127.0.0.1', resolve) })
-const probeUrl = `http://127.0.0.1:${probeFixture.address().port}/`
+const probeFixture = await startProbeFixture()
+const probeUrl = probeFixture.url
 const targets = [
   { id: 'ok', name: '可用系统', url: probeUrl, group: 'G1', expectStatus: [200] },
   { id: 'bad', name: '状态码不符', url: probeUrl, group: 'G1', expectStatus: [999] },
@@ -2632,8 +2628,7 @@ try {
   }
 } finally {
   child.kill('SIGTERM')
-  probeFixture.closeAllConnections()
-  await new Promise(resolve => probeFixture.close(resolve))
+  await probeFixture.close()
   await sleep(800)
   fs.rmSync(tmpData, { recursive: true, force: true })
 }
