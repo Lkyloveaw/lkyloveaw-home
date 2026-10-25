@@ -35,11 +35,11 @@
 - Consumes: current `isSafeNextPath`, `isKnownPath`, `verifyPassword`, `setSession`, and common `renderNotice`.
 - Produces: JSON login contract in spec; anonymous `/motion.js`; shared feedback markers; `npm run check:motion` in `verify`.
 
-- [ ] Write real-server tests for JSON login success, wrong credentials, origin failure, safe return paths, usable issued session, unchanged HTML fallback, anonymous resources and cache migration, and accessible feedback markers.
-- [ ] Run `npm run build && node scripts/motion-check.mjs` and observe missing JSON/asset/marker behavior fail.
-- [ ] Add browser state tests executing the product script: pending, duplicate submit, success timing, failed/invalid/network/timeout responses, reduced motion, unsafe response target, and page restoration cancellation. Run and observe missing script fail.
-- [ ] Implement the JSON branch, resource caching, native form enhancement, markup and CSS with the exact spec timing.
-- [ ] Run `npm run typecheck && npm run check:motion && npm run check:menu && npm run check:style`; expect exit 0 with no failures. Fix regressions before committing.
+- [x] Write real-server tests for JSON login success, wrong credentials, origin failure, safe return paths, usable issued session, unchanged HTML fallback, anonymous resources and cache migration, and accessible feedback markers.
+- [x] Run `npm run build && node scripts/motion-check.mjs` and observe missing JSON/asset/marker behavior fail.
+- [x] Add browser state tests executing the product script: pending, duplicate submit, success timing, failed/invalid/network/timeout responses, reduced motion, unsafe response target, and page restoration cancellation. Run and observe missing script fail.
+- [x] Implement the JSON branch, resource caching, native form enhancement, markup and CSS with the exact spec timing.
+- [x] Run `npm run typecheck && npm run check:motion && npm run check:menu && npm run check:style`; expect exit 0 with no failures. Fix regressions before committing.
 - [ ] Commit only this task's code, tests and design/plan records; exclude the earlier deployment document change and user files.
 - [ ] Run `npm run check:all` once for final task completion; expect exit 0. Verify real browser flows with an isolated preview database, never the development server's data.
 - [ ] Complete one independent whole-branch review and address material findings in one test-first pass if needed. Keep branch ready for review without merging or deployment.
