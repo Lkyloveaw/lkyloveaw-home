@@ -40,10 +40,20 @@
 - [x] Add browser state tests executing the product script: pending, duplicate submit, success timing, failed/invalid/network/timeout responses, reduced motion, unsafe response target, and page restoration cancellation. Run and observe missing script fail.
 - [x] Implement the JSON branch, resource caching, native form enhancement, markup and CSS with the exact spec timing.
 - [x] Run `npm run typecheck && npm run check:motion && npm run check:menu && npm run check:style`; expect exit 0 with no failures. Fix regressions before committing.
-- [ ] Commit only this task's code, tests and design/plan records; exclude the earlier deployment document change and user files.
-- [ ] Run `npm run check:all` once for final task completion; expect exit 0. Verify real browser flows with an isolated preview database, never the development server's data.
-- [ ] Complete one independent whole-branch review and address material findings in one test-first pass if needed. Keep branch ready for review without merging or deployment.
+- [x] Commit only this task's code, tests and design/plan records; exclude the earlier deployment document change and user files.
+- [x] Run `npm run check:all` for final task completion; expect exit 0. Verify real browser flows with an isolated preview database, never the development server's data.
+- [x] Complete one independent whole-branch review and address material findings in one test-first pass if needed. Keep branch ready for review without merging or deployment.
 
 ## Execution record
 
 The approved prototype and timing are the authorization to proceed; implementation details and inline execution are routine choices. No additional style or plan approval is needed. One final reviewer will check the completed change. The existing deployment record remains a separate uncommitted change.
+
+## Completed verification
+
+- Final `npm run check:all`: exit 0, E2E **584/584**. Motion routes/print **8/8**, browser state **11/11**, menu **12/12**, style **187/187**. Full log retained at `.dsh-progress/motion-execution/task-1-tests.log`.
+- Independent read-only review: `gpt-6-astra`, original feature range `1466683..51ab06c`. One important URL-normalization issue and one print regression, both reproduced before fixing and covered by regression tests. The print regression was treated as functional breakage and fixed in the same pass. No deferred findings.
+- Decisions: navigate using the validated absolute URL; preserve the documented printing workflow via a small shared HTML preparation helper; use local real HTTP fixtures for E2E, probe integration, restart and leak acceptance. These fixtures test the application pipeline and deliberately do not test public-internet reachability. No production probe behavior changed.
+- Two initial broad runs exposed network-dependent legacy failures (E2E **576/584** from example.com timing out at 4019ms; probe integration **9/11** from a 4s assertion preceding a 5s external timeout). All original status, timeout, restart and timing assertions remain; controlled local fixtures removed the network dependency. Final broad run passed.
+- Real browser against temporary database and synthetic `preview` account: wrong password, successful original-destination return, save notice, account menu, mobile native drawer, dark mode and back-navigation retry verified. At 390px the content/viewport both measured 375px; browser warnings/errors **0**. Reduced-motion navigation and timers covered by the browser script checks.
+- Real browser screenshots: `.dsh-progress/motion-shots/feedback.png` and `desktop.png`. Local isolated app preview: `http://localhost:43966/`. Development server untouched by this task; deployment state was outside the review and remains outside this implementation.
+- Approved standalone prototype archived separately in local branch `codex/prototype-interface-motion` (`motion-preview.html`), with the user verdict. No prototype UI or fake data is included in the application branch.
