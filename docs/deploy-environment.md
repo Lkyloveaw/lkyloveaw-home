@@ -2,7 +2,72 @@
 
 本文件记录**目标部署机器**的实测事实，供后续会话直接引用，避免重复探测、也避免把「静态推断」当「已验证」。
 
-> ## 0. 2026-10-19 起：开发服务器 = `root@hw.hyacinthus.cn`
+## 当前：2026-10-25 起，开发服务器 = `root@10.0.0.226`
+
+用户明确要求切回 `10.0.0.226`，并检查、部署最新提交。**本节覆盖后面的历史记录；后续开发部署以本节为准。**
+部署仍然只有**裸机 + systemd**，机器上的其他容器与本站无关。
+
+### 实测环境与登录
+
+| 项 | 2026-10-25 实测值 |
+| --- | --- |
+| 地址 / hostname | `10.0.0.226` / `Development` |
+| 系统 / CPU | Ubuntu **24.04.5 LTS** / **2 核** |
+| 内存 / Swap | **2.0 GiB / 2.0 GiB**；部署后可用内存约 1.3 GiB（历史的 4 GiB 已不适用） |
+| 磁盘 | 40G，部署后用 25G、**剩 13G** |
+| 系统 Node | `/usr/bin/node` = **18.19.1，不可用于本站** |
+| 本站 Node / npm | `/root/.nvm/versions/node/v24.15.0/bin/node` = **24.15.0** / npm **11.12.1** |
+| 工具 | git、rsync、curl、gcc、make、python3、systemd 可用；npm registry 返回 200 |
+| 服务 / 端口 | `personal-wiki.service`；`0.0.0.0:3000`；启用开机自启 |
+| 访问地址 | **<http://10.0.0.226:3000/>**（匿名首页会按现有鉴权规则跳转登录） |
+
+SSH 必须显式使用旧机对应密钥；本次直连成功的命令如下，未修改本地 SSH 配置或密钥：
+
+```bash
+ssh -i ~/.ssh/id_ed25519.bak -o IdentitiesOnly=yes -o ProxyCommand=none -o ProxyJump=none root@10.0.0.226
+```
+
+非交互式 shell 与 systemd **不会自动加载 nvm**。安装、构建、运维 CLI 都先设置：
+
+```bash
+export PATH=/root/.nvm/versions/node/v24.15.0/bin:$PATH
+npm_config_nodedir=/root/.nvm/versions/node/v24.15.0 npm ci --include=dev --no-audit --no-fund
+```
+
+### 当前部署与数据
+
+- 当前发布的完整提交号、归档 SHA-256 与启用时间以 **`/opt/personal-wiki/.deployment.json`** 为准；部署产物来自 `master` 的固定提交 `git archive`，不包含本地未提交文件。首次切回内网时部署的是 `14666834f9496262255df562a14afccfcc5a061d`（代码归档 SHA-256：`edc88279466f72234a4b4c46864635c9c0da7c54065c70d58f82445276a3e449`），该记录用于迁移追溯。
+- 应用目录 / unit：`/opt/personal-wiki` / `/etc/systemd/system/personal-wiki.service`。
+- unit 的 `WorkingDirectory=/opt/personal-wiki`，`ExecStart=/root/.nvm/versions/node/v24.15.0/bin/node /opt/personal-wiki/dist/server.js`，并显式配置同一 nvm 的 `PATH`；`NODE_ENV=production`。
+- 运行数据：`data/availability.sqlite`、`data/media/`、`data/backups/`；另保留 `.env`、`targets.json`、`content/`。`.env` 为 root 所有、权限 **600**，`data/` 权限 **700**。
+- 数据来自原开发服务器 `hw.hyacinthus.cn` 的 SQLite **在线备份**及媒体、配置副本。最终快照时间 **2026-10-25 20:54:10（UTC+8）**，包含 **2 个账号、2 篇文章、1 个目标、3,117 条探测记录**；所有表在启动前逐表比较内容摘要，启动后再次比较业务记录，均一致，数据库 `quick_check=ok`。
+- 保留原 `SESSION_SECRET` 和账号口令；`SITE_ORIGIN` 在原值基础上加入 `http://10.0.0.226:3000`，`SESSION_COOKIE_SECURE=0`。新地址可用原账号登录。
+- 回退数据快照：`/opt/personal-wiki-import-20261025-1466683/`，权限 **700**；原始压缩包 `/tmp/personal-wiki-state-20261025-1466683-final.tar.gz`，权限 **600**，SHA-256：`72ed911cb1bb58e10c63afff30f7f81998678054c218d756271a1e8fd1acab1e`。快照包含私密配置，不应公开。
+- 首次迁移的准备目录：`/opt/personal-wiki-deploy-1466683`；首次迁移日志：`/var/log/personal-wiki-deploy-1466683-*.log`。后续发布目录和回滚位置另行记录。
+- 原云服务器服务保留作为回退；开发入口已切换为上述内网地址。后续开发部署不再默认使用 `hw.hyacinthus.cn`。
+
+### 验证结果及后续更新注意事项
+
+- 新机器完成依赖安装、原生 SQLite 内存查询、类型检查及 `verify` 的全部验证组。因测试环境前提不同，泄漏测试在独立网络命名空间中为 `10.255.255.1:80` 提供确定超时的服务；探测备份与重启测试仅给测试进程设置 `PROBE_TIMEOUT_MS=500`；为在途删除测试建立 `.dsh-progress/` 临时目录。**应用代码未修改，正式探测超时未调整。** 重启检查 17/17、在途删除检查 3/3 通过。
+- 本机与局域网实测 `/healthz` **200**、`/login` **200**；匿名 `/` 与 `/status` **302**、`/api/status` **401**，符合当前鉴权规则。部署验收不要把匿名首页写成 200。
+- 四个模块 `status.js`、`chart-path.js`、`html.js`、`status-model.js` 的 `?v=esm` 响应与部署文件一致，MIME 正确，`Cache-Control: no-cache`。
+- 2026-10-25 **21:00:08（UTC+8）**复查：`active/running`、`enabled`、`NRestarts=0`、错误日志 0；探测记录 **3,120 → 3,121**，业务记录未变化。只验证了服务与测试进程的重启，未重启整台机器。
+- 更新时先在独立目录安装和构建，再备份、切换。保留数据与配置；`dist/` 与 `public/` 必须来自同一提交，服务端现在也会导入 `public/` 下的共享 JS 模块。不要将测试临时目录同步到应用目录。
+
+### 2026-10-25 动效版本发布
+
+- 用户授权把 `codex/interface-motion` 合并到 `master`、推送 GitHub 并部署至本机。原型存档分支不随本次推送。
+- 本次准备目录：`/opt/personal-wiki-deploy-motion-20261025`；切换前的完整现场备份：`/opt/personal-wiki-backups/20261025-motion/app`。发布标记中的 `backup` 指向该目录；完整提交、归档校验和和启用时间读取发布标记。
+- 日志：`/var/log/personal-wiki-motion-20261025-prepare.log`、`/var/log/personal-wiki-motion-20261025-activate.log`；备份目录的 `before.json` / `after.json` 保存数据完整性与内容摘要，权限限制在 root。
+- 在独立目录安装依赖并运行全量检查，确认通过后停止服务、完整备份、同步代码并重启。同步明确排除 `data/`、`.env`、`targets.json`、`content/` 等持久数据；不恢复早前云服务器的旧快照，因此不会覆盖迁移后的改密和内容修改。失败时恢复上一版代码并启动原服务。
+- 动效版本增加匿名可读 `/motion.js`，登录页改为 `/style.css?v=motion`；两项均要求缓存重新验证。发布后除原有健康/鉴权检查外，还核对这两项实际响应与新文件一致，以及 JSON 登录失败契约、原生 HTML 降级和业务数据保持一致。
+- 探测验收脚本已改用真实本机 HTTP 夹具；现在无需首次迁移时的网络命名空间或测试超时覆盖。新准备目录仍先建立 `.dsh-progress/`，供在途删除测试保存临时数据。
+
+---
+
+## 历史记录（不作为当前部署目标）
+
+> ## 0. 2026-10-19—2026-10-24：开发服务器 = `root@hw.hyacinthus.cn`
 >
 > 用户在这一天通知「开发服务器设置为 `root@hw.hyacinthus.cn`」。**下面 §1–§10 是旧机 `10.0.0.226` 的存档**，
 > 它的登录方式（错位的 `id_ed25519.bak`）、Docker 29.5.1、nvm Node 24 —— **在新机上一个都不适用**。
