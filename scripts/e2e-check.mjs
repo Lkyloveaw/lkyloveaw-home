@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import { csrfToken } from '../dist/csrf.js'
 import path from 'node:path'
 import { assertPortFree } from './lib/port-guard.mjs'
+import { createServer } from 'node:http'
 
 const PORT = 3997
 const BASE = `http://127.0.0.1:${PORT}`
@@ -107,15 +108,22 @@ const TEST_DB = path.join(tmpData, 'e2e.sqlite')
   })
 }
 
-const targets = [
-  { id: 'ok', name: '可用系统', url: 'https://example.com/', group: 'G1', expectStatus: [200] },
-  { id: 'bad', name: '状态码不符', url: 'https://example.com/', group: 'G1', expectStatus: [999] },
-  { id: 'dead', name: '不可达', url: 'http://10.255.255.1/', group: 'G2', timeoutMs: 1500 },
-]
-
 // 端口被占时**先失败**：否则下面的 /healthz 等待会凑到别人起的服务上，
 // 然后对着另一个库登录 —— 症状是「登录 401 / timeline=0」，与产品 bug 无法区分。
 await assertPortFree(PORT, 'e2e-check（端口 3997）')
+
+// Real HTTP probes with deterministic responses: public networks need not be reachable.
+const probeFixture = createServer((req, res) => {
+  if (req.url === '/timeout') return
+  res.writeHead(200); res.end('probe fixture')
+})
+await new Promise((resolve, reject) => { probeFixture.once('error', reject); probeFixture.listen(0, '127.0.0.1', resolve) })
+const probeUrl = `http://127.0.0.1:${probeFixture.address().port}/`
+const targets = [
+  { id: 'ok', name: '可用系统', url: probeUrl, group: 'G1', expectStatus: [200] },
+  { id: 'bad', name: '状态码不符', url: probeUrl, group: 'G1', expectStatus: [999] },
+  { id: 'dead', name: '不可达', url: probeUrl + 'timeout', group: 'G2', timeoutMs: 1500 },
+]
 
 const child = spawn(process.execPath, ['dist/server.js'], {
   cwd: ROOT,
@@ -1865,7 +1873,7 @@ try {
 
     const NEWID = 'e2e-target-probe'
     const NEWNAME = 'e2e 验收目标'
-    const NEWURL = 'http://10.255.255.1/'
+    const NEWURL = probeUrl + 'timeout'
 
     // ── 前提：页面能开、说明写清楚了 ──
     const page0 = await get('/admin/targets', { cookie: adminT })
@@ -1951,7 +1959,7 @@ try {
     const sentinel = await postForm('/admin/targets', {
       cookie: adminT,
       csrf: csrfT(),
-      form: { action: 'target-update', id: 'bad', name: '状态码不符', url: 'https://example.com/', group: 'G1', expectStatus: '999' },
+      form: { action: 'target-update', id: 'bad', name: '状态码不符', url: probeUrl, group: 'G1', expectStatus: '999' },
     })
     check(
       '⑲ 带 999 哨兵的目标能保存（写路径不比导入路径更严）',
@@ -2624,6 +2632,8 @@ try {
   }
 } finally {
   child.kill('SIGTERM')
+  probeFixture.closeAllConnections()
+  await new Promise(resolve => probeFixture.close(resolve))
   await sleep(800)
   fs.rmSync(tmpData, { recursive: true, force: true })
 }

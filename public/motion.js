@@ -71,7 +71,8 @@ if (form && window.fetch && window.AbortController) {
         await pause(220)
         if (token !== generation) return
       }
-      window.location.assign(next.pathname + next.search + next.hash)
+      // Keep the validated origin when a normalized pathname begins with //.
+      window.location.assign(next.href)
     } catch {
       if (token === generation) showError('暂时无法登录，请稍后重试。')
     } finally {

@@ -20,7 +20,8 @@ function setup({fetcher=async()=>new Response(JSON.stringify({ok:true,next:'/adm
   error.hidden=true;label.textContent='登录';const timers=[],requests=[],navigation=[],events=new Map()
   const parts={'button[type="submit"]':button,'[data-login-label]':label,'[data-login-error]':error,'[data-login-status]':status}
   form.querySelector=selector=>parts[selector];form.closest=()=>card
-  const location={origin:'http://localhost:3994',assign:target=>navigation.push(target)}
+  // location.assign parses its argument again, as the real browser does.
+  const location={origin:'http://localhost:3994',assign:target=>navigation.push(new URL(target,'http://localhost:3994').href)}
   const fetch=async(url,options)=>{requests.push({url,options});return fetcher(url,options)}
   const window={fetch,AbortController,location,matchMedia:()=>({matches:reduced}),addEventListener:(name,fn)=>events.set(name,fn)}
   const document={querySelector:selector=>selector==='.login-form'?(noForm?null:form):parts[selector]}
@@ -36,7 +37,7 @@ await check('等待真实响应时显示忙碌并拒绝重复提交',async()=>{
 await check('只有成功响应才播放确认，520ms 后淡出，220ms 后访问原目标',async()=>{
   const x=setup();const pending=x.submit();await flush();assert.equal(x.label.textContent,'登录成功');assert.deepEqual(x.navigation,[])
   x.run(520);await flush();assert.ok(x.card.classList.contains('is-leaving'));assert.deepEqual(x.navigation,[])
-  x.run(220);await pending;assert.deepEqual(x.navigation,['/admin/settings?from=login'])
+  x.run(220);await pending;assert.deepEqual(x.navigation,['http://localhost:3994/admin/settings?from=login'])
 })
 await check('凭据错误保留错误反馈并恢复重试',async()=>{
   const x=setup({fetcher:async()=>new Response(JSON.stringify({ok:false,error:'用户名或口令不正确'}),{status:401})});await x.submit();assert.equal(x.error.hidden,false);assert.equal(x.error.textContent,'用户名或口令不正确');assert.equal(x.button.disabled,false);assert.deepEqual(x.navigation,[])
@@ -55,7 +56,11 @@ await check('成功形状不完整和站外目标不能触发跳转',async()=>{
   }
 })
 await check('减少动态效果时成功后直接进入原目标',async()=>{
-  const x=setup({reduced:true});await x.submit();assert.deepEqual(x.navigation,['/admin/settings?from=login']);assert.equal(x.timers.filter(timer=>!timer.cancelled).length,0)
+  const x=setup({reduced:true});await x.submit();assert.deepEqual(x.navigation,['http://localhost:3994/admin/settings?from=login']);assert.equal(x.timers.filter(timer=>!timer.cancelled).length,0)
+})
+await check('规范化后以双斜线开头的本站路径不会被重新解释为站外地址',async()=>{
+  const x=setup({reduced:true,fetcher:async()=>new Response(JSON.stringify({ok:true,next:'/posts/..//untrusted.example'}))});
+  await x.submit();assert.deepEqual(x.navigation,['http://localhost:3994//untrusted.example'])
 })
 await check('离开或缓存返回时取消旧成功回调并清理忙碌状态',async()=>{
   for(const event of ['pagehide','pageshow']){

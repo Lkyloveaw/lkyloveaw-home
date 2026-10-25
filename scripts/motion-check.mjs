@@ -57,6 +57,16 @@ try{
     assert.equal(renderNotice('untrusted-user-text'),'')
     assert.match(accountPage({notice:'口令已修改。'},{title:'test',description:'test'}),/data-feedback[^>]*role="status"/)
   })
+  await check('打印仍内联带版本参数的真实样式并移除页面脚本',async()=>{
+    const {preparePrintHtml}=await import('./lib/print-html.mjs')
+    const page=await app.inject({url:'/login'})
+    const printed=preparePrintHtml(page.body,'.print-proof { color: black }')
+    assert.ok(printed.includes('<style>.print-proof { color: black }</style>'))
+    assert.match(printed,/@page\s*\{\s*size: A4/)
+    assert.doesNotMatch(printed,/<script\b|<link rel="stylesheet"/)
+    assert.ok(preparePrintHtml('<link rel="stylesheet" href="/style.css">','legacy').includes('<style>legacy</style>'))
+    assert.throws(()=>preparePrintHtml('<html>missing stylesheet</html>','css'),/样式/)
+  })
 }finally{await app?.close();store?.closeStore();fs.rmSync(sandbox,{recursive:true,force:true})}
 console.log(`${total-failed}/${total} motion route checks passed`)
 process.exitCode=failed?1:0
