@@ -90,11 +90,12 @@ async function waitExit(c, timeoutMs = 10000) {
 
 /**
  * 取某个受保护路径的状态码。
+ * ⚠ 探针必须是**需要登录**的路径：2026-10-30 起 `/status` 是公开页，拿它测会话会恒为 200。
  * ⚠ **必须 `redirect: 'manual'`**：否则 fetch 会自己跟随 302 到 /login，
  * 于是「未登录」看起来是 200——第一版就是这样把对照组测成了假失败。
  */
 async function statusOf(base, cookie) {
-  const res = await fetch(base + '/status', { headers: { cookie }, redirect: 'manual' })
+  const res = await fetch(base + '/account', { headers: { cookie }, redirect: 'manual' })
   return res.status
 }
 

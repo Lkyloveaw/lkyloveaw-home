@@ -489,6 +489,8 @@ export async function buildServer(): Promise<ReturnType<typeof Fastify>> {
       userId: decision.userId,
       userName: decision.username ?? '',
       avatar: decision.userId === undefined ? null : getIdentityImage(`avatar:${decision.userId}`),
+      // 匿名顶栏的「登录」入口用它拼 next（2026-10-30 全站只读公开）。
+      pathname: req.url.split('?')[0] ?? '/',
     })
   })
 

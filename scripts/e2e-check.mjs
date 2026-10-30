@@ -18,7 +18,10 @@ const check = (name, ok, detail = '') => {
 }
 
 const get = async (p, opts = {}) => {
-  const res = await fetch(BASE + p, { redirect: 'manual', headers: opts.cookie ? { cookie: opts.cookie } : {} })
+  const headers = {}
+  if (opts.cookie) headers.cookie = opts.cookie
+  if (opts.accept) headers.accept = opts.accept
+  const res = await fetch(BASE + p, { redirect: 'manual', headers })
   return {
     status: res.status,
     body: await res.text(),
@@ -165,21 +168,45 @@ try {
   // ══════════════════════════════════════════════════════════
   console.log('\n[闸门：未登录]')
   // ══════════════════════════════════════════════════════════
+  /*
+   * 2026-10-30 起：站点默认公开（全站只读匿名），只有**需要身份**的路径受闸门保护。
+   * 这两组断言就是那条契约的正反面：公开页 200、受保护页 302。
+   */
+  const publicPages = ['/', '/posts', '/status', '/about', '/tags/运维', '/posts/why-single-process']
+  for (const p of publicPages) {
+    const r = await get(p)
+    check(`未登录 GET ${p} -> 200（全站只读公开）`, r.status === 200, `got ${r.status}`)
+  }
   // 受保护的页面：一律 302 到登录页，且带上 next
-  const protectedPages = ['/', '/posts', '/status', '/about', '/tags/运维', '/posts/why-single-process']
+  const protectedPages = ['/account', '/admin', '/admin/articles', '/admin/settings', '/admin/accounts']
   for (const p of protectedPages) {
     const r = await get(p)
     check(
-      `未登录 GET ${p} -> 302 到 /login`,
-      r.status === 302 && r.location.startsWith('/login'),
+      `未登录 GET ${p} -> 302 到 /login?next=`,
+      r.status === 302 && r.location.startsWith('/login') && decodeURIComponent(r.location).includes(p),
       `got ${r.status} ${r.location}`,
     )
   }
-  // API：必须 401 JSON，**不是 302** —— fetch 默认跟随跳转会拿到登录页 HTML，r.json() 会抛错
+  // API：公开数据匿名 200 JSON；受保护路径的 JSON 形态仍是 401（不是 302）
   {
     const r = await get('/api/status')
-    check('未登录 GET /api/status -> 401（不是 302）', r.status === 401, `got ${r.status}`)
-    check('未登录 API 回 JSON error', r.body.includes('unauthorized'), r.body.slice(0, 60))
+    check('未登录 GET /api/status -> 200 JSON（面板数据公开）', r.status === 200 && r.body.startsWith('{'), `got ${r.status}`)
+    const proto = await get('/account', { accept: 'application/json' })
+    check('未登录 GET /account（Accept: json）-> 401（不是 302）', proto.status === 401, `got ${proto.status}`)
+    check('未登录 API 形态回 JSON error', proto.body.includes('unauthorized'), proto.body.slice(0, 60))
+  }
+  // 匿名顶栏必须有「登录」入口：没有它就只能手敲地址进管理台
+  {
+    const home = await get('/')
+    check('匿名首页有登录入口', /class="user-pill login-pill"/.test(home.body) && home.body.includes('href="/login"'))
+    check('匿名首页没有用户菜单', !home.body.includes('class="user-menu"'))
+    const post = await get('/posts/why-single-process')
+    const loginHref = (post.body.match(/class="user-pill login-pill" href="([^"]+)"/) || [])[1] ?? ''
+    check(
+      '文章页的登录入口带 next（登录后回到这一页）',
+      loginHref.startsWith('/login?next=') && decodeURIComponent(loginHref).includes('/posts/why-single-process'),
+      loginHref,
+    )
   }
   // 白名单：必须匿名可达
   for (const p of ['/login', '/healthz', '/style.css', '/status.js']) {
@@ -251,9 +278,9 @@ try {
     ['session=%E4%B8%AD%E6%96%87.bad', '非 ASCII'],
   ]
   for (const [ck, label] of badCookies) {
-    const r = await get('/status', { cookie: ck })
+    const r = await get('/account', { cookie: ck })
     check(`畸形 cookie（${label}）-> 302 而非 500`, r.status === 302, `got ${r.status}`)
-    const api = await get('/api/status', { cookie: ck })
+    const api = await get('/account', { cookie: ck, accept: 'application/json' })
     check(`畸形 cookie（${label}）API -> 401 而非 500`, api.status === 401, `got ${api.status}`)
   }
   {
@@ -642,7 +669,7 @@ try {
 
     check('改密后当前浏览器仍登录', (await get('/status', { cookie: rotated })).status === 200)
     // 关键语义：改密递增 token_version，其他设备的旧 cookie 立刻失配
-    const kicked = await get('/status', { cookie: otherCookie })
+    const kicked = await get('/account', { cookie: otherCookie })
     check('**改密后其他设备被踢下线**（旧 cookie 失效）', kicked.status === 302, `got ${kicked.status}`)
 
     sessionCookie = rotated
@@ -743,7 +770,7 @@ try {
     // 第二台「设备」先登录 —— 稍后它**必须仍然有效**（判定表 §5 第 24 行：登出 ≠ 踢掉所有设备）
     const otherDevice = await postLogin(TEST_USER, NEW_PASS)
     const otherCookie = otherDevice.setCookie.split(';')[0]
-    check('登出前提：第二台设备此前是登录态', (await get('/status', { cookie: otherCookie })).status === 200)
+    check('登出前提：第二台设备此前是登录态', (await get('/account', { cookie: otherCookie })).status === 200)
 
     const res = await postForm('/logout', { cookie: sessionCookie, csrf: csrfFor(sessionCookie) })
     const cleared = res.setCookie
@@ -758,7 +785,7 @@ try {
      * 标记 `revoked_at`，重放必须失效。
      * **反转它，而不是删掉它** —— 删掉就没人再守着「登出到底有没有真吊销」这件事了。
      */
-    const replayed = await get('/status', { cookie: sessionCookie })
+    const replayed = await get('/account', { cookie: sessionCookie })
     check(
       '**登出后原 cookie 重放已失效**（登出 = 真吊销，不再是「本机遗忘」）',
       replayed.status === 302,
@@ -768,7 +795,7 @@ try {
     // 少了这条，「把登出实现成 bumpTokenVersion」也能通过上面那条 —— 而用户要的**恰恰是不要**那样。
     check(
       '**登出后第二台设备仍然有效**（登出 ≠ 踢掉所有设备）',
-      (await get('/status', { cookie: otherCookie })).status === 200,
+      (await get('/account', { cookie: otherCookie })).status === 200,
     )
 
     // ⑦ 升级前的老 cookie（签名**合法**、载荷里没有 sid）→ 302，**不是 500**
@@ -781,11 +808,11 @@ try {
       })
       check(
         '旧格式 cookie（无 sid）→ 302 而不是 500',
-        (await get('/status', { cookie: 'session=' + legacy })).status === 302,
+        (await get('/account', { cookie: 'session=' + legacy })).status === 302,
       )
       check(
         '旧格式 cookie 走 API 也是 401 而不是 500',
-        (await get('/api/status', { cookie: 'session=' + legacy })).status === 401,
+        (await get('/account', { cookie: 'session=' + legacy, accept: 'application/json' })).status === 401,
       )
     }
     // 真吊销通道：CLI --revoke-sessions
@@ -795,13 +822,13 @@ try {
       env: { ...process.env, DATABASE_PATH: TEST_DB },
       stdio: 'ignore',
     })
-    const afterRevoke = await get('/status', { cookie: sessionCookie })
+    const afterRevoke = await get('/account', { cookie: sessionCookie })
     check('CLI --revoke-sessions 之后旧 cookie 真失效', afterRevoke.status === 302, `got ${afterRevoke.status}`)
     // ⚠ 用**第二台设备**的 cookie 断言才有意义：登出已经把 sessionCookie 吊销过了，
     // 拿它来验「账号级吊销」是**恒真**的 —— 那正是「断言必须先证明前提」要防的东西。
     check(
       'CLI --revoke-sessions 踢掉**该账号剩余**的会话（第二台设备也失效）',
-      (await get('/status', { cookie: otherCookie })).status === 302,
+      (await get('/account', { cookie: otherCookie })).status === 302,
     )
     // 且口令未被改，仍能登录
     const stillWorks = await postLogin(TEST_USER, NEW_PASS)
@@ -813,15 +840,15 @@ try {
   console.log('\n[停用账号立即生效]')
   // ══════════════════════════════════════════════════════════
   {
-    const live = await get('/status', { cookie: sessionCookie })
+    const live = await get('/account', { cookie: sessionCookie })
     check('停用前是登录态（前置条件成立）', live.status === 200, `got ${live.status}`)
     const { execFileSync } = await import('node:child_process')
     const cliEnv = { ...process.env, DATABASE_PATH: TEST_DB }
     execFileSync(process.execPath, ['dist/cli/passwd.js', '--user', TEST_USER, '--disable'], { cwd: ROOT, env: cliEnv, stdio: 'ignore' })
-    const disabled = await get('/status', { cookie: sessionCookie })
+    const disabled = await get('/account', { cookie: sessionCookie })
     check('**停用后立刻失效**（enabled 每请求被查）', disabled.status === 302, `got ${disabled.status}`)
-    const apiDisabled = await get('/api/status', { cookie: sessionCookie })
-    check('停用后 API 也 401', apiDisabled.status === 401, `got ${apiDisabled.status}`)
+    const apiDisabled = await get('/account', { cookie: sessionCookie, accept: 'application/json' })
+    check('停用后 API 形态也 401', apiDisabled.status === 401, `got ${apiDisabled.status}`)
     // 停用账号即使口令正确也不放行
     const loginDisabled = await postLogin(TEST_USER, NEW_PASS)
     check('停用账号不能登录（口令正确也不行）', loginDisabled.status === 401, `got ${loginDisabled.status}`)
@@ -838,18 +865,19 @@ try {
   // 以及「同一个 cookie 被 N 个请求同时校验」。这里断言全部成功且数据一致。
   {
     const N = 24
-    const paths = ['/status', '/api/status', '/', '/posts', '/healthz', '/login']
+    // 全站只读公开后，「受保护」在这一组里只剩 /account：其余路径匿名也该成功。
+    const paths = ['/status', '/api/status', '/', '/posts', '/healthz', '/login', '/account']
     const results2 = await Promise.all(
       Array.from({ length: N }, (_, i) => {
         const p = paths[i % paths.length]
-        const isPublic = p === '/healthz' || p === '/login'
+        const isPublic = p !== '/account'
         return (isPublic ? get(p) : authed(p)).then((r) => ({ p, status: r.status, body: r.body }))
       }),
     )
     const bad = results2.filter((r) => r.status !== 200 && r.status !== 302)
     check(`并发 ${N} 个请求全部成功（无 5xx）`, bad.length === 0, bad.map((b) => `${b.p}=${b.status}`).join(','))
     // 并发会话校验必须一致：受保护路径在**同一个有效 cookie** 下不该有的 200 有的 302
-    const protectedOnes = results2.filter((r) => !['/healthz', '/login'].includes(r.p))
+    const protectedOnes = results2.filter((r) => r.p === '/account')
     const statuses = [...new Set(protectedOnes.map((r) => r.status))]
     check('并发下会话校验结果一致（同一 cookie 不会时而有效时而失效）', statuses.length === 1, `statuses=${statuses.join(',')}`)
     // 并发下 API 数据也要自洽
@@ -908,8 +936,8 @@ try {
       }
       check('无目标清单时服务仍能启动（不因空清单崩溃）', up, '未起来')
       if (up) {
-        // 未登录仍应被闸门拦住
-        const anon = await fetch(BASE2 + '/status', { redirect: 'manual' })
+        // 未登录仍应在受保护路径上被闸门拦住（/status 现在是公开页，用它验不出来）
+        const anon = await fetch(BASE2 + '/admin', { redirect: 'manual' })
         check('无目标时闸门仍生效（未登录 302）', anon.status === 302, `got ${anon.status}`)
         // 登录后看面板
         const lr = await fetch(BASE2 + '/login', {
@@ -1698,7 +1726,7 @@ try {
     check('内容模型不合法（空 doc）→ 400（check() 真的在跑）', emptyDoc.status === 400, 'got ' + emptyDoc.status)
   }
 
-  console.log('\n[媒体服务（#52）：登录可见 · 名字即安全边界 · 长缓存]')
+  console.log('\n[媒体服务（#52）：匿名可见 · 名字即安全边界 · 长缓存]')
   // ══════════════════════════════════════════════════════════
   {
     // 直接往媒体目录放一张**真 PNG**（上传通道还没做，但服务契约现在就该成立）
@@ -1730,14 +1758,11 @@ try {
     const bytes = Buffer.from(await res.arrayBuffer())
     check('返回的字节与落盘的一模一样', bytes.equals(png), `${bytes.length} vs ${png.length}`)
 
-    // 未登录 → 与文章**同一条**可见性边界，不是一个能白拿图片的口子
+    // 未登录也能取：文章（2026-10-30 起）匿名可读，正文里的图必须跟着可读，否则公开文章全是坏图
     const anonMedia = await fetch(BASE + '/media/' + mediaNameOk, { redirect: 'manual' })
-    check('未登录 → **302**（和文章一样要登录）', anonMedia.status === 302, `got ${anonMedia.status}`)
-    check(
-      '未登录取图会**回跳这张图**（`/media/` 是已知路由，登录后不是被丢回首页）',
-      (anonMedia.headers.get('location') ?? '').includes('next=' + encodeURIComponent('/media/' + mediaNameOk)),
-      anonMedia.headers.get('location') ?? '',
-    )
+    check('未登录 GET /media/<name> -> 200（跟随文章公开）', anonMedia.status === 200, `got ${anonMedia.status}`)
+    const anonBytes = Buffer.from(await anonMedia.arrayBuffer())
+    check('未登录取到的字节与落盘一致（不是占位图）', anonBytes.equals(png), `${anonBytes.length} vs ${png.length}`)
 
     // 名字即安全边界
     const badNames = [

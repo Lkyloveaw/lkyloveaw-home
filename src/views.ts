@@ -7,7 +7,7 @@ import type { Post, PostMeta } from './content.js'
 import type { ProbeTarget } from './config.js'
 import type { TargetStats, TimelinePoint, OverviewPoint, IncidentEvent, ProbeResult, LatencyPoint } from './store.js'
 import { latencyChart, uptimeChart } from './charts.js'
-import { currentCsrfToken, currentIsAdmin, currentUserName, currentUserAvatar } from './csrf.js'
+import { currentCsrfToken, currentIsAdmin, currentPathname, currentUserName, currentUserAvatar } from './csrf.js'
 import { isSafeMediaName } from './media.js'
 import { MIN_PASSWORD_LENGTH } from './users.js'
 import { icon, type IconName } from './icons.js'
@@ -191,13 +191,25 @@ function drawer(sidebar: PublicSidebar | null, active?: LayoutOptions['active'])
   return `<details class="nav-drawer"><summary class="drawer-toggle" aria-label="菜单"><span class="hamburger" aria-hidden="true"></span></summary><div class="drawer-panel">${nav}${articles}</div></details>`
 }
 
-/** 右上角用户胶囊 + disclosure 面板；只有已登录时渲染。 */
+/** 右上角用户胶囊 + disclosure 面板；匿名时退化成「登录」入口。 */
 function avatarMark(className = 'avatar'): string {
   const name = currentUserAvatar()
   const content = name && isSafeMediaName(name)
     ? `<img class="avatar-image" src="/media/${escapeHtml(name)}" alt="">`
     : escapeHtml([...currentUserName()][0]?.toUpperCase() ?? '?')
   return `<span class="${className}" aria-hidden="true">${content}</span>`
+}
+
+/**
+ * 匿名访客的登录入口（2026-10-30 全站只读公开之后，公开页也需要一个**看得见**的登录路径，
+ * 否则管理台只能靠手敲地址进）。
+ *
+ * `next` 带当前路径：登录后回到刚才读的那一页。根路径省略 `next`（回 `/` 是默认，不必拼参数）。
+ */
+function loginEntry(): string {
+  const pathname = currentPathname()
+  const href = pathname && pathname !== '/' ? `/login?next=${encodeURIComponent(pathname)}` : '/login'
+  return `<a class="user-pill login-pill" href="${href}">登录</a>`
 }
 
 function imageUploadForm(action: string, label: string, hasImage: boolean): string {
@@ -211,7 +223,7 @@ ${hasImage ? `<form method="post" action="${action}">${csrfField()}<button type=
 
 function userMenu(): string {
   const name = currentUserName()
-  if (!name) return ''
+  if (!name) return loginEntry()
   const admin = currentIsAdmin()
   const adminItem = admin ? '<a class="menu-item" href="/admin">管理后台</a>' : ''
   return `<div class="user-menu" data-user-menu>

@@ -867,6 +867,8 @@ button:hover { border-color: var(--label); color: var(--label); }
 .user-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .user-pill .chev { width: 14px; height: 14px; color: var(--label-3); transform: rotate(90deg); transition: transform var(--motion-duration) var(--motion-ease); }
 .user-pill[aria-expanded="true"] .chev { transform: rotate(270deg); }
+/* 匿名访客的「登录」是一个链接，胶囊的按钮样式照旧，只去掉下划线。 */
+.login-pill { text-decoration: none; }
 .avatar {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;

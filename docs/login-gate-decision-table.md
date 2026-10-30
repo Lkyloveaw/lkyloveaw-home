@@ -1,5 +1,15 @@
 # 登录闸门判定表
 
+> ## 2026-10-30 修订：站点默认公开，只在需要身份的路由上要求登录
+>
+> 本文 §1–§7 是 2026-10-15 的原决定（**全站关上**，匿名只放行登录页/健康检查/静态资源）。
+> 2026-10-30 用户拍板改为**默认公开**：首页、`/posts*`、`/tags/*`、`/status`、`/about`、
+> `/api/status`、`/media/*` 匿名可读；`/admin*`、`/account`、`/password`、`/logout` 仍需登录。
+>
+> 原决定的推理**仍然有效**——全局 `onRequest` 钩子、精确匹配、失败安全形状、`next` 白名单
+> 一条都没变，变的只是「哪些路径算公开」。新判定见 §8；决定记录见
+> [ADR 0010](adr/0010-public-by-default.md)。
+
 本文件是「给整个站点加登录闸门」这张票的产出：**路径 × 未登录行为**的可落地判定表。
 它决定 `src/server.ts` 里那道闸门怎么挂、放行谁、每种未登录请求回什么。
 
@@ -110,3 +120,39 @@ next 必须以单个 '/' 开头
 - 本票**只定判定表与落点**。会话 cookie 的载荷/过期/密钥由「会话维持」票定；`users` 表与口令校验由「账号存储与口令校验」票定。
 - 登录页表单字段名与 POST 路径在此定为 `/login`（POST），供那两张票对齐。
 - HTTPS 是后续需求，`Secure` 属性必须能关、默认关（map Notes 第 9 条）。
+
+## 8. 2026-10-30 修订后的判定（当前有效）
+
+### 8.1 两组名单，区别在「要不要查会话」
+
+| 名单 | 命中后 | 用途 |
+| --- | --- | --- |
+| `PUBLIC_PATHS`（精确） | 直接放行，**不查库** | `/login`、`/healthz`、静态资源（`/style.css`、`/status.js`、`/chart-path.js`、`/html.js`、`/status-model.js`、`/motion.js`、`/article-editor.js`、`/favicon.ico`） |
+| `PUBLIC_PAGE_PATHS` + `PUBLIC_PAGE_PREFIXES` | **匿名放行，但仍解析会话**：有效 cookie 就带 `userId`/`role` 渲染用户菜单；解析失败一律按匿名继续 | 页面精确：`/`、`/posts`、`/status`、`/about`、`/api/status`；前缀：`/posts/`、`/tags/`、`/media/` |
+
+`PUBLIC_PAGE_*` 命中时**不因为过期/畸形 cookie 返回 302**——公开页的默认结局是「匿名可读」，
+会话只是给顶栏加身份。查询失败也按匿名继续（但照旧 `console.error`），避免一次 DB 抖动把公开站打成登录墙。
+
+### 8.2 受保护路径（未登录行为不变）
+
+`/admin*`、`/account`、`/password`、`/logout` 以及未来新增的任何未登记路径：
+页面 `302 → /login?next=<原路径>`；JSON 形态（`Accept: application/json`）`401 {"error":"unauthorized"}`。
+**默认拒绝仍然是兜底形状**——新增路由不会因为「忘了登记」而意外公开。
+
+### 8.3 连带改动（已落地）
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/auth.ts` | 新增 `PUBLIC_PAGE_PATHS` / `PUBLIC_PAGE_PREFIXES` / `isPublicPage()`；`decideRequest()` 对公开页「匿名放行 + 尽量带身份」，且公开页上的失效会话不再刷告警 |
+| `src/csrf.ts` | 请求上下文新增 `pathname`，供匿名顶栏拼 `next` |
+| `src/server.ts` | 写入 `pathname`（`req.url` 去查询串） |
+| `src/views.ts` | `userMenu()` 匿名时渲染「登录」胶囊（带 `next=<当前路径>`），登录后回到原页 |
+| `public/style.css` | `.login-pill`（链接版胶囊，只去下划线） |
+| `scripts/e2e-check.mjs` | 公开页断言 200、受保护页断言 302；`/account` 取代 `/status` 成为会话失效的探针；媒体断言改为匿名可取 |
+
+### 8.4 已知代价（如实记录）
+
+- `/status` 页面**本身**会渲染每个目标的 URL（`src/views.ts` 的 `.target-url`）。公开后这些内网地址
+  对匿名访客可见；JSON 投影（`src/public-summary.ts`）仍不含 `url` / `expectStatus`。
+- 若要连页面也收口，正确做法是改面板渲染（例如匿名不渲染 URL），**不是**把 `/status` 重新关进闸门——
+  那会与「全站只读公开」这条决定冲突。

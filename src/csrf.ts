@@ -32,6 +32,11 @@ export const csrfContext = new AsyncLocalStorage<{
   /** 当前登录者的用户名；顶栏胶囊用它显示身份。 */
   userName?: string
   avatar?: string | null
+  /**
+   * 当前请求的路径（不含查询串）。匿名访客顶栏的「登录」入口用它拼 `next`，
+   * 登录后就能回到刚才看的那一页，而不是被丢回首页。
+   */
+  pathname?: string
 }>()
 /** 当前请求的 token；**没有上下文时返回空串**（渲染出的表单会提交失败，而不是悄悄放行）。 */
 export function currentCsrfToken(): string {
@@ -67,6 +72,11 @@ export function currentUserName(): string {
 
 export function currentUserAvatar(): string | null {
   return csrfContext.getStore()?.avatar ?? null
+}
+
+/** 当前请求的路径；无上下文返回空串（调用方据此省略 `next`，不要拼出 `next=`）。 */
+export function currentPathname(): string {
+  return csrfContext.getStore()?.pathname ?? ''
 }
 
 /**

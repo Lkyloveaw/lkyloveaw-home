@@ -38,6 +38,30 @@ export const PUBLIC_PATHS: ReadonlySet<string> = new Set([
   '/favicon.ico',
 ])
 
+/**
+ * 匿名可读的**页面与只读数据**（2026-10-30 起：站点默认公开，只在需要身份的路由上要求登录）。
+ *
+ * 这一组与 `PUBLIC_PATHS` 的区别是**要不要查会话**：
+ * - `PUBLIC_PATHS`（登录页、健康检查、静态资源）命中即放行，**不查库**；
+ * - 这里命中时**仍尝试解析会话**：带着有效 cookie 的访客照常拿到 `userId` / `role`，
+ *   顶栏才会渲染用户菜单而不是「登录」入口（否则登录后刷新公开页会看起来像掉登录了）。
+ *   解析失败一律按匿名继续放行，绝不因为一个过期 cookie 把公开页打成 302。
+ *
+ * 前缀只给**确实带动态段**的路径（`:slug` / `:tag` / 媒体名）；页面本身用精确匹配，
+ * 免得 `/status-anything` 之类的拼写误差也被当成公开面。
+ * 需要登录的：`/admin*`、`/account`、`/password`、`/logout`（以及它们之后的写路径）。
+ */
+export const PUBLIC_PAGE_PATHS: ReadonlySet<string> = new Set([
+  '/', '/posts', '/status', '/about', '/api/status',
+])
+export const PUBLIC_PAGE_PREFIXES: ReadonlyArray<string> = ['/posts/', '/tags/', '/media/']
+
+/** 匿名可读？只回答「这个路径是否公开」，不碰会话。 */
+export function isPublicPage(pathname: string): boolean {
+  if (PUBLIC_PAGE_PATHS.has(pathname)) return true
+  return PUBLIC_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+}
+
 /** 已知页面路由：`next` 的落点必须在这里面，否则会把用户送去 404。 */
 export const KNOWN_PAGES: ReadonlySet<string> = new Set([
   '/',
@@ -102,13 +126,15 @@ export function wantsJson(req: FastifyRequest): boolean {
 /**
  * 判定一个请求该不该放行。
  *
- * 流程（`docs/session-revoke-decision.md` §4）：
+ * 流程（`docs/session-revoke-decision.md` §4，2026-10-30 修订见 `docs/login-gate-decision-table.md` §8）：
  * 1. 白名单命中 → 放行（精确匹配，不动）；
- * 2. 解 cookie → 无 token 即拒绝（**不查库**）；
- * 3. 取载荷里的 `sid`；取不到（含**升级前的老 cookie**）即拒绝，**不查库**；
- * 4. **一次** `sessions ⋈ users` 查询拿判定所需的全部状态；
- * 5. 纯函数 `decideSession()` 判定（判定表见 §5）；
- * 6. 非 `ok` → 按页面/API 分流拒绝，并把**判决值**写进日志（排查「为什么我掉线了」时第一个要看的东西）。
+ * 2. **公开页**命中 → 记下「匿名也放行」，继续解会话：有有效会话就带上身份，没有就按匿名；
+ * 3. 解 cookie → 无 token 即拒绝（**不查库**）；
+ * 4. 取载荷里的 `sid`；取不到（含**升级前的老 cookie**）即拒绝，**不查库**；
+ * 5. **一次** `sessions ⋈ users` 查询拿判定所需的全部状态；
+ * 6. 纯函数 `decideSession()` 判定（判定表见 §5）；
+ * 7. 非 `ok` → 公开页按匿名放行；受保护路径按页面/API 分流拒绝，并把**判决值**写进日志
+ *    （排查「为什么我掉线了」时第一个要看的东西）。
  *
  * 关键行为（`docs/session-decision.md` §7.6 沿用）：**查库失败 = 未登录，但不 fail-open，也不清 cookie**。
  * DB 一挂就整站无鉴权，与 Destination 直接冲突；而清 cookie 会把一次抖动升级成一次登出
@@ -121,18 +147,22 @@ export function decideRequest(req: FastifyRequest): RequestDecision {
     deny: wantsJson(req) ? 'unauthorized' : 'redirect',
   })
 
-  // 白名单：精确匹配
+  // 白名单：精确匹配，命中即放行（登录页 / 健康检查 / 静态资源），**不查库**。
   if (PUBLIC_PATHS.has(pathname)) return { allow: true }
 
+  // 公开页：匿名也要放行，但「放行」≠「跳过身份」—— 有有效会话就带上身份渲染顶栏。
+  const publicPage = isPublicPage(pathname)
+
   const token = readSessionCookie(req.headers.cookie)
-  if (!token) return denyShape()
+  if (!token) return publicPage ? { allow: true } : denyShape()
 
   // ⚠ 这一步**不验签**（`decodeSid` 的契约），只为拿到查库用的键。
   // 取不到就说明载荷畸形 —— 这正是老 cookie 走的路，它们没有 `sid`。
   const sid = decodeSid(token)
   if (!sid) {
-    console.warn('[auth] 载荷里没有 sid（升级前的老 cookie，或手改），按未登录处理')
-    return denyShape()
+    // 公开页上带畸形 cookie 是常见状态（浏览器还留着旧 cookie），不该每次都刷一行告警。
+    if (!publicPage) console.warn('[auth] 载荷里没有 sid（升级前的老 cookie，或手改），按未登录处理')
+    return publicPage ? { allow: true } : denyShape()
   }
 
   let state: SessionState | null
@@ -140,13 +170,13 @@ export function decideRequest(req: FastifyRequest): RequestDecision {
     state = findSessionState(sid)
   } catch (err) {
     console.error('[auth] 查询会话状态失败，按未登录处理：', (err as Error).message)
-    return denyShape()
+    return publicPage ? { allow: true } : denyShape()
   }
 
   const verdict = decideSession(config.sessionSecret, token, state, Date.now())
   if (verdict !== 'ok') {
-    console.warn(`[auth] 会话判决：${verdict}`)
-    return denyShape()
+    if (!publicPage) console.warn(`[auth] 会话判决：${verdict}`)
+    return publicPage ? { allow: true } : denyShape()
   }
   // 判定表的第 17 / 21 行保证 `ok` 蕴含两者都在；这里只是让类型收窄，真走到就是 bug。
   if (!state || !state.user) {
@@ -157,7 +187,6 @@ export function decideRequest(req: FastifyRequest): RequestDecision {
   return { allow: true, userId: state.session.uid, username: state.user.username, role: state.user.role }
 }
 
-/** 从 token 里取出 uid（不校验签名，仅用于查库；签名由 verifySession 负责）。 */
 /**
  * 资格守卫：这个决策够不够格做**管理**动作（`docs/write-path-auth-decision.md` §5.1）。
  *

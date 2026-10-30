@@ -10,13 +10,17 @@
 
 面板的**数值每 30 秒自动刷新**。
 
-> ⚠ **整个站点需要登录**：首页、分享、面板、`/api/status` 全部要求已登录。
-> 匿名只能访问登录页、`/healthz`、`/style.css`、`/status.js`（以及面板用的 `/chart-path.js`）。
-> 这是有意为之——首页也会渲染系统名与可用率，只锁面板等于白锁。
+> **站点默认公开（2026-10-30 起）**：首页、分享列表与正文、标签、系统可用性面板、`/api/status`
+> 都**匿名可读**；只有 `/admin*`、`/account`、`/password`、`/logout` 需要登录。
+> 匿名访客在顶栏看到一个「登录」入口，登录后回到刚才那一页。
+>
+> ⚠ **公开范围的已知代价**：`/status` 页面上会显示每个被监控目标的 **URL**（内网地址）。
+> JSON 接口的投影仍**不含** `url` / `expectStatus`（见下方「接口」），但页面本身现在对匿名可见。
+> 若要把这些地址也收回去，需要单独改 `src/views.ts` 的面板渲染，而不是改闸门。
 
 ## 首次部署：先建一个账号
 
-**没有账号时站点仍会启动**（拒绝启动会让 systemd 在 `Restart=always` 下陷入重启循环），但所有页面都会跳到登录页。
+**没有账号时站点仍会启动**（拒绝启动会让 systemd 在 `Restart=always` 下陷入重启循环），但管理台与账户页会把你送回登录页——公开页照常可读。
 建号用 CLI：
 
 ```bash
@@ -586,18 +590,18 @@ gcc/g++/make/python3 与 **Node 头文件**；部署机到 `nodejs.org` 不通�
 
 | 路径 | 登录要求 | 说明 |
 | --- | --- | --- |
-| `/` | **要** | 首页：最近分享 + 可用性摘要 |
-| `/posts`、`/posts/:slug` | **要** | 分享列表与详情 |
-| `/tags/:tag` | **要** | 按标签筛选 |
-| `/status` | **要** | 完整可用性面板 |
-| `/api/status` | **要**（未登录回 **401 JSON**） | 面板数据 JSON（前端每 30 秒拉一次） |
+| `/` | 匿名 | 首页：最近分享 + 可用性摘要 |
+| `/posts`、`/posts/:slug` | 匿名 | 分享列表与详情 |
+| `/tags/:tag` | 匿名 | 按标签筛选 |
+| `/status` | 匿名 | 完整可用性面板（⚠ 页面上显示目标 URL） |
+| `/api/status` | 匿名（200 JSON） | 面板数据 JSON（前端每 30 秒拉一次） |
 
 `/api/status` 的响应是**显式白名单投影**（`src/public-summary.ts`），不是内部结构直接序列化的结果：
 
 - 顶层**恰好 6 个键**：`targets` / `overview` / `incidents` / `generatedAt` / `windowLabel` / `probeIntervalSeconds`；
 - `targets[]` 由内部四层**压平成恰好 10 个键**：`id` / `name` / `group` / `lastStatus` / `uptime` /
   `avgLatencyMs` / `p95LatencyMs` / `lastError` / `timeline` / `latency`；
-- **`url` 与 `expectStatus` 不在其中**——内网资产地址与判定口径不出网（页面上仍显示，那是靠鉴权保护，两者互补而非互相替代）；
+- **`url` 与 `expectStatus` 不在其中**——JSON 里不出网（页面在公开后仍显示 URL，见上方「站点默认公开」的代价说明）；
 - 错误文案经脱敏：**超时/状态码这类本服务自己生成的文案原样保留**（排障最需要它），
   运行时异常只留类别码（如 `连接被拒（ECONNREFUSED）`），无 code 时兜底为 `探测失败`，**绝不回异常原文**
   （实测原文可能含完整 URL 与口令）。
@@ -612,9 +616,10 @@ gcc/g++/make/python3 与 **Node 头文件**；部署机到 `nodejs.org` 不通�
 | `/healthz` | **匿名** | 健康检查。**必须保持匿名**，否则 systemd / 运维脚本会误判服务不健康 |
 | `/style.css`、`/status.js`、`/chart-path.js`、`/favicon.ico` | 匿名 | 静态资源。**登录页自己要用，必须放行** |
 
-未登录时：页面请求 `302 → /login?next=<原路径>`；API 请求（`Accept: application/json`）
-回 `401 {"error":"unauthorized"}`。**分流看请求要什么，不看路径前缀**——
+需要登录的路径（`/admin*`、`/account`、`/password`、`/logout`）未登录时：页面请求 `302 → /login?next=<原路径>`；
+按 JSON 形态请求（`Accept: application/json`）回 `401 {"error":"unauthorized"}`。**分流看请求要什么，不看路径前缀**——
 若 API 也回 302，`fetch` 会跟随跳转拿到登录页的 HTML，`r.json()` 直接抛错。
+公开页则一律 `200`，匿名访客顶栏显示「登录」入口。
 
 `next` 只接受**站内相对路径**（且落点必须在已知路由内），`//evil.com`、`/\evil.com`、
 `https://evil.com` 之类的变体一律丢弃并回退到 `/`。
